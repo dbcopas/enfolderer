@@ -281,7 +281,8 @@ public class CardSlot : INotifyPropertyChanged
 public class BinderViewModel : INotifyPropertyChanged
 {
     private const int SlotsPerPage = 12; // 4x3
-    private const int PagesPerBinder = 20; // physical binder size
+    // Binder has 20 physical (double-sided) pages => 40 numbered sides (pages) we display
+    private const int PagesPerBinder = 40; // numbered sides per binder
     private readonly List<CardEntry> _cards = new();
     private readonly List<PageView> _views = new(); // sequence of display views across all binders
     private int _currentViewIndex = 0;
