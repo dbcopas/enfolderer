@@ -1,0 +1,105 @@
+﻿<Window x:Class="Enfolderer.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:Enfolderer.App"
+        mc:Ignorable="d"
+        Title="MTG Binder" Height="900" Width="1400" MinWidth="1100" MinHeight="700">
+    <Window.Resources>
+        <Style x:Key="CardSlotStyle" TargetType="Border">
+            <Setter Property="Margin" Value="4" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="BorderBrush" Value="#444" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="#222" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+        </Style>
+        <DataTemplate x:Key="CardTemplate">
+            <Border Style="{StaticResource CardSlotStyle}"
+                    Background="{Binding Background}"
+                    ToolTip="{Binding Tooltip}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Image Source="{Binding ImageSource}" Stretch="Uniform" Margin="3" Grid.Row="0"/>
+                    <StackPanel Grid.Row="1" Margin="2">
+                        <TextBlock Text="{Binding Number}" FontSize="11" Foreground="#EEE" HorizontalAlignment="Center"/>
+                        <TextBlock Text="{Binding Name}" TextWrapping="Wrap" FontSize="11" 
+                                   Foreground="White" HorizontalAlignment="Center" TextAlignment="Center" Margin="1"/>
+                        <TextBlock Text="{Binding Set}" FontSize="9" Foreground="#CCC" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </Window.Resources>
+    <DockPanel>
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="_Open Collection..." Click="OpenCollection_Click" />
+                <Separator />
+                <MenuItem Header="E_xit" Click="Exit_Click" />
+            </MenuItem>
+        </Menu>
+        <StatusBar DockPanel.Dock="Bottom">
+            <StatusBarItem Content="{Binding Status}" />
+            <StatusBarItem Content="{Binding PageDisplay}" />
+        </StatusBar>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <StackPanel Orientation="Horizontal" Margin="10" Grid.Row="0" HorizontalAlignment="Center">
+                <StackPanel.Resources>
+                    <Style TargetType="Button">
+                        <Setter Property="Margin" Value="6,0" />
+                        <Setter Property="Padding" Value="14,6" />
+                    </Style>
+                </StackPanel.Resources>
+                <Button Content="⏪ Binder Prev" Command="{Binding PrevBinderCommand}" />
+                <Button Content="⏮ First" Command="{Binding FirstCommand}" />
+                <Button Content="◀ Prev" Command="{Binding PrevCommand}" />
+                <TextBlock Text="{Binding PageDisplay}" FontSize="16" FontWeight="Bold" VerticalAlignment="Center" Margin="10,0" />
+                <Button Content="Next ▶" Command="{Binding NextCommand}" />
+                <Button Content="Last ⏭" Command="{Binding LastCommand}" />
+                <Button Content="Binder Next ⏩" Command="{Binding NextBinderCommand}" />
+                <StackPanel Orientation="Horizontal" Margin="20,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="Binder:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <TextBox Width="40" Text="{Binding JumpBinderInput, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Text="Page:" VerticalAlignment="Center" Margin="10,0,4,0" />
+                    <TextBox Width="50" Text="{Binding JumpPageInput, UpdateSourceTrigger=PropertyChanged}" />
+                    <Button Content="Go" Command="{Binding JumpToPageCommand}" Margin="8,0,0,0" />
+                </StackPanel>
+            </StackPanel>
+            <Grid Grid.Row="1" Margin="20" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="50" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <!-- Left Page (may be hidden for first side) -->
+                <ItemsControl Grid.Column="0" ItemsSource="{Binding LeftSlots}" ItemTemplate="{StaticResource CardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Rows="3" Columns="4" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+                <Grid Grid.Column="1">
+                    <Rectangle Width="30" Fill="#333" RadiusX="6" RadiusY="6" HorizontalAlignment="Center" />
+                </Grid>
+                <!-- Right Page -->
+                <ItemsControl Grid.Column="2" ItemsSource="{Binding RightSlots}" ItemTemplate="{StaticResource CardTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Rows="3" Columns="4" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </Grid>
+        </Grid>
+    </DockPanel>
+</Window>

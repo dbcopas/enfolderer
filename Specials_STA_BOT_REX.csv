@@ -1,0 +1,287 @@
+# STA
+Approach of the Second Sun ;1;STA
+Approach of the Second Sun ;64;STA
+Day of Judgment ;2;STA
+Day of Judgment ;65;STA
+Defiant Strike ;3;STA
+Defiant Strike ;66;STA
+Divine Gambit ;4;STA
+Divine Gambit ;67;STA
+Ephemerate ;5;STA
+Ephemerate ;68;STA
+Gift of Estates ;6;STA
+Gift of Estates ;69;STA
+Gods Willing ;7;STA
+Gods Willing ;70;STA
+Mana Tithe ;8;STA
+Mana Tithe ;71;STA
+Revitalize ;9;STA
+Revitalize ;72;STA
+Swords to Plowshares ;10;STA
+Swords to Plowshares ;73;STA
+Teferi's Protection ;11;STA
+Teferi's Protection ;74;STA
+Blue Sun's Zenith ;12;STA
+Blue Sun's Zenith ;75;STA
+Brainstorm ;13;STA
+Brainstorm ;76;STA
+Compulsive Research ;14;STA
+Compulsive Research ;77;STA
+Counterspell ;15;STA
+Counterspell ;78;STA
+Memory Lapse ;16;STA
+Memory Lapse ;79;STA
+Mind's Desire ;17;STA
+Mind's Desire ;80;STA
+Negate ;18;STA
+Negate ;81;STA
+Opt ;19;STA
+Opt ;82;STA
+Strategic Planning ;20;STA
+Strategic Planning ;83;STA
+Tezzeret's Gambit ;21;STA
+Tezzeret's Gambit ;84;STA
+Time Warp ;22;STA
+Time Warp ;85;STA
+Whirlwind Denial ;23;STA
+Whirlwind Denial ;86;STA
+Agonizing Remorse ;24;STA
+Agonizing Remorse ;87;STA
+Crux of Fate ;25;STA
+Crux of Fate ;88;STA
+Dark Ritual ;26;STA
+Dark Ritual ;89;STA
+Demonic Tutor ;27;STA
+Demonic Tutor ;90;STA
+Doom Blade ;28;STA
+Doom Blade ;91;STA
+Duress ;29;STA
+Duress ;92;STA
+Eliminate ;30;STA
+Eliminate ;93;STA
+Inquisition of Kozilek ;31;STA
+Inquisition of Kozilek ;94;STA
+Sign in Blood ;32;STA
+Sign in Blood ;95;STA
+Tainted Pact ;33;STA
+Tainted Pact ;96;STA
+Tendrils of Agony ;34;STA
+Tendrils of Agony ;97;STA
+Village Rites ;35;STA
+Village Rites ;98;STA
+Chaos Warp ;36;STA
+Chaos Warp ;99;STA
+Claim the Firstborn ;37;STA
+Claim the Firstborn ;100;STA
+Faithless Looting ;38;STA
+Faithless Looting ;101;STA
+Grapeshot ;39;STA
+Grapeshot ;102;STA
+Increasing Vengeance ;40;STA
+Increasing Vengeance ;103;STA
+Infuriate ;41;STA
+Infuriate ;104;STA
+Lightning Bolt ;42;STA
+Lightning Bolt ;105;STA
+Mizzix's Mastery ;43;STA
+Mizzix's Mastery ;106;STA
+Shock ;44;STA
+Shock ;107;STA
+Stone Rain ;45;STA
+Stone Rain ;108;STA
+Thrill of Possibility ;46;STA
+Thrill of Possibility ;109;STA
+Urza's Rage ;47;STA
+Urza's Rage ;110;STA
+Abundant Harvest ;48;STA
+Abundant Harvest ;111;STA
+Adventurous Impulse ;49;STA
+Adventurous Impulse ;112;STA
+Channel ;50;STA
+Channel ;113;STA
+Cultivate ;51;STA
+Cultivate ;114;STA
+Harmonize ;52;STA
+Harmonize ;115;STA
+Krosan Grip ;53;STA
+Krosan Grip ;116;STA
+Natural Order ;54;STA
+Natural Order ;117;STA
+Primal Command ;55;STA
+Primal Command ;118;STA
+Regrowth ;56;STA
+Regrowth ;119;STA
+Snakeskin Veil ;57;STA
+Snakeskin Veil ;120;STA
+Weather the Storm ;58;STA
+Weather the Storm ;121;STA
+Despark ;59;STA
+Despark ;122;STA
+Electrolyze ;60;STA
+Electrolyze ;123;STA
+Growth Spiral ;61;STA
+Growth Spiral ;124;STA
+Lightning Helix ;62;STA
+Lightning Helix ;125;STA
+Putrefy ;63;STA
+Putrefy ;126;STA
+# BOT
+Laserbeak;TOKEN;1
+Ravage;TOKEN;2
+Prowl, Stoic Strategist/Prowl, Pursuit Vehicle|MFC;1;BOT
+Ratchet, Field Medic/Ratchet, Rescue Racer|MFC;2;BOT
+Jetfire, Ingenious Scientist/Jetfire, Air Guardian|MFC;3;BOT
+Blitzwing, Cruel Tormentor/Blitzwing, Adaptive Assailant|MFC;4;BOT
+Starscream, Power Hungry/Starscream, Seeker Leader|MFC;5;BOT
+Slicer, Hired Muscle/Slicer, High-Speed Antagonist|MFC;6;BOT
+Arcee, Sharpshooter/Arcee, Acrobatic Coupe|MFC;7;BOT
+Blaster, Combat DJ/Blaster, Morale Booster|MFC;8;BOT
+Cyclonus, the Saboteur/Cyclonus, Cybertronian Fighter|MFC;9;BOT
+Flamewar, Brash Veteran/Flamewar, Streetwise Operative|MFC;10;BOT
+Goldbug, Humanity's Ally/Goldbug, Scrappy Scout|MFC;11;BOT
+Megatron, Tyrant/Megatron, Destructive Force|MFC;12;BOT
+Optimus Prime, Hero/Optimus Prime, Autobot Leader|MFC;13;BOT
+Soundwave, Sonic Spy/Soundwave, Superior Captain|MFC;14;BOT
+Ultra Magnus, Tactician/Ultra Magnus, Armored Carrier|MFC;15;BOT
+Prowl, Stoic Strategist/Prowl, Pursuit Vehicle|MFC;16;BOT
+Ratchet, Field Medic/Ratchet, Rescue Racer|MFC;17;BOT
+Jetfire, Ingenious Scientist/Jetfire, Air Guardian|MFC;18;BOT
+Blitzwing, Cruel Tormentor/Blitzwing, Adaptive Assailant|MFC;19;BOT
+Starscream, Power Hungry/Starscream, Seeker Leader|MFC;20;BOT
+Slicer, Hired Muscle/Slicer, High-Speed Antagonist|MFC;21;BOT
+Blaster, Combat DJ/Blaster, Morale Booster|MFC;22;BOT
+Cyclonus, the Saboteur/Cyclonus, Cybertronian Fighter|MFC;23;BOT
+Flamewar, Brash Veteran/Flamewar, Streetwise Operative|MFC;24;BOT
+Goldbug, Humanity's Ally/Goldbug, Scrappy Scout|MFC;25;BOT
+Megatron, Tyrant/Megatron, Destructive Force|MFC;26;BOT
+Optimus Prime, Hero/Optimus Prime, Autobot Leader|MFC;27;BOT
+Soundwave, Sonic Spy/Soundwave, Superior Captain|MFC;28;BOT
+Ultra Magnus, Tactician/Ultra Magnus, Armored Carrier|MFC;29;BOT
+# BRR
+Adaptive Automaton;1;BRR
+Adaptive Automaton;64;BRR
+Aetherflux Reservoir;2;BRR
+Aetherflux Reservoir;65;BRR
+Altar of Dementia;3;BRR
+Altar of Dementia;66;BRR
+Ashnod's Altar;4;BRR
+Ashnod's Altar;67;BRR
+Astral Cornucopia;5;BRR
+Astral Cornucopia;68;BRR
+Blackblade Reforged;6;BRR
+Blackblade Reforged;69;BRR
+Bone Saw;7;BRR
+Bone Saw;70;BRR
+Burnished Hart;8;BRR
+Burnished Hart;71;BRR
+Caged Sun;9;BRR
+Caged Sun;72;BRR
+Chromatic Lantern;10;BRR
+Chromatic Lantern;73;BRR
+Chromatic Star;11;BRR
+Chromatic Star;74;BRR
+Cloud Key;12;BRR
+Cloud Key;75;BRR
+Defense Grid;13;BRR
+Defense Grid;76;BRR
+Door to Nothingness;14;BRR
+Door to Nothingness;77;BRR
+Elsewhere Flask;15;BRR
+Elsewhere Flask;78;BRR
+Foundry Inspector;16;BRR
+Foundry Inspector;79;BRR
+Gilded Lotus;17;BRR
+Gilded Lotus;80;BRR
+Goblin Charbelcher;18;BRR
+Goblin Charbelcher;81;BRR
+Helm of the Host;19;BRR
+Helm of the Host;82;BRR
+Howling Mine;20;BRR
+Howling Mine;83;BRR
+Ichor Wellspring;21;BRR
+Ichor Wellspring;84;BRR
+Inspiring Statuary;22;BRR
+Inspiring Statuary;85;BRR
+Ivory Tower;23;BRR
+Ivory Tower;86;BRR
+Jalum Tome;24;BRR
+Jalum Tome;87;BRR
+Journeyer's Kite;25;BRR
+Journeyer's Kite;88;BRR
+Keening Stone;26;BRR
+Keening Stone;89;BRR
+Key to the City;27;BRR
+Key to the City;90;BRR
+Liquimetal Coating;28;BRR
+Liquimetal Coating;91;BRR
+Lodestone Golem;29;BRR
+Lodestone Golem;92;BRR
+Mazemind Tome;30;BRR
+Mazemind Tome;93;BRR
+Mesmeric Orb;31;BRR
+Mesmeric Orb;94;BRR
+Millstone;32;BRR
+Millstone;95;BRR
+Mind's Eye;33;BRR
+Mind's Eye;96;BRR
+Mishra's Bauble;34;BRR
+Mishra's Bauble;97;BRR
+Mox Amber;35;BRR
+Mox Amber;98;BRR
+Mystic Forge;36;BRR
+Mystic Forge;99;BRR
+Ornithopter;37;BRR
+Ornithopter;100;BRR
+Perilous Vault;38;BRR
+Perilous Vault;101;BRR
+Phyrexian Processor;39;BRR
+Phyrexian Processor;102;BRR
+Phyrexian Revoker;40;BRR
+Phyrexian Revoker;103;BRR
+Platinum Angel;41;BRR
+Platinum Angel;104;BRR
+Precursor Golem;42;BRR
+Precursor Golem;105;BRR
+Pristine Talisman;43;BRR
+Pristine Talisman;106;BRR
+Psychosis Crawler;44;BRR
+Psychosis Crawler;107;BRR
+Quicksilver Amulet;45;BRR
+Quicksilver Amulet;108;BRR
+Quietus Spike;46;BRR
+Quietus Spike;109;BRR
+Ramos, Dragon Engine;47;BRR
+Ramos, Dragon Engine;110;BRR
+Runechanter's Pike;48;BRR
+Runechanter's Pike;111;BRR
+Scrap Trawler;49;BRR
+Scrap Trawler;112;BRR
+Sculpting Steel;50;BRR
+Sculpting Steel;113;BRR
+Self-Assembler;51;BRR
+Self-Assembler;114;BRR
+Semblance Anvil;52;BRR
+Semblance Anvil;115;BRR
+Sigil of Valor;53;BRR
+Sigil of Valor;116;BRR
+Soul-Guide Lantern;54;BRR
+Soul-Guide Lantern;117;BRR
+Springleaf Drum;55;BRR
+Springleaf Drum;118;BRR
+Staff of Domination;56;BRR
+Staff of Domination;119;BRR
+Sundering Titan;57;BRR
+Sundering Titan;120;BRR
+Swiftfoot Boots;58;BRR
+Swiftfoot Boots;121;BRR
+Sword of the Meek;59;BRR
+Sword of the Meek;122;BRR
+Thorn of Amethyst;60;BRR
+Thorn of Amethyst;123;BRR
+Unwinding Clock;61;BRR
+Unwinding Clock;124;BRR
+Well of Lost Dreams;62;BRR
+Well of Lost Dreams;125;BRR
+Wurmcoil Engine;63;BRR
+Wurmcoil Engine;126;BRR
+
