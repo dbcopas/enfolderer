@@ -12,6 +12,8 @@
 # Build / debug
 *.pdb
 *.cache
+*.exe
+*.dll
 
 # NuGet
 *.nupkg
