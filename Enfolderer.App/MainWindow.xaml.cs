@@ -284,6 +284,7 @@ public class BinderViewModel : INotifyPropertyChanged
     // Binder has 20 physical (double-sided) pages => 40 numbered sides (pages) we display
     private const int PagesPerBinder = 40; // numbered sides per binder
     private readonly List<CardEntry> _cards = new();
+    private readonly List<CardEntry> _orderedFaces = new(); // reordered faces honoring placement constraints
     private readonly List<PageView> _views = new(); // sequence of display views across all binders
     private int _currentViewIndex = 0;
     private static readonly HttpClient Http = CreateClient();
@@ -353,7 +354,7 @@ public class BinderViewModel : INotifyPropertyChanged
     {
         _views.Clear();
         // total pages needed based on card faces
-        int totalFaces = _cards.Count;
+    int totalFaces = _orderedFaces.Count;
         int totalPages = (int)Math.Ceiling(totalFaces / (double)SlotsPerPage);
         if (totalPages == 0) totalPages = 1; // at least one page even if empty
         int remaining = totalPages;
@@ -475,9 +476,94 @@ public class BinderViewModel : INotifyPropertyChanged
             }
         }
         Status = $"Loaded {_cards.Count} faces from file.";
+        BuildOrderedFaces();
         _currentViewIndex = 0;
         RebuildViews();
         Refresh();
+    }
+
+    private void BuildOrderedFaces()
+    {
+        _orderedFaces.Clear();
+        if (_cards.Count == 0) return;
+        // Work on a queue (list) of indices; we will remove as we schedule.
+        var remaining = new List<CardEntry>(_cards); // copy
+        int globalSlot = 0;
+        while (remaining.Count > 0)
+        {
+            int col = (globalSlot % SlotsPerPage) % 4; // 0..3 within row
+
+            bool IsPairStart(List<CardEntry> list, int idx)
+            {
+                if (idx < 0 || idx >= list.Count) return false;
+                var c = list[idx];
+                // MFC front + back
+                if (c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count && list[idx + 1].IsBackFace) return true;
+                // Duplicate pair
+                if (!c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
+                {
+                    var n = list[idx + 1];
+                    if (!n.IsModalDoubleFaced && !n.IsBackFace && string.Equals(c.Name.Trim(), n.Name.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                return false;
+            }
+
+            bool IsSecondOfPair(List<CardEntry> list, int idx)
+            {
+                if (idx <= 0 || idx >= list.Count) return false;
+                var c = list[idx];
+                // MFC back face is inherently second
+                if (c.IsBackFace) return true;
+                // Duplicate second if previous + this form pair
+                var prev = list[idx - 1];
+                if (!prev.IsModalDoubleFaced && !prev.IsBackFace && !c.IsModalDoubleFaced && !c.IsBackFace && string.Equals(prev.Name.Trim(), c.Name.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+                return false;
+            }
+
+            // Determine group at head
+            int groupSize;
+            if (IsPairStart(remaining, 0)) groupSize = 2; else groupSize = 1;
+            if (groupSize == 2)
+            {
+                // Need to start pair at even column (0 or 2). Column 3 cannot host first half of a pair.
+                if (col == 1 || col == 3)
+                {
+                    // Find first true single later (not part of any pair front or back, nor second half)
+                    int singleIndex = -1;
+                    for (int i = 1; i < remaining.Count; i++)
+                    {
+                        if (!IsPairStart(remaining, i) && !IsSecondOfPair(remaining, i) && !remaining[i].IsBackFace)
+                        {
+                            singleIndex = i;
+                            break;
+                        }
+                    }
+                    if (singleIndex != -1)
+                    {
+                        // Pull forward that single to fill this misaligned slot
+                        _orderedFaces.Add(remaining[singleIndex]);
+                        remaining.RemoveAt(singleIndex);
+                        globalSlot++;
+                        continue; // reconsider same pair at next column (which will now be even)
+                    }
+                    // Fallback: no singles available, we must place pair misaligned (will straddle rows) to avoid holes.
+                }
+            }
+
+            if (groupSize == 1)
+            {
+                _orderedFaces.Add(remaining[0]);
+                remaining.RemoveAt(0);
+                globalSlot++;
+            }
+            else // groupSize == 2
+            {
+                _orderedFaces.Add(remaining[0]);
+                _orderedFaces.Add(remaining[1]);
+                remaining.RemoveRange(0, 2);
+                globalSlot += 2;
+            }
+        }
     }
 
     private void Refresh()
@@ -521,141 +607,16 @@ public class BinderViewModel : INotifyPropertyChanged
     {
         if (pageNumber <= 0) return;
         int startIndex = (pageNumber - 1) * SlotsPerPage;
-        var faces = new CardEntry?[SlotsPerPage];
-        // Initial pull
-        for (int i = 0; i < SlotsPerPage; i++)
-        {
-            int gi = startIndex + i;
-            if (gi < _cards.Count) faces[i] = _cards[gi];
-        }
-        // Compact to remove internal nulls (causing unexpected (Empty) gaps ) while preserving order
-        var compact = new List<CardEntry>(SlotsPerPage);
-        foreach (var f in faces) if (f != null) compact.Add(f);
-        for (int i = 0; i < SlotsPerPage; i++) faces[i] = i < compact.Count ? compact[i] : null;
-
-        // Build list of front/back pairs on this page (only if both faces fall inside this page)
-        var processed = new bool[SlotsPerPage];
-    for (int i = 0; i < SlotsPerPage; i++)
-        {
-            if (faces[i] == null || processed[i]) continue;
-            var entry = faces[i]!;
-            if (entry.IsModalDoubleFaced && !entry.IsBackFace)
-            {
-                // Assume its back is immediately following in global list; check if inside page
-                int globalIndexFront = startIndex + i;
-                int globalIndexBack = globalIndexFront + 1;
-                if (globalIndexBack < _cards.Count)
-                {
-                    var back = _cards[globalIndexBack];
-                    if (back.IsBackFace)
-                    {
-                        int localBack = globalIndexBack - startIndex;
-                        if (localBack is >= 0 and < SlotsPerPage)
-                        {
-                            // Both faces present locally; ensure placement rule
-                            int row = i / 4;
-                            int col = i % 4;
-                            if (col == 1 || col == 3 || (col == 2 && localBack != i + 1) || (col == 0 && localBack != i + 1))
-                            {
-                                // Need to relocate pair so front at col 0 or 2, back at +1
-                                int targetColA = (col <= 1) ? 0 : 2; // choose block start
-                                int targetIndex = row * 4 + targetColA;
-                                // If block occupied by something else not part of this pair, attempt swap
-                                bool canPlace = true;
-                                for (int offset = 0; offset < 2; offset++)
-                                {
-                                    int idx = targetIndex + offset;
-                                    if (idx >= SlotsPerPage) { canPlace = false; break; }
-                                    if (faces[idx] != null && faces[idx] != entry && faces[idx] != back)
-                                    {
-                                        // If occupant is part of another MFC pair, skip relocation for now.
-                                        if (faces[idx]!.IsModalDoubleFaced && !faces[idx]!.IsBackFace)
-                                        { canPlace = false; break; }
-                                    }
-                                }
-                                if (canPlace)
-                                {
-                                    // Clear old spots and move
-                                    faces[i] = null; faces[localBack] = null;
-                                    // Slide following entries forward to fill gaps before placement to keep compaction
-                                    var remaining = new List<CardEntry>();
-                                    foreach (var ff in faces) if (ff != null) remaining.Add(ff);
-                                    for (int k = 0; k < SlotsPerPage; k++) faces[k] = k < remaining.Count ? remaining[k] : null;
-                                    // Recompute pair indices after compaction (entry/back still in remaining list)
-                                    int newFrontIndex = Array.IndexOf(faces, entry);
-                                    int newBackIndex = Array.IndexOf(faces, back);
-                                    // If they are separated incorrectly, move as needed
-                                    if (newBackIndex != newFrontIndex + 1)
-                                    {
-                                        // Remove both then insert as block at row start target
-                                        var list = new List<CardEntry>();
-                                        foreach (var ff in faces) if (ff != null && ff != entry && ff != back) list.Add(ff);
-                                        int insertRow = i / 4;
-                                        int insertStart = row * 4 + targetColA;
-                                        // Ensure list capacity
-                                        while (list.Count < insertStart) list.Add(null!);
-                                        list.Insert(Math.Min(insertStart, list.Count), entry);
-                                        list.Insert(Math.Min(insertStart + 1, list.Count), back);
-                                        // Re-pack into faces
-                                        var packed = new List<CardEntry>();
-                                        foreach (var ff in list) if (ff != null) packed.Add(ff);
-                                        for (int k = 0; k < SlotsPerPage; k++) faces[k] = k < packed.Count ? packed[k] : null;
-                                    }
-                                    else
-                                    {
-                                        // Already adjacent now. If front column invalid, shift block to valid start within row if space.
-                                        int frontCol = newFrontIndex % 4;
-                                        if (frontCol is 1 or 3)
-                                        {
-                                            int blockStart = frontCol <= 1 ? newFrontIndex - 1 : newFrontIndex - 1;
-                                            if (blockStart >= 0 && blockStart / 4 == newFrontIndex / 4)
-                                            {
-                                                var tmpFront = faces[newFrontIndex];
-                                                var tmpBack = faces[newFrontIndex + 1];
-                                                faces[newFrontIndex] = null; faces[newFrontIndex + 1] = null;
-                                                // shift others forward
-                                                var remain2 = new List<CardEntry>();
-                                                foreach (var ff in faces) if (ff != null) remain2.Add(ff);
-                                                for (int k = 0; k < SlotsPerPage; k++) faces[k] = k < remain2.Count ? remain2[k] : null;
-                                                if (blockStart + 1 < SlotsPerPage)
-                                                {
-                                                    // Insert block at blockStart
-                                                    var list2 = new List<CardEntry>();
-                                                    foreach (var ff in faces) if (ff != null) list2.Add(ff);
-                                                    if (tmpBack != null && tmpFront != null)
-                                                    {
-                                                        list2.Insert(Math.Min(blockStart, list2.Count), tmpBack);
-                                                        list2.Insert(Math.Min(blockStart, list2.Count), tmpFront);
-                                                    }
-                                                    var packed2 = new List<CardEntry>();
-                                                    foreach (var ff in list2) if (ff != null) packed2.Add(ff);
-                                                    for (int k = 0; k < SlotsPerPage; k++) faces[k] = k < packed2.Count ? packed2[k] : null;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    processed[targetIndex] = true;
-                                    processed[targetIndex + 1] = true;
-                                    continue;
-                                }
-                            }
-                            processed[i] = true;
-                            processed[localBack] = true;
-                        }
-                    }
-                }
-            }
-        }
-
         var tasks = new List<Task>();
         for (int i = 0; i < SlotsPerPage; i++)
         {
             int gi = startIndex + i;
-            if (faces[i] != null)
+            if (gi < _orderedFaces.Count)
             {
-                var slot = new CardSlot(faces[i]!, gi);
+                var face = _orderedFaces[gi];
+                var slot = new CardSlot(face, gi);
                 collection.Add(slot);
-                tasks.Add(slot.TryLoadImageAsync(Http, faces[i]!.Set ?? string.Empty, faces[i]!.Number, faces[i]!.IsBackFace));
+                tasks.Add(slot.TryLoadImageAsync(Http, face.Set ?? string.Empty, face.Number, face.IsBackFace));
             }
             else
             {
