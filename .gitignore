@@ -1,0 +1,28 @@
+# Visual Studio / .NET build artifacts
+**/bin/
+**/obj/
+
+# VS local settings
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build / debug
+*.pdb
+*.cache
+
+# NuGet
+*.nupkg
+# Paket dependency manager
+.paket/
+paket-files/
+
+# Logs
+*.log
+
+# OS junk
+[Dd]esktop.ini
+[Tt]humbs.db
+$RECYCLE.BIN/
