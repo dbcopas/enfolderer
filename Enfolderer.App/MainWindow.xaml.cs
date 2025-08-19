@@ -794,8 +794,11 @@ public class BinderViewModel : INotifyPropertyChanged
     }
 
     private string? _currentFileHash;
-    private const int CacheSchemaVersion = 4; // refined two-sided classification logic
-    private const bool PokemonMode = true; // Branch dedicated to Pokémon support
+    private const int MtgCacheSchemaVersion = 4; // MTG schema
+    private const int PokemonCacheSchemaVersion = 100; // distinct schema space for Pokemon
+    private const bool PokemonMode = true; // Branch dedicated to Pokémon support (always true here)
+    private int CacheSchemaVersion => PokemonMode ? PokemonCacheSchemaVersion : MtgCacheSchemaVersion;
+    private string CacheGamePrefix => PokemonMode ? "pkm_" : "mtg_";
     private static readonly HashSet<string> PhysicallyTwoSidedLayouts = new(StringComparer.OrdinalIgnoreCase)
     {
         // Layouts that represent distinct physical faces requiring two binder slots
@@ -808,8 +811,8 @@ public class BinderViewModel : INotifyPropertyChanged
     };
     private record CachedFace(string Name, string Number, string? Set, bool IsMfc, bool IsBack, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion);
     private string MetaCacheDir => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "meta");
-    private string MetaCachePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".json");
-    private string MetaCacheDonePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".done");
+    private string MetaCachePath(string hash) => System.IO.Path.Combine(MetaCacheDir, CacheGamePrefix + hash + ".json");
+    private string MetaCacheDonePath(string hash) => System.IO.Path.Combine(MetaCacheDir, CacheGamePrefix + hash + ".done");
     private bool IsCacheComplete(string hash) => File.Exists(MetaCacheDonePath(hash));
     // Per-card cache (reused across different file hashes). One JSON file per set+number.
     private string CardCacheDir => System.IO.Path.Combine(MetaCacheDir, "cards");
@@ -817,7 +820,7 @@ public class BinderViewModel : INotifyPropertyChanged
     {
         var safeSet = (setCode ?? string.Empty).ToLowerInvariant();
         var safeNum = number.Replace('/', '_').Replace('\\', '_').Replace(':','_');
-        return System.IO.Path.Combine(CardCacheDir, safeSet + "-" + safeNum + ".json");
+        return System.IO.Path.Combine(CardCacheDir, CacheGamePrefix + safeSet + "-" + safeNum + ".json");
     }
     private record CardCacheEntry(string Set, string Number, string Name, bool IsMfc, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion, DateTime FetchedUtc);
     private bool TryLoadCardFromCache(string setCode, string number, out CardEntry? entry)
@@ -1025,6 +1028,18 @@ public class BinderViewModel : INotifyPropertyChanged
                 if (imagesEl.TryGetProperty("large", out var largeProp) && largeProp.ValueKind==JsonValueKind.String) frontImg = largeProp.GetString();
                 else if (imagesEl.TryGetProperty("small", out var smallProp) && smallProp.ValueKind==JsonValueKind.String) frontImg = smallProp.GetString();
             }
+            string rarity = string.Empty;
+            if (dataEl.TryGetProperty("rarity", out var rarityProp) && rarityProp.ValueKind==JsonValueKind.String)
+                rarity = rarityProp.GetString() ?? string.Empty;
+            string typesStr = string.Empty;
+            if (dataEl.TryGetProperty("types", out var typesEl) && typesEl.ValueKind==JsonValueKind.Array)
+            {
+                var sb = new StringBuilder();
+                foreach (var t in typesEl.EnumerateArray()) if (t.ValueKind==JsonValueKind.String) { if (sb.Length>0) sb.Append('/'); sb.Append(t.GetString()); }
+                typesStr = sb.ToString();
+            }
+            if (!string.IsNullOrEmpty(rarity) || !string.IsNullOrEmpty(typesStr))
+                displayName = displayName + (string.IsNullOrEmpty(typesStr)?"":" ["+typesStr+"]") + (string.IsNullOrEmpty(rarity)?"":" {"+rarity+"}");
             CardImageUrlStore.Set(setCode, number, frontImg, null);
             return new CardEntry(displayName!, number, setCode, false, false, null, null);
         }
