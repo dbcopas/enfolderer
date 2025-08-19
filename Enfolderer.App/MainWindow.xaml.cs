@@ -608,6 +608,33 @@ public class BinderViewModel : INotifyPropertyChanged
                 nameOverride = line.Substring(semiIdx+1).Trim();
                 if (nameOverride.Length==0) nameOverride = null;
             }
+            // Support prefixed collector numbers like "RA 1-8" or "GR 5" => RA1..RA8 / GR5
+            // Pattern: PREFIX (letters) whitespace startNumber optional - endNumber
+            var prefixRangeMatch = Regex.Match(numberPart, @"^(?<pfx>[A-Za-z]{1,8})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+            if (prefixRangeMatch.Success)
+            {
+                var pfx = prefixRangeMatch.Groups["pfx"].Value.Trim();
+                var startStr = prefixRangeMatch.Groups["start"].Value;
+                var endGrp = prefixRangeMatch.Groups["end"];
+                if (endGrp.Success && int.TryParse(startStr, out int ps) && int.TryParse(endGrp.Value, out int pe) && ps <= pe)
+                {
+                    for (int n = ps; n <= pe; n++)
+                    {
+                        var fullNum = pfx + n.ToString();
+                        _specs.Add(new CardSpec(currentSet, fullNum, null, false));
+                        fetchList.Add((currentSet, fullNum, null, _specs.Count-1));
+                    }
+                    continue;
+                }
+                else
+                {
+                    // Single prefixed number
+                    var fullNum = pfx + startStr;
+                    _specs.Add(new CardSpec(currentSet, fullNum, nameOverride, false));
+                    fetchList.Add((currentSet, fullNum, nameOverride, _specs.Count-1));
+                    continue;
+                }
+            }
             // Interleaving syntax: a line containing "||" splits into multiple segments; we round-robin them.
             if (numberPart.Contains("||", StringComparison.Ordinal))
             {
@@ -618,7 +645,24 @@ public class BinderViewModel : INotifyPropertyChanged
                     foreach (var seg in segments)
                     {
                         // Each segment can be a range A-B or single C
-                        if (seg.Contains('-', StringComparison.Ordinal))
+                        var segPrefixMatch = Regex.Match(seg, @"^(?<pfx>[A-Za-z]{1,8})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+                        if (segPrefixMatch.Success)
+                        {
+                            var pfx = segPrefixMatch.Groups["pfx"].Value;
+                            var sStr = segPrefixMatch.Groups["start"].Value;
+                            var eGrp = segPrefixMatch.Groups["end"];
+                            if (eGrp.Success && int.TryParse(sStr, out int sNum) && int.TryParse(eGrp.Value, out int eNum) && sNum <= eNum)
+                            {
+                                var l = new List<string>();
+                                for (int n = sNum; n <= eNum; n++) l.Add(pfx + n.ToString());
+                                lists.Add(l);
+                            }
+                            else
+                            {
+                                lists.Add(new List<string>{ pfx + sStr });
+                            }
+                        }
+                        else if (seg.Contains('-', StringComparison.Ordinal))
                         {
                             var pieces = seg.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
                             if (pieces.Length==2 && int.TryParse(pieces[0], out int s) && int.TryParse(pieces[1], out int e) && s<=e)
