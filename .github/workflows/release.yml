@@ -40,9 +40,25 @@ jobs:
         id: tag
         shell: pwsh
         run: |
-          $ts = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
-          $short = '${{ github.sha }}'.Substring(0,7)
-          $tag = "vauto-$ts-$short"
+          git fetch --prune --unshallow 2>$null
+          git fetch --tags 2>$null
+          $msg = (git log -1 --pretty=%B)
+          $all = git tag --list "v[0-9]*.[0-9]*.[0-9]*"
+          if (-not $all) {
+            $ver = [version]"0.1.0"
+          } else {
+            $sorted = $all | ForEach-Object { $_ -replace '^v','' } | Sort-Object {[version]$_}
+            $last = $sorted[-1]
+            $ver = [version]$last
+            if ($msg -match '#major') {
+              $ver = [version]::new($ver.Major+1,0,0)
+            } elseif ($msg -match '#minor') {
+              $ver = [version]::new($ver.Major,$ver.Minor+1,0)
+            } else {
+              $ver = [version]::new($ver.Major,$ver.Minor,$ver.Build+1)
+            }
+          }
+          $tag = "v$ver"
           echo "tag=$tag" >> $env:GITHUB_OUTPUT
       - name: Push Tag
         shell: pwsh
