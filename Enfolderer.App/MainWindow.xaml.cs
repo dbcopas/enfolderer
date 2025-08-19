@@ -176,6 +176,22 @@ public static class CardImageUrlStore
     }
 }
 
+// Stores layout per card for persistence (used to distinguish true double-sided vs split/aftermath cards)
+public static class CardLayoutStore
+{
+    private static readonly Dictionary<string,string?> _map = new(StringComparer.OrdinalIgnoreCase);
+    private static string Key(string setCode, string number) => $"{setCode.ToLowerInvariant()}/{number}";
+    public static void Set(string setCode, string number, string? layout)
+    {
+        if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
+        _map[Key(setCode, number)] = layout;
+    }
+    public static string? Get(string setCode, string number)
+    {
+        _map.TryGetValue(Key(setCode, number), out var v); return v;
+    }
+}
+
 internal static class ApiRateLimiter
 {
     private const int Limit = 9; // strictly less than 10 per second
@@ -751,11 +767,67 @@ public class BinderViewModel : INotifyPropertyChanged
     }
 
     private string? _currentFileHash;
-    private record CachedFace(string Name, string Number, string? Set, bool IsMfc, bool IsBack, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl);
+    private const int CacheSchemaVersion = 2; // bump when cache layout/logic changes
+    private static readonly HashSet<string> PhysicallyTwoSidedLayouts = new(StringComparer.OrdinalIgnoreCase){"transform","modal_dfc","battle","double_faced_token","double_faced_card","prototype"};
+    private record CachedFace(string Name, string Number, string? Set, bool IsMfc, bool IsBack, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion);
     private string MetaCacheDir => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "meta");
     private string MetaCachePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".json");
     private string MetaCacheDonePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".done");
     private bool IsCacheComplete(string hash) => File.Exists(MetaCacheDonePath(hash));
+    // Per-card cache (reused across different file hashes). One JSON file per set+number.
+    private string CardCacheDir => System.IO.Path.Combine(MetaCacheDir, "cards");
+    private string CardCachePath(string setCode, string number)
+    {
+        var safeSet = (setCode ?? string.Empty).ToLowerInvariant();
+        var safeNum = number.Replace('/', '_').Replace('\\', '_').Replace(':','_');
+        return System.IO.Path.Combine(CardCacheDir, safeSet + "-" + safeNum + ".json");
+    }
+    private record CardCacheEntry(string Set, string Number, string Name, bool IsMfc, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion, DateTime FetchedUtc);
+    private bool TryLoadCardFromCache(string setCode, string number, out CardEntry? entry)
+    {
+        entry = null;
+        try
+        {
+            var path = CardCachePath(setCode, number);
+            if (!File.Exists(path)) return false;
+            var json = File.ReadAllText(path);
+            var data = JsonSerializer.Deserialize<CardCacheEntry>(json);
+            if (data == null) return false;
+            if (data.SchemaVersion != CacheSchemaVersion || string.IsNullOrEmpty(data.Layout)) return false; // force refresh
+            bool physTwoSided = data.Layout != null && PhysicallyTwoSidedLayouts.Contains(data.Layout);
+            bool effectiveMfc = data.IsMfc && physTwoSided;
+            var ce = new CardEntry(data.Name, data.Number, data.Set, effectiveMfc, false, data.FrontRaw, data.BackRaw);
+            entry = ce;
+            CardImageUrlStore.Set(data.Set, data.Number, data.FrontImageUrl, data.BackImageUrl);
+            CardLayoutStore.Set(data.Set, data.Number, data.Layout);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[PerCardCache] Failed to load {setCode} {number}: {ex.Message}");
+            return false;
+        }
+    }
+    private void PersistCardToCache(CardEntry ce)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(ce.Set) || string.IsNullOrWhiteSpace(ce.Number)) return;
+            Directory.CreateDirectory(CardCacheDir);
+            var (frontImg, backImg) = CardImageUrlStore.Get(ce.Set, ce.Number);
+            var layout = CardLayoutStore.Get(ce.Set!, ce.Number);
+            var data = new CardCacheEntry(ce.Set!, ce.Number, ce.Name, ce.IsModalDoubleFaced && !ce.IsBackFace, ce.FrontRaw, ce.BackRaw, frontImg, backImg, layout, CacheSchemaVersion, DateTime.UtcNow);
+            var path = CardCachePath(ce.Set!, ce.Number);
+            if (!File.Exists(path)) // do not overwrite (keep earliest)
+            {
+                File.WriteAllText(path, JsonSerializer.Serialize(data));
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[PerCardCache] Persist failed {ce.Set} {ce.Number}: {ex.Message}");
+        }
+    }
     private bool TryLoadMetadataCache(string hash)
     {
         try
@@ -765,13 +837,19 @@ public class BinderViewModel : INotifyPropertyChanged
             var json = File.ReadAllText(path);
             var faces = JsonSerializer.Deserialize<List<CachedFace>>(json);
             if (faces == null || faces.Count == 0) return false;
+            // If any face has older schema, invalidate whole file cache
+            if (faces.Exists(f => f.SchemaVersion != CacheSchemaVersion || string.IsNullOrEmpty(f.Layout))) return false;
             _cards.Clear();
             foreach (var f in faces)
             {
-                var ce = new CardEntry(f.Name, f.Number, f.Set, f.IsMfc && !f.IsBack, f.IsBack, f.FrontRaw, f.BackRaw);
+                bool physTwoSided = f.Layout != null && PhysicallyTwoSidedLayouts.Contains(f.Layout);
+                bool effectiveMfc = f.IsMfc && physTwoSided && !f.IsBack;
+                var ce = new CardEntry(f.Name, f.Number, f.Set, effectiveMfc, f.IsBack, f.FrontRaw, f.BackRaw);
                 _cards.Add(ce);
                 if (!f.IsBack)
                     CardImageUrlStore.Set(f.Set ?? string.Empty, f.Number, f.FrontImageUrl, f.BackImageUrl);
+                if (!string.IsNullOrEmpty(f.Layout) && f.Set != null)
+                    CardLayoutStore.Set(f.Set, f.Number, f.Layout);
             }
             return true;
         }
@@ -787,7 +865,8 @@ public class BinderViewModel : INotifyPropertyChanged
             foreach (var c in _cards)
             {
                 var (frontImg, backImg) = CardImageUrlStore.Get(c.Set ?? string.Empty, c.Number);
-                list.Add(new CachedFace(c.Name, c.Number, c.Set, c.IsModalDoubleFaced, c.IsBackFace, c.FrontRaw, c.BackRaw, frontImg, backImg));
+                var layout = c.Set != null ? CardLayoutStore.Get(c.Set, c.Number) : null;
+                list.Add(new CachedFace(c.Name, c.Number, c.Set, c.IsModalDoubleFaced, c.IsBackFace, c.FrontRaw, c.BackRaw, frontImg, backImg, layout, CacheSchemaVersion));
             }
             var json = JsonSerializer.Serialize(list);
             File.WriteAllText(MetaCachePath(hash), json);
@@ -820,6 +899,18 @@ public class BinderViewModel : INotifyPropertyChanged
             {
                 try
                 {
+                    // Attempt per-card cache first (avoid API call) if not already resolved
+                    if (_specs[f.specIndex].Resolved == null && TryLoadCardFromCache(f.setCode, f.number, out var cachedEntry) && cachedEntry != null)
+                    {
+                        _specs[f.specIndex] = _specs[f.specIndex] with { Resolved = cachedEntry };
+                        if (cachedEntry.IsModalDoubleFaced && !string.IsNullOrEmpty(cachedEntry.FrontRaw) && !string.IsNullOrEmpty(cachedEntry.BackRaw))
+                        {
+                            var backDisplay = $"{cachedEntry.BackRaw} ({cachedEntry.FrontRaw})";
+                            var backEntry = new CardEntry(backDisplay, cachedEntry.Number, cachedEntry.Set, false, true, cachedEntry.FrontRaw, cachedEntry.BackRaw);
+                            _mfcBacks[f.specIndex] = backEntry;
+                        }
+                        return; // skip network
+                    }
                     var ce = await FetchCardMetadataAsync(f.setCode, f.number, f.nameOverride);
                     if (ce != null)
                     {
@@ -830,6 +921,8 @@ public class BinderViewModel : INotifyPropertyChanged
                             var backEntry = new CardEntry(backDisplay, ce.Number, ce.Set, false, true, ce.FrontRaw, ce.BackRaw);
                             _mfcBacks[f.specIndex] = backEntry; // store for injection after front
                         }
+                        PersistCardToCache(ce);
+                        if (_mfcBacks.TryGetValue(f.specIndex, out var backFace)) PersistCardToCache(backFace);
                     }
                 }
                 finally
@@ -883,15 +976,34 @@ public class BinderViewModel : INotifyPropertyChanged
             string? displayName = overrideName;
             string? frontRaw = null; string? backRaw = null; bool isMfc = false;
             string? frontImg = null; string? backImg = null;
+            // Distinguish true two-sided physical cards (transform/modal_dfc/battle/etc) vs split/aftermath/adventure where both halves are on one physical face.
+            bool hasRootImageUris = root.TryGetProperty("image_uris", out var rootImgs); // split & similar layouts usually have this
+            string? layout = null; if (root.TryGetProperty("layout", out var layoutProp) && layoutProp.ValueKind == JsonValueKind.String) layout = layoutProp.GetString();
+            bool isPhysicallyTwoSidedLayout = layout != null && PhysicallyTwoSidedLayouts.Contains(layout);
             if (root.TryGetProperty("card_faces", out var faces) && faces.ValueKind == JsonValueKind.Array && faces.GetArrayLength() >= 2)
             {
                 var f0 = faces[0]; var f1 = faces[1];
-                frontRaw = f0.GetProperty("name").GetString();
-                backRaw = f1.GetProperty("name").GetString();
-                isMfc = true;
-                if (displayName == null) displayName = $"{frontRaw} ({backRaw})";
-                if (f0.TryGetProperty("image_uris", out var f0Imgs) && f0Imgs.TryGetProperty("normal", out var f0Norm)) frontImg = f0Norm.GetString(); else if (f0.TryGetProperty("image_uris", out f0Imgs) && f0Imgs.TryGetProperty("large", out var f0Large)) frontImg = f0Large.GetString();
-                if (f1.TryGetProperty("image_uris", out var f1Imgs) && f1Imgs.TryGetProperty("normal", out var f1Norm)) backImg = f1Norm.GetString(); else if (f1.TryGetProperty("image_uris", out f1Imgs) && f1Imgs.TryGetProperty("large", out var f1Large)) backImg = f1Large.GetString();
+                if (!hasRootImageUris && isPhysicallyTwoSidedLayout)
+                {
+                    // Treat as true double-sided (needs two slots)
+                    frontRaw = f0.GetProperty("name").GetString();
+                    backRaw = f1.GetProperty("name").GetString();
+                    isMfc = true;
+                    if (displayName == null) displayName = $"{frontRaw} ({backRaw})";
+                    if (f0.TryGetProperty("image_uris", out var f0Imgs) && f0Imgs.TryGetProperty("normal", out var f0Norm)) frontImg = f0Norm.GetString(); else if (f0.TryGetProperty("image_uris", out f0Imgs) && f0Imgs.TryGetProperty("large", out var f0Large)) frontImg = f0Large.GetString();
+                    if (f1.TryGetProperty("image_uris", out var f1Imgs) && f1Imgs.TryGetProperty("normal", out var f1Norm)) backImg = f1Norm.GetString(); else if (f1.TryGetProperty("image_uris", out f1Imgs) && f1Imgs.TryGetProperty("large", out var f1Large)) backImg = f1Large.GetString();
+                }
+                else
+                {
+                    // Multi-face metadata but single physical face (split/aftermath/adventure etc) -> single slot
+                    if (displayName == null && root.TryGetProperty("name", out var npropSplit)) displayName = npropSplit.GetString();
+                    if (hasRootImageUris)
+                    {
+                        if (rootImgs.TryGetProperty("normal", out var rootNorm)) frontImg = rootNorm.GetString();
+                        else if (rootImgs.TryGetProperty("large", out var rootLarge)) frontImg = rootLarge.GetString();
+                    }
+                    else if (f0.TryGetProperty("image_uris", out var f0Imgs2) && f0Imgs2.TryGetProperty("normal", out var f0Norm2)) frontImg = f0Norm2.GetString();
+                }
             }
             else
             {
@@ -901,6 +1013,7 @@ public class BinderViewModel : INotifyPropertyChanged
             }
             if (string.IsNullOrWhiteSpace(displayName)) displayName = $"{number}"; // fallback
             CardImageUrlStore.Set(setCode, number, frontImg, backImg);
+            CardLayoutStore.Set(setCode, number, layout);
             return new CardEntry(displayName!, number, setCode, isMfc, false, frontRaw, backRaw);
         }
         catch { return null; }
