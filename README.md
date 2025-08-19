@@ -1,103 +1,139 @@
 # Enfolderer MTG Binder
 
-WPF application to visualize a Magic: The Gathering collection in one or more virtual 20‑page quad binders (4 columns x 3 rows per page = 12 slots per page). When your collection exceeds 480 card faces the app automatically creates additional binders and gives you binder‑level navigation.
+WPF application for visualizing a Magic: The Gathering collection in virtual quad binders (4×3 = 12 slots per page). Each physical binder = 20 double‑sided pages (40 displayed sides). The app auto‑adds binders as your list grows beyond the 480 face capacity of one binder.
 
-Physical layout rules are emulated:
-* Page 1 is a single right‑hand page (front cover open)
-* Last page of each binder is a single left‑hand page (back cover)
-* Interior pages display as two‑page spreads (left + right simultaneously)
+Physical pagination is emulated:
+* Page 1: single right page (front cover opened)
+* Interior: two‑page spreads (left + right simultaneously)
+* Final page of a binder: single left page (back cover)
 
-## Current Features
-* Unlimited binder support (every 20 pages becomes a new binder automatically)
-* Accurate physical pagination (front cover / interior spreads / back cover)
-* Modal / Double‑Faced (MFC / DFC) card handling with automatic back face slot
-* MFC placement rules: front face forced into column 1 or 3 (zero‑based 0 or 2) so the back face sits immediately to its right
-* Intelligent compaction / relocation so MFC constraints do not leave large gaps
-* Scryfall REST API integration for card face images (front/back) with in‑memory caching
-* API rate limiting (< 10 requests / second) and bounded parallelism to stay polite
-* Skips image fetch for TOKEN set entries automatically (still shows placeholder)
-* Comment lines starting with `#` in the input are ignored
-* Binder navigation: First / Previous / Next / Last page AND Previous / Next Binder
-* Direct jump UI: enter binder number + page number and press Go
-* Async image loading with robust error handling (app stays responsive)
-* Global exception handlers to avoid hard crashes
+## Key Features (Current)
+* Unlimited binders with correct cover / spread pagination
+* Deterministic global ordering with adjacency constraints
+	* Modal / Double‑Faced (MFC/DFC) cards automatically inject their back face immediately after the front
+	* Duplicate name pairs (two consecutive identical front names) also forced to be adjacent
+	* Pair starts aligned to even columns (0 or 2) so the second half sits to the right
+	* Singles (including tokens) may be pulled forward to repair misalignment—no gaps
+* New declarative input format with set sections, ranges, interleaving and optional overrides (details below)
+* Lazy metadata resolution:
+	* Initial minimal fetch (current + look‑ahead pages)
+	* On‑demand background resolution as you navigate
+	* Progress status updates (e.g. 12/120 resolved)
+* Scryfall integration (names, MFC detection, images)
+	* Automatic rate limiting (<10 requests/sec) + bounded parallelism
+* Multi‑layer caching:
+	* In‑memory image cache
+	* Disk image cache (hashed filenames under LocalAppData)
+	* Metadata + image URL cache keyed by SHA‑256 hash of the input file
+	* Completion sentinel (.done) avoids partial-cache reuse
+	* On full cache hit: instant layout with no metadata refetch
+* Smart image URL reuse (skip extra metadata calls once URLs known)
+* Token / custom placeholders supported (no image fetch for TOKEN)
+* Binder & page navigation: First / Prev / Next / Last / Prev Binder / Next Binder / direct jump
+* Responsive UI (no blocking while fetching)
+* Single-file self‑contained publish option (for releases)
 * MIT licensed
 
-## Input File Format
-Semicolon separated values per line:
+## Input File Format (Declarative)
 
+The newer format removes the need to list names for normal set cards; names & MFC flags are pulled from Scryfall. You define structure with set blocks and numeric ranges.
+
+Rules:
+1. A set section starts with `=SETCODE` (e.g. `=STA`). Everything until the next `=` belongs to that set.
+2. Single collector numbers: `123`
+3. Ranges: `10-25` (inclusive)
+4. Interleaving (round‑robin across sequences): `1-5||30-34||100` produces: 1,30,100,2,31,3,32,4,33,5,34
+5. Name override (rare; for alt arts / tokens that still need API fetch): `123;Custom Name`
+6. Explicit fixed entry (bypass API entirely—used for tokens or custom cards). Provide at least two semicolons: `Some Token;TOKEN;1`
+7. Comments: lines starting with `#` are ignored.
+8. Blank lines ignored.
+
+Example:
 ```
-Name;CollectorNumber;Set
-```
+# Strixhaven Mystical Archive (STA) + Tokens
+=STA
+1-10
+11-20||50-55   # interleaves two ranges
+100;Special Showcase Placeholder
 
-Indicate a modal/double‑faced card using either name suffix or a trailing marker:
-* `FrontName/BackName|MFC;123;SET`
-* `FrontName/BackName|DFC;123;SET`
-* Or `FrontName/BackName;123;SET;MFC` (legacy support)
+# Explicit token / custom placeholder (no API call)
+Dragon Token;TOKEN;1
 
-The secondary (back) face is auto‑generated and placed immediately to the right of the front face.
+=BOT
+1-15
 
-Special parsing rules:
-* Lines beginning with `#` are treated as comments and skipped.
-* Empty or whitespace‑only lines are skipped.
-* Malformed lines are skipped silently.
-* If `Set` equals `TOKEN` the card is shown with a placeholder (no API call).
-* Name + CollectorNumber are required; Set may be omitted (image lookup may then fail).
-
-Example file:
-```
-# Lands
-Island;271;LTR
-Forest;300;LTR
-
-# Creatures (includes a double-faced card)
-Brutal Cathar/Moonrage Brute|MFC;19;MID
-Delver of Secrets/Insectile Aberration;56;ISD;MFC
-
-# A token we don't fetch
-Spirit Token;1;TOKEN
+=REX
+1-5||30-32
 ```
 
-### MFC Placement Constraint
-An MFC front must start in column 0 or 2 so its back fits in 1 or 3. If a front would otherwise land in an odd column, the algorithm relocates it (and may shift other cards) to honor the constraint while keeping earlier ordering as intact as possible.
+Legacy CSV style (Name;Number;Set) is still parsed by the older loader, but the declarative format is now preferred.
+
+### Adjacency & Layout Rules
+* MFC front + synthetic back are treated as a 2‑card group.
+* Two consecutive identical front names form a duplicate pair group.
+* Group start must land at column 0 or 2 (avoid splitting a pair over a row boundary). If misaligned, a future single is pulled forward.
+* Tokens can be moved just like other singles to preserve pair alignment.
+
+### Lazy Loading Flow
+1. Parse specs into an ordered list of unresolved entries.
+2. Perform an initial small batch resolution (enough for first two pages worth of faces including MFC backs).
+3. Build ordering (placeholders have provisional names) and render.
+4. As you navigate, background resolution fills in missing specs for the active/next pages; views redraw incrementally.
+5. After all specs resolve, metadata + image URLs are persisted and a `.done` sentinel written.
+
+### Caching Details
+Cache Root: `%LocalAppData%/Enfolderer/cache`
+* `meta/<hash>.json`  — serialized faces (fronts + backs) including image URLs
+* `meta/<hash>.done`  — presence means cache complete (safe to reuse)
+* `<hash-of-url>.img` — raw image bytes (one per face variant)
+* In‑memory dictionaries layer on top for fast session reuse
+
+On load:
+* Compute SHA‑256 of the exact file contents (normalized with `\n`).
+* If `meta/<hash>.done` exists and JSON loads => skip all metadata HTTP.
+* Otherwise perform lazy resolution; when complete write JSON + `.done`.
 
 ## Navigation
-Toolbar provides:
-* First / Prev / Next / Last page buttons
-* Prev Binder / Next Binder buttons (when more than one binder exists)
-* Jump fields: enter Binder (1‑based) and Page (1‑based within that binder) then Go
+Toolbar / UI offers:
+* First / Prev / Next / Last
+* Prev Binder / Next Binder
+* Jump to Binder + Page (1‑based)
+Page label displays binder number and local page numbers (covers annotated).
 
-Displayed page indicator reflects global view index (covers and spreads) while the jump uses binder‑relative numbering.
+## Image Fetching
+`https://api.scryfall.com/cards/{set}/{collector_number}`
+* Metadata calls rate‑limited (<10/sec)
+* Image URLs stored; subsequent face loads skip metadata request
+* Disk + memory cache for image bytes
+* Tokens (set `TOKEN`) are skipped (placeholder only)
 
-## Image Fetching & Caching
-Images are fetched via the Scryfall REST endpoint:
-```
-https://api.scryfall.com/cards/{set}/{collector_number}
-```
-* Responses are cached in‑memory by URL; repeated faces are instant.
-* Parallel fetches are limited and total throughput is capped below 10/sec.
-* Failure to fetch leaves a placeholder (no crash).
-* Double‑faced cards select the appropriate face artwork for front/back.
-
-## Building / Running
+## Build & Run
 Requires .NET 8 SDK.
-
 ```
-dotnet build
 dotnet run --project Enfolderer.App
 ```
-Then use File > Open (or the provided button) to choose your collection CSV.
+Open a declarative collection file (`File > Open`).
 
-## Roadmap / Future Ideas
-* Quantity tracking / collection stats
-* Search & filtering
-* Persist cache to disk between sessions
-* Configurable rate limit & parallelism
-* Visual differentiation / theming for token & missing images
-* Export binder as printable PDF spread
+### Release (Single EXE)
+Self‑contained, single file (win-x64):
+```
+dotnet publish Enfolderer.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+```
+Framework‑dependent (smaller, requires user‑installed runtime):
+```
+dotnet publish Enfolderer.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false
+```
+
+## Roadmap Ideas
+* Quantity / inventory tracking
+* Search & filters
+* Export spreads / PDF
+* Advanced trimming (size reduction) with descriptor
+* UI theming (dark / high contrast) & token styling
+* Optional offline mode using full cache only
 
 ## Attribution
-Card data & images provided by Scryfall (https://scryfall.com). This project is unofficial and not endorsed by Wizards of the Coast.
+Card data & images © Scryfall (https://scryfall.com). Unofficial; not endorsed by Wizards of the Coast.
 
 ## License
 MIT
