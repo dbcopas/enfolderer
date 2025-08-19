@@ -767,8 +767,17 @@ public class BinderViewModel : INotifyPropertyChanged
     }
 
     private string? _currentFileHash;
-    private const int CacheSchemaVersion = 2; // bump when cache layout/logic changes
-    private static readonly HashSet<string> PhysicallyTwoSidedLayouts = new(StringComparer.OrdinalIgnoreCase){"transform","modal_dfc","battle","double_faced_token","double_faced_card","prototype"};
+    private const int CacheSchemaVersion = 4; // refined two-sided classification logic
+    private static readonly HashSet<string> PhysicallyTwoSidedLayouts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Layouts that represent distinct physical faces requiring two binder slots
+        "transform","modal_dfc","battle","double_faced_token","double_faced_card","prototype","reversible_card"
+    };
+    private static readonly HashSet<string> SingleFaceMultiLayouts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Multi-face metadata but single physical face
+        "split","aftermath","adventure","meld","flip","leveler","saga","class","plane","planar","scheme","vanguard","token","emblem","art_series"
+    };
     private record CachedFace(string Name, string Number, string? Set, bool IsMfc, bool IsBack, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion);
     private string MetaCacheDir => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "meta");
     private string MetaCachePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".json");
@@ -980,18 +989,33 @@ public class BinderViewModel : INotifyPropertyChanged
             bool hasRootImageUris = root.TryGetProperty("image_uris", out var rootImgs); // split & similar layouts usually have this
             string? layout = null; if (root.TryGetProperty("layout", out var layoutProp) && layoutProp.ValueKind == JsonValueKind.String) layout = layoutProp.GetString();
             bool isPhysicallyTwoSidedLayout = layout != null && PhysicallyTwoSidedLayouts.Contains(layout);
+            bool forcedSingleByLayout = layout != null && SingleFaceMultiLayouts.Contains(layout);
             if (root.TryGetProperty("card_faces", out var faces) && faces.ValueKind == JsonValueKind.Array && faces.GetArrayLength() >= 2)
             {
                 var f0 = faces[0]; var f1 = faces[1];
-                if (!hasRootImageUris && isPhysicallyTwoSidedLayout)
+                // Heuristic: if not explicitly single-face layout and either layout is physically two-sided OR root lacks image_uris OR both faces have different illustration ids.
+                bool facesHaveDistinctArt = false;
+                try
                 {
-                    // Treat as true double-sided (needs two slots)
+                    if (f0.TryGetProperty("illustration_id", out var ill0) && f1.TryGetProperty("illustration_id", out var ill1) && ill0.ValueKind==JsonValueKind.String && ill1.ValueKind==JsonValueKind.String && ill0.GetString()!=ill1.GetString())
+                        facesHaveDistinctArt = true;
+                } catch {}
+                bool treatAsTwoSided = !forcedSingleByLayout && (isPhysicallyTwoSidedLayout || !hasRootImageUris || facesHaveDistinctArt);
+                if (treatAsTwoSided)
+                {
+                    // True double-sided regardless of presence of root image_uris
                     frontRaw = f0.GetProperty("name").GetString();
                     backRaw = f1.GetProperty("name").GetString();
                     isMfc = true;
                     if (displayName == null) displayName = $"{frontRaw} ({backRaw})";
+                    // Prefer face-specific images
                     if (f0.TryGetProperty("image_uris", out var f0Imgs) && f0Imgs.TryGetProperty("normal", out var f0Norm)) frontImg = f0Norm.GetString(); else if (f0.TryGetProperty("image_uris", out f0Imgs) && f0Imgs.TryGetProperty("large", out var f0Large)) frontImg = f0Large.GetString();
                     if (f1.TryGetProperty("image_uris", out var f1Imgs) && f1Imgs.TryGetProperty("normal", out var f1Norm)) backImg = f1Norm.GetString(); else if (f1.TryGetProperty("image_uris", out f1Imgs) && f1Imgs.TryGetProperty("large", out var f1Large)) backImg = f1Large.GetString();
+                    // Fallback to root if any missing
+                    if (frontImg == null && hasRootImageUris)
+                    {
+                        if (rootImgs.TryGetProperty("normal", out var rootNorm)) frontImg = rootNorm.GetString(); else if (rootImgs.TryGetProperty("large", out var rootLarge)) frontImg = rootLarge.GetString();
+                    }
                 }
                 else
                 {
@@ -999,8 +1023,8 @@ public class BinderViewModel : INotifyPropertyChanged
                     if (displayName == null && root.TryGetProperty("name", out var npropSplit)) displayName = npropSplit.GetString();
                     if (hasRootImageUris)
                     {
-                        if (rootImgs.TryGetProperty("normal", out var rootNorm)) frontImg = rootNorm.GetString();
-                        else if (rootImgs.TryGetProperty("large", out var rootLarge)) frontImg = rootLarge.GetString();
+                        if (rootImgs.TryGetProperty("normal", out var rootNorm2)) frontImg = rootNorm2.GetString();
+                        else if (rootImgs.TryGetProperty("large", out var rootLarge2)) frontImg = rootLarge2.GetString();
                     }
                     else if (f0.TryGetProperty("image_uris", out var f0Imgs2) && f0Imgs2.TryGetProperty("normal", out var f0Norm2)) frontImg = f0Norm2.GetString();
                 }

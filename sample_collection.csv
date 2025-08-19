@@ -57,6 +57,9 @@ Ravage;TOKEN;2
 1-26
 Dinosaur;Token;1
 Treasure;Token;2
+# Breaking news
+=OTP
+1-80
 # Mythic edition
 =MED
 GR 1-8
@@ -66,6 +69,3 @@ WS 1-8
 =BIG
 31-60
 66-95
-# Breaking news
-=OTP
-1-80
