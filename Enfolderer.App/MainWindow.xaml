@@ -4,8 +4,9 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:Enfolderer.App"
-        mc:Ignorable="d"
-        Title="MTG Binder" Height="900" Width="1400" MinWidth="1100" MinHeight="700">
+    mc:Ignorable="d"
+    Title="MTG Binder" Height="900" Width="1400" MinWidth="1100" MinHeight="700"
+    Background="{Binding BinderBackground}">
     <Window.Resources>
         <Style x:Key="CardSlotStyle" TargetType="Border">
             <Setter Property="Margin" Value="4" />
@@ -52,28 +53,56 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
-            <StackPanel Orientation="Horizontal" Margin="10" Grid.Row="0" HorizontalAlignment="Center">
-                <StackPanel.Resources>
-                    <Style TargetType="Button">
-                        <Setter Property="Margin" Value="6,0" />
-                        <Setter Property="Padding" Value="14,6" />
+            <!-- Fixed layout navigation bar -->
+            <Grid Grid.Row="0" Margin="10" HorizontalAlignment="Stretch">
+                <Grid.ColumnDefinitions>
+                    <!-- Left nav buttons group -->
+                    <ColumnDefinition Width="Auto" />
+                    <!-- Spacer -->
+                    <ColumnDefinition Width="20" />
+                    <!-- Center label fixed width so outer buttons never move -->
+                    <ColumnDefinition Width="300" />
+                    <!-- Spacer -->
+                    <ColumnDefinition Width="20" />
+                    <!-- Right nav buttons group -->
+                    <ColumnDefinition Width="Auto" />
+                    <!-- Flexible space pushes jump panel to far right -->
+                    <ColumnDefinition Width="*" />
+                    <!-- Jump panel -->
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid.Resources>
+                    <Style x:Key="NavButtonStyle" TargetType="Button">
+                        <Setter Property="Width" Value="120" />
+                        <Setter Property="Margin" Value="4,0" />
+                        <Setter Property="Padding" Value="6,6" />
                     </Style>
-                </StackPanel.Resources>
-                <Button Content="⏪ Binder Prev" Command="{Binding PrevBinderCommand}" />
-                <Button Content="⏮ First" Command="{Binding FirstCommand}" />
-                <Button Content="◀ Prev" Command="{Binding PrevCommand}" />
-                <TextBlock Text="{Binding PageDisplay}" FontSize="16" FontWeight="Bold" VerticalAlignment="Center" Margin="10,0" />
-                <Button Content="Next ▶" Command="{Binding NextCommand}" />
-                <Button Content="Last ⏭" Command="{Binding LastCommand}" />
-                <Button Content="Binder Next ⏩" Command="{Binding NextBinderCommand}" />
-                <StackPanel Orientation="Horizontal" Margin="20,0,0,0" VerticalAlignment="Center">
+                </Grid.Resources>
+                <!-- Left group -->
+                <StackPanel Orientation="Horizontal" Grid.Column="0" VerticalAlignment="Center">
+                    <Button Style="{StaticResource NavButtonStyle}" Content="⏪ Binder Prev" Command="{Binding PrevBinderCommand}" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="⏮ First" Command="{Binding FirstCommand}" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="◀ Prev" Command="{Binding PrevCommand}" />
+                </StackPanel>
+                <!-- Center fixed-width page display -->
+                <Border Grid.Column="2" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding PageDisplay}" FontSize="16" FontWeight="Bold" TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </Border>
+                <!-- Right group -->
+                <StackPanel Orientation="Horizontal" Grid.Column="4" VerticalAlignment="Center">
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Next ▶" Command="{Binding NextCommand}" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Last ⏭" Command="{Binding LastCommand}" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Binder Next ⏩" Command="{Binding NextBinderCommand}" />
+                </StackPanel>
+                <!-- Jump controls at far right -->
+                <StackPanel Orientation="Horizontal" Grid.Column="6" VerticalAlignment="Center" Margin="10,0,0,0">
                     <TextBlock Text="Binder:" VerticalAlignment="Center" Margin="0,0,4,0" />
                     <TextBox Width="40" Text="{Binding JumpBinderInput, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBlock Text="Page:" VerticalAlignment="Center" Margin="10,0,4,0" />
                     <TextBox Width="50" Text="{Binding JumpPageInput, UpdateSourceTrigger=PropertyChanged}" />
                     <Button Content="Go" Command="{Binding JumpToPageCommand}" Margin="8,0,0,0" />
                 </StackPanel>
-            </StackPanel>
+            </Grid>
             <Grid Grid.Row="1" Margin="20" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
