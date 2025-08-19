@@ -1,0 +1,86 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+
+jobs:
+  build:
+    name: Build (main or tag)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        run: dotnet restore Enfolderer.sln
+      - name: Build Release
+        run: dotnet build Enfolderer.sln -c Release --no-restore
+      - name: Publish Self-contained Single File (win-x64)
+        run: >-
+          dotnet publish Enfolderer.App -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish/win-x64
+      - name: Publish Framework-dependent Single File (win-x64)
+        run: >-
+          dotnet publish Enfolderer.App -c Release -r win-x64 --self-contained false
+          -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false
+          -o publish/win-x64-fd
+      - name: Archive Artifacts
+        if: github.ref_type == 'branch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: publish/**
+
+  release:
+    name: Create Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        run: dotnet restore Enfolderer.sln
+      - name: Publish Self-contained Single File (win-x64)
+        run: >-
+          dotnet publish Enfolderer.App -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish/win-x64
+      - name: Publish Framework-dependent Single File (win-x64)
+        run: >-
+          dotnet publish Enfolderer.App -c Release -r win-x64 --self-contained false
+          -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false
+          -o publish/win-x64-fd
+      - name: Create Zip Packages
+        run: |
+          Compress-Archive -Path publish/win-x64/* -DestinationPath Enfolderer-win-x64-selfcontained.zip
+          Compress-Archive -Path publish/win-x64-fd/* -DestinationPath Enfolderer-win-x64-frameworkdependent.zip
+      - name: Generate Release Notes (simple)
+        id: notes
+        run: |
+          echo "RELEASE_BODY<<EOF" >> $env:GITHUB_OUTPUT
+          echo "Automated release for $env:GITHUB_REF_NAME" >> $env:GITHUB_OUTPUT
+          echo "EOF" >> $env:GITHUB_OUTPUT
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.RELEASE_BODY }}
+          draft: false
+          prerelease: false
+          files: |
+            Enfolderer-win-x64-selfcontained.zip
+            Enfolderer-win-x64-frameworkdependent.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
