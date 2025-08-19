@@ -53,5 +53,6 @@ jobs:
           artifacts: |
             Enfolderer-win-x64-selfcontained.zip
             Enfolderer-win-x64-frameworkdependent.zip
+            sample_collection.csv
           artifactErrorsFailBuild: true
           generateReleaseNotes: true
