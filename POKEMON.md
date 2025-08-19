@@ -12,11 +12,11 @@ This branch will adapt Enfolderer for Pokémon TCG cards.
 - Remove MFC pairing alignment rules unless variant pairing feature added.
 
 ## Incremental Steps
-1. Introduce provider interface.
-2. Implement Pokémon provider + minimal JSON parsing (name, number, set, image.large).
-3. Toggle via config or command-line flag.
-4. Adjust cache keying + schema version bump for Pokémon path.
-5. Validate performance with lazy loading as in MTG flow.
+1. (In progress) Introduce provider interface (currently inlined PokemonMode bool).
+2. (Done basic) Pokémon fetch logic + minimal JSON parsing (name, number, image.large).
+3. TODO: Toggle via config or command-line flag (now hardcoded PokemonMode=true on branch).
+4. TODO: Adjust cache keying + schema version bump segregation.
+5. TODO: Validate performance & rate limiting (may need API key for heavy use).
 
 ## Notes
 - Pokémon API may require an API key for higher rate limits; keep optional.
