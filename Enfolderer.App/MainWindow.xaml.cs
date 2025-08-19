@@ -34,7 +34,7 @@ public partial class MainWindow : Window
         DataContext = _vm;
     }
 
-    private void OpenCollection_Click(object sender, RoutedEventArgs e)
+    private async void OpenCollection_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
@@ -45,7 +45,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                _vm.LoadFromFile(dlg.FileName);
+                await _vm.LoadFromFileAsync(dlg.FileName);
             }
             catch (Exception ex)
             {
@@ -285,6 +285,8 @@ public class BinderViewModel : INotifyPropertyChanged
     private const int PagesPerBinder = 40; // numbered sides per binder
     private readonly List<CardEntry> _cards = new();
     private readonly List<CardEntry> _orderedFaces = new(); // reordered faces honoring placement constraints
+    private readonly List<CardSpec> _specs = new(); // raw specs in file order
+    private readonly Dictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
     private readonly List<PageView> _views = new(); // sequence of display views across all binders
     private int _currentViewIndex = 0;
     private static readonly HttpClient Http = CreateClient();
@@ -337,10 +339,10 @@ public class BinderViewModel : INotifyPropertyChanged
 
     public BinderViewModel()
     {
-        NextCommand = new RelayCommand(_ => { _currentViewIndex++; Refresh(); }, _ => _currentViewIndex < _views.Count - 1);
-        PrevCommand = new RelayCommand(_ => { _currentViewIndex--; Refresh(); }, _ => _currentViewIndex > 0);
-        FirstCommand = new RelayCommand(_ => { _currentViewIndex = 0; Refresh(); }, _ => _currentViewIndex != 0);
-        LastCommand = new RelayCommand(_ => { if (_views.Count>0) { _currentViewIndex = _views.Count -1; Refresh(); } }, _ => _views.Count>0 && _currentViewIndex != _views.Count -1);
+    NextCommand = new RelayCommand(_ => { _currentViewIndex++; Refresh(); }, _ => _currentViewIndex < _views.Count - 1);
+    PrevCommand = new RelayCommand(_ => { _currentViewIndex--; Refresh(); }, _ => _currentViewIndex > 0);
+    FirstCommand = new RelayCommand(_ => { _currentViewIndex = 0; Refresh(); }, _ => _currentViewIndex != 0);
+    LastCommand = new RelayCommand(_ => { if (_views.Count>0) { _currentViewIndex = _views.Count -1; Refresh(); } }, _ => _views.Count>0 && _currentViewIndex != _views.Count -1);
         NextBinderCommand = new RelayCommand(_ => { JumpBinder(1); }, _ => CanJumpBinder(1));
         PrevBinderCommand = new RelayCommand(_ => { JumpBinder(-1); }, _ => CanJumpBinder(-1));
     JumpToPageCommand = new RelayCommand(_ => JumpToBinderPage(), _ => CanJumpToBinderPage());
@@ -482,6 +484,250 @@ public class BinderViewModel : INotifyPropertyChanged
         Refresh();
     }
 
+    // New format loader (async):
+    // Lines:
+    // # comment
+    // =[SETCODE]
+    // number;[optional name override]
+    // numberStart-numberEnd  (inclusive range) optionally followed by ; prefix for name hints (ignored here)
+    public async Task LoadFromFileAsync(string path)
+    {
+    var lines = await File.ReadAllLinesAsync(path);
+    _cards.Clear();
+    _specs.Clear();
+        string? currentSet = null;
+    var fetchList = new List<(string setCode,string number,string? nameOverride,int specIndex)>();
+        foreach (var raw in lines)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var line = raw.Trim();
+            if (line.StartsWith('#')) continue;
+            if (line.StartsWith('=') && line.Length>1)
+            {
+                currentSet = line.Substring(1).Trim();
+                continue;
+            }
+            if (currentSet == null) continue; // ignore until a set code defined
+            // Explicit placeholder/card line: Name;SetCode;Number (bypasses API, used for tokens or custom entries)
+            // Detect by having at least two semicolons and last segment numeric
+            if (line.Count(c => c==';') >= 2)
+            {
+                var parts = line.Split(';', StringSplitOptions.TrimEntries);
+                if (parts.Length >=3)
+                {
+                    string possibleName = parts[0];
+                    string possibleSet = parts[1].ToUpperInvariant();
+                    string possibleNumber = parts[2];
+                    if (int.TryParse(possibleNumber, out _))
+                    {
+            _specs.Add(new CardSpec(possibleSet, possibleNumber, overrideName: possibleName, explicitEntry:true));
+                        continue;
+                    }
+                }
+            }
+            // Range or single
+            string? nameOverride = null;
+            var semiIdx = line.IndexOf(';');
+            string numberPart = line;
+            if (semiIdx >=0)
+            {
+                numberPart = line.Substring(0, semiIdx).Trim();
+                nameOverride = line.Substring(semiIdx+1).Trim();
+                if (nameOverride.Length==0) nameOverride = null;
+            }
+            // Interleaving syntax: a line containing "||" splits into multiple segments; we round-robin them.
+            if (numberPart.Contains("||", StringComparison.Ordinal))
+            {
+                var segments = numberPart.Split("||", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                if (segments.Length > 1)
+                {
+                    var lists = new List<List<string>>();
+                    foreach (var seg in segments)
+                    {
+                        // Each segment can be a range A-B or single C
+                        if (seg.Contains('-', StringComparison.Ordinal))
+                        {
+                            var pieces = seg.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                            if (pieces.Length==2 && int.TryParse(pieces[0], out int s) && int.TryParse(pieces[1], out int e) && s<=e)
+                            {
+                                var l = new List<string>();
+                                for (int n=s; n<=e; n++) l.Add(n.ToString());
+                                lists.Add(l);
+                            }
+                        }
+                        else if (int.TryParse(seg, out int singleNum))
+                        {
+                            lists.Add(new List<string>{ singleNum.ToString() });
+                        }
+                    }
+                    if (lists.Count > 0)
+                    {
+                        bool anyLeft;
+                        do
+                        {
+                            anyLeft = false;
+                            foreach (var l in lists)
+                            {
+                                if (l.Count == 0) continue;
+                                _specs.Add(new CardSpec(currentSet, l[0], null, false));
+                                fetchList.Add((currentSet, l[0], null, _specs.Count-1));
+                                l.RemoveAt(0);
+                                if (l.Count > 0) anyLeft = true; // still more in at least one list
+                            }
+                            // If after removing first elements some lists still have items, loop continues
+                            anyLeft = lists.Exists(x => x.Count > 0);
+                        } while (anyLeft);
+                        continue; // processed this line fully
+                    }
+                }
+            }
+            if (numberPart.Contains('-', StringComparison.Ordinal))
+            {
+                var pieces = numberPart.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                if (pieces.Length==2 && int.TryParse(pieces[0], out int startNum) && int.TryParse(pieces[1], out int endNum) && startNum<=endNum)
+                {
+                    for (int n=startNum; n<=endNum; n++)
+                    {
+                        _specs.Add(new CardSpec(currentSet, n.ToString(), null, false));
+                        fetchList.Add((currentSet, n.ToString(), null, _specs.Count-1));
+                    }
+                }
+                continue;
+            }
+            // Single number
+            var num = numberPart.Trim();
+            if (num.Length>0)
+            {
+                _specs.Add(new CardSpec(currentSet, num, nameOverride, false));
+                fetchList.Add((currentSet, num, nameOverride, _specs.Count-1));
+            }
+        }
+        // Lazy initial fetch: just enough for first two pages (current + lookahead)
+        int neededFaces = SlotsPerPage * 2; // 24
+        var initialSpecIndexes = new HashSet<int>();
+        for (int i = 0; i < _specs.Count && initialSpecIndexes.Count < neededFaces; i++) initialSpecIndexes.Add(i);
+        await ResolveSpecsAsync(fetchList, initialSpecIndexes);
+        RebuildCardListFromSpecs();
+        Status = $"Initial load {_cards.Count} faces (placeholders included).";
+        BuildOrderedFaces();
+        _currentViewIndex = 0;
+        RebuildViews();
+        Refresh();
+        // Background fetch remaining
+        _ = Task.Run(async () =>
+        {
+            var remaining = new HashSet<int>();
+            for (int i = 0; i < _specs.Count; i++) if (!initialSpecIndexes.Contains(i)) remaining.Add(i);
+            if (remaining.Count == 0) return;
+            await ResolveSpecsAsync(fetchList, remaining, updateInterval:15);
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                RebuildCardListFromSpecs();
+                BuildOrderedFaces();
+                RebuildViews();
+                Refresh();
+                Status = $"All metadata loaded ({_cards.Count} faces).";
+            });
+        });
+    }
+
+    private async Task ResolveSpecsAsync(List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList, HashSet<int> targetIndexes, int updateInterval = 5)
+    {
+        int total = targetIndexes.Count;
+        int done = 0;
+        var concurrency = new SemaphoreSlim(6);
+        var tasks = new List<Task>();
+        foreach (var f in fetchList)
+        {
+            if (!targetIndexes.Contains(f.specIndex)) continue;
+            await concurrency.WaitAsync();
+            tasks.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    var ce = await FetchCardMetadataAsync(f.setCode, f.number, f.nameOverride);
+                    if (ce != null)
+                    {
+                        _specs[f.specIndex] = _specs[f.specIndex] with { Resolved = ce };
+                        if (ce.IsModalDoubleFaced && !string.IsNullOrEmpty(ce.FrontRaw) && !string.IsNullOrEmpty(ce.BackRaw))
+                        {
+                            var backDisplay = $"{ce.BackRaw} ({ce.FrontRaw})";
+                            var backEntry = new CardEntry(backDisplay, ce.Number, ce.Set, false, true, ce.FrontRaw, ce.BackRaw);
+                            _mfcBacks[f.specIndex] = backEntry; // store for injection after front
+                        }
+                    }
+                }
+                finally
+                {
+                    Interlocked.Increment(ref done);
+                    if (done % updateInterval == 0 || done == total)
+                    {
+                        Status = $"Resolving metadata {done}/{total} ({(int)(done*100.0/Math.Max(1,total))}%)";
+                    }
+                    concurrency.Release();
+                }
+            }));
+        }
+        await Task.WhenAll(tasks);
+    }
+
+    private void RebuildCardListFromSpecs()
+    {
+        _cards.Clear();
+        for (int i=0;i<_specs.Count;i++)
+        {
+            var s = _specs[i];
+            if (s.Resolved != null)
+                _cards.Add(s.Resolved);
+            else
+            {
+                var placeholderName = s.overrideName ?? s.number;
+                _cards.Add(new CardEntry(placeholderName, s.number, s.setCode, false));
+            }
+            if (_mfcBacks.TryGetValue(i, out var back))
+                _cards.Add(back);
+        }
+    }
+
+    private record CardSpec(string setCode, string number, string? overrideName, bool explicitEntry)
+    {
+        public CardEntry? Resolved { get; set; }
+    }
+
+    private async Task<CardEntry?> FetchCardMetadataAsync(string setCode, string number, string? overrideName)
+    {
+        try
+        {
+            await ApiRateLimiter.WaitAsync();
+            var url = $"https://api.scryfall.com/cards/{setCode.ToLowerInvariant()}/{Uri.EscapeDataString(number)}";
+            var resp = await Http.GetAsync(url);
+            if (!resp.IsSuccessStatusCode) return null;
+            await using var stream = await resp.Content.ReadAsStreamAsync();
+            using var doc = await JsonDocument.ParseAsync(stream);
+            var root = doc.RootElement;
+            string? displayName = overrideName;
+            string? frontRaw = null;
+            string? backRaw = null;
+            bool isMfc = false;
+            if (root.TryGetProperty("card_faces", out var faces) && faces.ValueKind == JsonValueKind.Array && faces.GetArrayLength() >= 2)
+            {
+                var f0 = faces[0];
+                var f1 = faces[1];
+                frontRaw = f0.GetProperty("name").GetString();
+                backRaw = f1.GetProperty("name").GetString();
+                isMfc = true;
+                if (displayName == null) displayName = $"{frontRaw} ({backRaw})";
+            }
+            else
+            {
+                if (displayName == null && root.TryGetProperty("name", out var nprop)) displayName = nprop.GetString();
+            }
+            if (string.IsNullOrWhiteSpace(displayName)) displayName = $"{number}"; // fallback
+            return new CardEntry(displayName!, number, setCode, isMfc, false, frontRaw, backRaw);
+        }
+        catch { return null; }
+    }
+
     private void BuildOrderedFaces()
     {
         _orderedFaces.Clear();
@@ -497,13 +743,27 @@ public class BinderViewModel : INotifyPropertyChanged
             {
                 if (idx < 0 || idx >= list.Count) return false;
                 var c = list[idx];
+                if (c == null)
+                {
+                    Debug.WriteLine($"[BuildOrderedFaces] Null entry at index {idx} in remaining list (IsPairStart). Treating as single.");
+                    return false;
+                }
                 // MFC front + back
-                if (c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count && list[idx + 1].IsBackFace) return true;
+                if (c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
+                {
+                    var next = list[idx + 1];
+                    if (next != null && next.IsBackFace) return true;
+                }
                 // Duplicate pair
                 if (!c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
                 {
                     var n = list[idx + 1];
-                    if (!n.IsModalDoubleFaced && !n.IsBackFace && string.Equals(c.Name.Trim(), n.Name.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+                    if (n != null && !n.IsModalDoubleFaced && !n.IsBackFace)
+                    {
+                        var cName = c.Name ?? string.Empty;
+                        var nName = n.Name ?? string.Empty;
+                        if (string.Equals(cName.Trim(), nName.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+                    }
                 }
                 return false;
             }
@@ -512,11 +772,21 @@ public class BinderViewModel : INotifyPropertyChanged
             {
                 if (idx <= 0 || idx >= list.Count) return false;
                 var c = list[idx];
+                if (c == null)
+                {
+                    Debug.WriteLine($"[BuildOrderedFaces] Null entry at index {idx} in remaining list (IsSecondOfPair). Treating as single.");
+                    return false;
+                }
                 // MFC back face is inherently second
                 if (c.IsBackFace) return true;
                 // Duplicate second if previous + this form pair
                 var prev = list[idx - 1];
-                if (!prev.IsModalDoubleFaced && !prev.IsBackFace && !c.IsModalDoubleFaced && !c.IsBackFace && string.Equals(prev.Name.Trim(), c.Name.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+                if (prev != null && !prev.IsModalDoubleFaced && !prev.IsBackFace && !c.IsModalDoubleFaced && !c.IsBackFace)
+                {
+                    var prevName = prev.Name ?? string.Empty;
+                    var cName = c.Name ?? string.Empty;
+                    if (string.Equals(prevName.Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+                }
                 return false;
             }
 
@@ -552,12 +822,26 @@ public class BinderViewModel : INotifyPropertyChanged
 
             if (groupSize == 1)
             {
+                if (remaining[0] == null)
+                {
+                    Debug.WriteLine("[BuildOrderedFaces] Encountered null single at head; skipping.");
+                    remaining.RemoveAt(0);
+                    continue;
+                }
                 _orderedFaces.Add(remaining[0]);
                 remaining.RemoveAt(0);
                 globalSlot++;
             }
             else // groupSize == 2
             {
+                if (remaining[0] == null || remaining[1] == null)
+                {
+                    Debug.WriteLine("[BuildOrderedFaces] Encountered null within pair; downgrading to single placement.");
+                    if (remaining[0] != null) { _orderedFaces.Add(remaining[0]); }
+                    remaining.RemoveAt(0);
+                    globalSlot++;
+                    continue;
+                }
                 _orderedFaces.Add(remaining[0]);
                 _orderedFaces.Add(remaining[1]);
                 remaining.RemoveRange(0, 2);
@@ -581,6 +865,8 @@ public class BinderViewModel : INotifyPropertyChanged
             FillPage(LeftSlots, view.LeftPage.Value);
         if (view.RightPage.HasValue)
             FillPage(RightSlots, view.RightPage.Value);
+        // Trigger async metadata resolution for shown pages
+        TriggerPageResolution(view.LeftPage ?? 0, view.RightPage ?? 0);
         // Build display text
         int binderNumber = view.BinderIndex + 1;
         if (view.LeftPage.HasValue && view.RightPage.HasValue)
@@ -606,6 +892,7 @@ public class BinderViewModel : INotifyPropertyChanged
     private void FillPage(ObservableCollection<CardSlot> collection, int pageNumber)
     {
         if (pageNumber <= 0) return;
+    // Metadata resolution happens asynchronously; placeholders shown until resolved
         int startIndex = (pageNumber - 1) * SlotsPerPage;
         var tasks = new List<Task>();
         for (int i = 0; i < SlotsPerPage; i++)
@@ -628,6 +915,61 @@ public class BinderViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+    private void TriggerPageResolution(params int[] pageNumbers)
+    {
+        // Collect needed spec indices for provided pages plus lookahead page for each
+        var neededSpecs = new HashSet<int>();
+        int desiredFacesStart = int.MaxValue;
+    int preFaceCount = _orderedFaces.Count; // capture current face count so we can detect growth (e.g., MFC back injection)
+        foreach (var p in pageNumbers)
+        {
+            if (p <=0) continue;
+            int startFace = (p -1) * SlotsPerPage;
+            int endFace = startFace + SlotsPerPage * 2; // include lookahead
+            desiredFacesStart = Math.Min(desiredFacesStart, startFace);
+            int faceCounter = 0;
+            for (int si=0; si<_specs.Count && faceCounter < endFace; si++)
+            {
+                if (faceCounter >= startFace && faceCounter < endFace && _specs[si].Resolved == null && !_specs[si].explicitEntry)
+                    neededSpecs.Add(si);
+                faceCounter++;
+                if (_mfcBacks.ContainsKey(si)) faceCounter++; // skip back
+            }
+        }
+        if (neededSpecs.Count == 0) return;
+        var quickList = new List<(string setCode,string number,string? nameOverride,int specIndex)>();
+        foreach (var si in neededSpecs)
+        {
+            var s = _specs[si];
+            quickList.Add((s.setCode, s.number, s.overrideName, si));
+        }
+        _ = Task.Run(async () =>
+        {
+            await ResolveSpecsAsync(quickList, neededSpecs, updateInterval: 3);
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                RebuildCardListFromSpecs();
+                BuildOrderedFaces();
+                bool faceCountChanged = _orderedFaces.Count != preFaceCount;
+                if (faceCountChanged)
+                {
+                    // Page boundaries depend on total face count; rebuild them to avoid duplicated fronts after new MFC backs appear.
+                    RebuildViews();
+                    // Clamp current view index in case count changed
+                    if (_currentViewIndex >= _views.Count) _currentViewIndex = Math.Max(0, _views.Count -1);
+                }
+                // redraw current view only if still same index
+                if (_currentViewIndex < _views.Count)
+                {
+                    var v = _views[_currentViewIndex];
+                    LeftSlots.Clear(); RightSlots.Clear();
+                    if (v.LeftPage.HasValue) FillPage(LeftSlots, v.LeftPage.Value);
+                    if (v.RightPage.HasValue) FillPage(RightSlots, v.RightPage.Value);
+                }
+            });
+        });
+    }
 }
 
 public class RelayCommand : ICommand
