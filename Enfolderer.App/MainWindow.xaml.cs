@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -108,7 +109,7 @@ public record CardEntry(string Name, string Number, string? Set, bool IsModalDou
 
 public static class ImageCacheStore
 {
-    public static readonly Dictionary<string, BitmapImage> Cache = new(StringComparer.OrdinalIgnoreCase);
+    public static readonly ConcurrentDictionary<string, BitmapImage> Cache = new(StringComparer.OrdinalIgnoreCase);
     public static string CacheRoot { get; } = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Enfolderer", "cache");
     static ImageCacheStore()
     {
@@ -163,12 +164,12 @@ public static class ImageCacheStore
 // Stores image URLs (front/back) per card so CardSlot image loader can avoid redundant metadata fetches.
 public static class CardImageUrlStore
 {
-    private static readonly Dictionary<string,(string? front,string? back)> _map = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string,(string? front,string? back)> _map = new(StringComparer.OrdinalIgnoreCase);
     private static string Key(string setCode, string number) => $"{setCode.ToLowerInvariant()}/{number}";
     public static void Set(string setCode, string number, string? front, string? back)
     {
         if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
-        _map[Key(setCode, number)] = (front, back);
+    _map[Key(setCode, number)] = (front, back);
     }
     public static (string? front,string? back) Get(string setCode, string number)
     {
@@ -179,12 +180,12 @@ public static class CardImageUrlStore
 // Stores layout per card for persistence (used to distinguish true double-sided vs split/aftermath cards)
 public static class CardLayoutStore
 {
-    private static readonly Dictionary<string,string?> _map = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string,string?> _map = new(StringComparer.OrdinalIgnoreCase);
     private static string Key(string setCode, string number) => $"{setCode.ToLowerInvariant()}/{number}";
     public static void Set(string setCode, string number, string? layout)
     {
         if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
-        _map[Key(setCode, number)] = layout;
+    _map[Key(setCode, number)] = layout;
     }
     public static string? Get(string setCode, string number)
     {
@@ -362,7 +363,7 @@ public class BinderViewModel : INotifyPropertyChanged
     private readonly List<CardEntry> _cards = new();
     private readonly List<CardEntry> _orderedFaces = new(); // reordered faces honoring placement constraints
     private readonly List<CardSpec> _specs = new(); // raw specs in file order
-    private readonly Dictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
+    private readonly ConcurrentDictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
     private readonly List<PageView> _views = new(); // sequence of display views across all binders
     private int _currentViewIndex = 0;
     private static readonly HttpClient Http = CreateClient();
@@ -802,7 +803,7 @@ public class BinderViewModel : INotifyPropertyChanged
             var json = File.ReadAllText(path);
             var data = JsonSerializer.Deserialize<CardCacheEntry>(json);
             if (data == null) return false;
-            if (data.SchemaVersion != CacheSchemaVersion || string.IsNullOrEmpty(data.Layout)) return false; // force refresh
+            if (string.IsNullOrEmpty(data.Layout)) return false; // layout required to classify
             bool physTwoSided = data.Layout != null && PhysicallyTwoSidedLayouts.Contains(data.Layout);
             bool effectiveMfc = data.IsMfc && physTwoSided;
             var ce = new CardEntry(data.Name, data.Number, data.Set, effectiveMfc, false, data.FrontRaw, data.BackRaw);
@@ -847,7 +848,7 @@ public class BinderViewModel : INotifyPropertyChanged
             var faces = JsonSerializer.Deserialize<List<CachedFace>>(json);
             if (faces == null || faces.Count == 0) return false;
             // If any face has older schema, invalidate whole file cache
-            if (faces.Exists(f => f.SchemaVersion != CacheSchemaVersion || string.IsNullOrEmpty(f.Layout))) return false;
+            if (faces.Exists(f => string.IsNullOrEmpty(f.Layout))) return false; // accept older schema versions as long as layout present
             _cards.Clear();
             foreach (var f in faces)
             {
@@ -916,7 +917,7 @@ public class BinderViewModel : INotifyPropertyChanged
                         {
                             var backDisplay = $"{cachedEntry.BackRaw} ({cachedEntry.FrontRaw})";
                             var backEntry = new CardEntry(backDisplay, cachedEntry.Number, cachedEntry.Set, false, true, cachedEntry.FrontRaw, cachedEntry.BackRaw);
-                            _mfcBacks[f.specIndex] = backEntry;
+                            _mfcBacks[ f.specIndex ] = backEntry; // idempotent write acceptable
                         }
                         return; // skip network
                     }
@@ -928,7 +929,7 @@ public class BinderViewModel : INotifyPropertyChanged
                         {
                             var backDisplay = $"{ce.BackRaw} ({ce.FrontRaw})";
                             var backEntry = new CardEntry(backDisplay, ce.Number, ce.Set, false, true, ce.FrontRaw, ce.BackRaw);
-                            _mfcBacks[f.specIndex] = backEntry; // store for injection after front
+                            _mfcBacks[f.specIndex] = backEntry; // idempotent concurrent write acceptable
                         }
                         PersistCardToCache(ce);
                         if (_mfcBacks.TryGetValue(f.specIndex, out var backFace)) PersistCardToCache(backFace);
