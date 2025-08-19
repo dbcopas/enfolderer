@@ -109,6 +109,71 @@ public record CardEntry(string Name, string Number, string? Set, bool IsModalDou
 public static class ImageCacheStore
 {
     public static readonly Dictionary<string, BitmapImage> Cache = new(StringComparer.OrdinalIgnoreCase);
+    public static string CacheRoot { get; } = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Enfolderer", "cache");
+    static ImageCacheStore()
+    {
+        try { Directory.CreateDirectory(CacheRoot); } catch { }
+    }
+    public static string ImagePathForKey(string key)
+    {
+        // key is url|face; hash it for filename safety
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(key)));
+        return System.IO.Path.Combine(CacheRoot, hash + ".img");
+    }
+    public static bool TryLoadFromDisk(string key, out BitmapImage bmp)
+    {
+        bmp = null!;
+        try
+        {
+            var path = ImagePathForKey(key);
+            if (File.Exists(path))
+            {
+                var bytes = File.ReadAllBytes(path);
+                bmp = CreateBitmap(bytes);
+                Cache[key] = bmp;
+                return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+    public static void PersistImage(string key, byte[] bytes)
+    {
+        try
+        {
+            var path = ImagePathForKey(key);
+            if (!File.Exists(path)) File.WriteAllBytes(path, bytes);
+        }
+        catch { }
+    }
+    private static BitmapImage CreateBitmap(byte[] data)
+    {
+        using var ms = new MemoryStream(data, writable:false);
+        var bmp = new BitmapImage();
+        bmp.BeginInit();
+        bmp.CacheOption = BitmapCacheOption.OnLoad;
+        bmp.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+        bmp.StreamSource = ms;
+        bmp.EndInit();
+        if (bmp.CanFreeze) bmp.Freeze();
+        return bmp;
+    }
+}
+
+// Stores image URLs (front/back) per card so CardSlot image loader can avoid redundant metadata fetches.
+public static class CardImageUrlStore
+{
+    private static readonly Dictionary<string,(string? front,string? back)> _map = new(StringComparer.OrdinalIgnoreCase);
+    private static string Key(string setCode, string number) => $"{setCode.ToLowerInvariant()}/{number}";
+    public static void Set(string setCode, string number, string? front, string? back)
+    {
+        if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
+        _map[Key(setCode, number)] = (front, back);
+    }
+    public static (string? front,string? back) Get(string setCode, string number)
+    {
+        if (_map.TryGetValue(Key(setCode, number), out var v)) return v; return (null,null);
+    }
 }
 
 internal static class ApiRateLimiter
@@ -195,64 +260,59 @@ public class CardSlot : INotifyPropertyChanged
         try
         {
             int faceIndex = isBackFace ? 1 : 0;
-            var apiUrl = $"https://api.scryfall.com/cards/{setCode.ToLowerInvariant()}/{Uri.EscapeDataString(number)}";
-            Debug.WriteLine($"[CardSlot] API fetch {apiUrl} face={faceIndex}");
-            await ApiRateLimiter.WaitAsync(); // rate-limit metadata request
-            await FetchGate.WaitAsync();
-            HttpResponseMessage resp = null!;
+            // Try existing cached URLs first
+            var (frontUrl, backUrl) = CardImageUrlStore.Get(setCode, number);
+            string? imgUrl = faceIndex == 0 ? frontUrl : backUrl;
+            if (string.IsNullOrEmpty(imgUrl))
+            {
+                // Fetch metadata once to populate image URLs
+                var apiUrl = $"https://api.scryfall.com/cards/{setCode.ToLowerInvariant()}/{Uri.EscapeDataString(number)}";
+                Debug.WriteLine($"[CardSlot] API fetch {apiUrl} face={faceIndex} (metadata for image URL)");
+                await ApiRateLimiter.WaitAsync();
+                await FetchGate.WaitAsync();
+                HttpResponseMessage resp = null!;
+                try { resp = await client.GetAsync(apiUrl, HttpCompletionOption.ResponseHeadersRead); }
+                finally { FetchGate.Release(); }
+                using (resp)
+                {
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        string body = string.Empty; try { body = await resp.Content.ReadAsStringAsync(); } catch { }
+                        Debug.WriteLine($"[CardSlot] API status {(int)resp.StatusCode} {resp.ReasonPhrase} Body: {body}");
+                        return;
+                    }
+                    await using var stream = await resp.Content.ReadAsStreamAsync();
+                    using var doc = await JsonDocument.ParseAsync(stream);
+                    var root = doc.RootElement;
+                    string? front = null; string? back = null;
+                    if (root.TryGetProperty("card_faces", out var faces) && faces.ValueKind == JsonValueKind.Array && faces.GetArrayLength() >= 2)
+                    {
+                        var f0 = faces[0]; var f1 = faces[1];
+                        if (f0.TryGetProperty("image_uris", out var f0Imgs) && f0Imgs.TryGetProperty("normal", out var f0Norm)) front = f0Norm.GetString(); else if (f0.TryGetProperty("image_uris", out f0Imgs) && f0Imgs.TryGetProperty("large", out var f0Large)) front = f0Large.GetString();
+                        if (f1.TryGetProperty("image_uris", out var f1Imgs) && f1Imgs.TryGetProperty("normal", out var f1Norm)) back = f1Norm.GetString(); else if (f1.TryGetProperty("image_uris", out f1Imgs) && f1Imgs.TryGetProperty("large", out var f1Large)) back = f1Large.GetString();
+                    }
+                    if (front == null && root.TryGetProperty("image_uris", out var singleImgs) && singleImgs.TryGetProperty("normal", out var singleNorm)) front = singleNorm.GetString();
+                    if (front == null && root.TryGetProperty("image_uris", out singleImgs) && singleImgs.TryGetProperty("large", out var singleLarge)) front = singleLarge.GetString();
+                    CardImageUrlStore.Set(setCode, number, front, back);
+                    imgUrl = faceIndex == 0 ? front : back;
+                }
+            }
+            if (string.IsNullOrWhiteSpace(imgUrl)) { Debug.WriteLine("[CardSlot] No cached or fetched image URL."); return; }
+            var cacheKey = imgUrl + (isBackFace ? "|back" : "|front");
+            if (ImageCacheStore.Cache.TryGetValue(cacheKey, out var cachedBmp)) { ImageSource = cachedBmp; return; }
+            if (ImageCacheStore.TryLoadFromDisk(cacheKey, out var diskBmp)) { ImageSource = diskBmp; return; }
+            await ApiRateLimiter.WaitAsync();
+            var bytes = await client.GetByteArrayAsync(imgUrl);
             try
             {
-                resp = await client.GetAsync(apiUrl, HttpCompletionOption.ResponseHeadersRead);
+                var bmp2 = CreateFrozenBitmap(bytes);
+                ImageSource = bmp2;
+                ImageCacheStore.Cache[cacheKey] = bmp2;
+                ImageCacheStore.PersistImage(cacheKey, bytes);
             }
-            finally
+            catch (Exception exBmp)
             {
-                FetchGate.Release();
-            }
-            using (resp)
-            {
-                if (!resp.IsSuccessStatusCode)
-                {
-                    string body = string.Empty;
-                    try { body = await resp.Content.ReadAsStringAsync(); } catch { }
-                    Debug.WriteLine($"[CardSlot] API status {(int)resp.StatusCode} {resp.ReasonPhrase} Body: {body}");
-                    return;
-                }
-                await using var stream = await resp.Content.ReadAsStreamAsync();
-                using var doc = await JsonDocument.ParseAsync(stream);
-                JsonElement root = doc.RootElement;
-                string? imgUrl = null;
-                if (root.TryGetProperty("card_faces", out var faces) && faces.ValueKind == JsonValueKind.Array && faces.GetArrayLength() > faceIndex)
-                {
-                    var face = faces[faceIndex];
-                    if (face.TryGetProperty("image_uris", out var faceImages) && faceImages.TryGetProperty("normal", out var normalProp))
-                        imgUrl = normalProp.GetString();
-                    else if (face.TryGetProperty("image_uris", out faceImages) && faceImages.TryGetProperty("large", out var largeProp))
-                        imgUrl = largeProp.GetString();
-                }
-                if (imgUrl == null && root.TryGetProperty("image_uris", out var images) && images.TryGetProperty("normal", out var normalRoot))
-                    imgUrl = normalRoot.GetString();
-                if (imgUrl == null && root.TryGetProperty("image_uris", out images) && images.TryGetProperty("large", out var largeRoot))
-                    imgUrl = largeRoot.GetString();
-
-                if (string.IsNullOrWhiteSpace(imgUrl))
-                {
-                    Debug.WriteLine("[CardSlot] No image URL found in API response.");
-                    return;
-                }
-                var cacheKey = imgUrl + (isBackFace ? "|back" : "|front");
-                if (ImageCacheStore.Cache.TryGetValue(cacheKey, out var cachedBmp)) { ImageSource = cachedBmp; return; }
-                await ApiRateLimiter.WaitAsync(); // rate-limit image request
-                var bytes = await client.GetByteArrayAsync(imgUrl);
-                try
-                {
-                    var bmp2 = CreateFrozenBitmap(bytes);
-                    ImageSource = bmp2;
-                    ImageCacheStore.Cache[cacheKey] = bmp2;
-                }
-                catch (Exception exBmp)
-                {
-                    Debug.WriteLine($"[CardSlot] Bitmap create failed: {exBmp.Message}");
-                }
+                Debug.WriteLine($"[CardSlot] Bitmap create failed: {exBmp.Message}");
             }
         }
         catch (Exception ex)
@@ -493,6 +553,19 @@ public class BinderViewModel : INotifyPropertyChanged
     public async Task LoadFromFileAsync(string path)
     {
     var lines = await File.ReadAllLinesAsync(path);
+    // Compute hash of input file contents for metadata/image cache lookup
+    string fileHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", lines))));
+    _currentFileHash = fileHash;
+    if (IsCacheComplete(fileHash) && TryLoadMetadataCache(fileHash))
+    {
+        Status = "Loaded metadata from cache.";
+        BuildOrderedFaces();
+        _currentViewIndex = 0;
+        RebuildViews();
+        Refresh();
+        // Fire off background image warm for first two pages (slots) if desired later
+        return;
+    }
     _cards.Clear();
     _specs.Clear();
         string? currentSet = null;
@@ -627,8 +700,66 @@ public class BinderViewModel : INotifyPropertyChanged
                 RebuildViews();
                 Refresh();
                 Status = $"All metadata loaded ({_cards.Count} faces).";
+                PersistMetadataCache(_currentFileHash);
+                MarkCacheComplete(_currentFileHash);
             });
         });
+    }
+
+    private string? _currentFileHash;
+    private record CachedFace(string Name, string Number, string? Set, bool IsMfc, bool IsBack, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl);
+    private string MetaCacheDir => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "meta");
+    private string MetaCachePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".json");
+    private string MetaCacheDonePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".done");
+    private bool IsCacheComplete(string hash) => File.Exists(MetaCacheDonePath(hash));
+    private bool TryLoadMetadataCache(string hash)
+    {
+        try
+        {
+            var path = MetaCachePath(hash);
+            if (!File.Exists(path)) return false;
+            var json = File.ReadAllText(path);
+            var faces = JsonSerializer.Deserialize<List<CachedFace>>(json);
+            if (faces == null || faces.Count == 0) return false;
+            _cards.Clear();
+            foreach (var f in faces)
+            {
+                var ce = new CardEntry(f.Name, f.Number, f.Set, f.IsMfc && !f.IsBack, f.IsBack, f.FrontRaw, f.BackRaw);
+                _cards.Add(ce);
+                if (!f.IsBack)
+                    CardImageUrlStore.Set(f.Set ?? string.Empty, f.Number, f.FrontImageUrl, f.BackImageUrl);
+            }
+            return true;
+        }
+        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to load metadata cache: {ex.Message}"); return false; }
+    }
+    private void PersistMetadataCache(string? hash)
+    {
+        if (string.IsNullOrEmpty(hash)) return;
+        try
+        {
+            Directory.CreateDirectory(MetaCacheDir);
+            var list = new List<CachedFace>();
+            foreach (var c in _cards)
+            {
+                var (frontImg, backImg) = CardImageUrlStore.Get(c.Set ?? string.Empty, c.Number);
+                list.Add(new CachedFace(c.Name, c.Number, c.Set, c.IsModalDoubleFaced, c.IsBackFace, c.FrontRaw, c.BackRaw, frontImg, backImg));
+            }
+            var json = JsonSerializer.Serialize(list);
+            File.WriteAllText(MetaCachePath(hash), json);
+            Debug.WriteLine($"[Cache] Wrote metadata cache {hash} faces={list.Count}");
+        }
+        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to write metadata cache: {ex.Message}"); }
+    }
+
+    private void MarkCacheComplete(string? hash)
+    {
+        if (string.IsNullOrEmpty(hash)) return;
+        try
+        {
+            File.WriteAllText(MetaCacheDonePath(hash), DateTime.UtcNow.ToString("O"));
+        }
+        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to mark cache complete: {ex.Message}"); }
     }
 
     private async Task ResolveSpecsAsync(List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList, HashSet<int> targetIndexes, int updateInterval = 5)
@@ -706,23 +837,26 @@ public class BinderViewModel : INotifyPropertyChanged
             using var doc = await JsonDocument.ParseAsync(stream);
             var root = doc.RootElement;
             string? displayName = overrideName;
-            string? frontRaw = null;
-            string? backRaw = null;
-            bool isMfc = false;
+            string? frontRaw = null; string? backRaw = null; bool isMfc = false;
+            string? frontImg = null; string? backImg = null;
             if (root.TryGetProperty("card_faces", out var faces) && faces.ValueKind == JsonValueKind.Array && faces.GetArrayLength() >= 2)
             {
-                var f0 = faces[0];
-                var f1 = faces[1];
+                var f0 = faces[0]; var f1 = faces[1];
                 frontRaw = f0.GetProperty("name").GetString();
                 backRaw = f1.GetProperty("name").GetString();
                 isMfc = true;
                 if (displayName == null) displayName = $"{frontRaw} ({backRaw})";
+                if (f0.TryGetProperty("image_uris", out var f0Imgs) && f0Imgs.TryGetProperty("normal", out var f0Norm)) frontImg = f0Norm.GetString(); else if (f0.TryGetProperty("image_uris", out f0Imgs) && f0Imgs.TryGetProperty("large", out var f0Large)) frontImg = f0Large.GetString();
+                if (f1.TryGetProperty("image_uris", out var f1Imgs) && f1Imgs.TryGetProperty("normal", out var f1Norm)) backImg = f1Norm.GetString(); else if (f1.TryGetProperty("image_uris", out f1Imgs) && f1Imgs.TryGetProperty("large", out var f1Large)) backImg = f1Large.GetString();
             }
             else
             {
                 if (displayName == null && root.TryGetProperty("name", out var nprop)) displayName = nprop.GetString();
+                if (root.TryGetProperty("image_uris", out var singleImgs) && singleImgs.TryGetProperty("normal", out var singleNorm)) frontImg = singleNorm.GetString();
+                else if (root.TryGetProperty("image_uris", out singleImgs) && singleImgs.TryGetProperty("large", out var singleLarge)) frontImg = singleLarge.GetString();
             }
             if (string.IsNullOrWhiteSpace(displayName)) displayName = $"{number}"; // fallback
+            CardImageUrlStore.Set(setCode, number, frontImg, backImg);
             return new CardEntry(displayName!, number, setCode, isMfc, false, frontRaw, backRaw);
         }
         catch { return null; }
