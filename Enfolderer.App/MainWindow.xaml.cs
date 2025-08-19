@@ -231,6 +231,33 @@ internal static class ApiRateLimiter
     }
 }
 
+// Computes a single beige tone variation per binder load
+public static class CardSlotTheme
+{
+    private static readonly object _lock = new();
+    private static SolidColorBrush _slotBrush = new SolidColorBrush(Color.FromRgb(240,232,210));
+    public static SolidColorBrush SlotBrush { get { lock(_lock) return _slotBrush; } }
+    public static Color BaseColor { get { lock(_lock) return _slotBrush.Color; } }
+    public static void Recalculate(string? seed)
+    {
+        try
+        {
+            int hash = seed == null ? Environment.TickCount : seed.GetHashCode(StringComparison.OrdinalIgnoreCase);
+            var rnd = new Random(hash ^ 0x5f3759df);
+            int baseR = 240, baseG = 232, baseB = 210;
+            int r = Clamp(baseR + rnd.Next(-10, 11), 215, 248);
+            int g = Clamp(baseG + rnd.Next(-10, 11), 210, 242);
+            int b = Clamp(baseB + rnd.Next(-14, 9), 195, 235);
+            var c = Color.FromRgb((byte)r,(byte)g,(byte)b);
+            var brush = new SolidColorBrush(c);
+            if (brush.CanFreeze) brush.Freeze();
+            lock(_lock) _slotBrush = brush;
+        }
+        catch { }
+    }
+    private static int Clamp(int v, int min, int max) => v < min ? min : (v > max ? max : v);
+}
+
 public class CardSlot : INotifyPropertyChanged
 {
     private static readonly SemaphoreSlim FetchGate = new(4); // limit concurrent API calls
@@ -247,7 +274,7 @@ public class CardSlot : INotifyPropertyChanged
         Number = entry.Number;
         Set = entry.Set ?? string.Empty;
         Tooltip = entry.Display + (string.IsNullOrEmpty(Set) ? string.Empty : $" ({Set})");
-        Background = new SolidColorBrush(GenerateColor(index));
+    Background = Brushes.Black;
     }
     public CardSlot(string placeholder, int index)
     {
@@ -255,16 +282,10 @@ public class CardSlot : INotifyPropertyChanged
         Number = string.Empty;
         Set = string.Empty;
         Tooltip = placeholder;
-        Background = new SolidColorBrush(GenerateColor(index));
+    Background = Brushes.Black;
     }
-    private static Color GenerateColor(int index)
-    {
-        var rnd = new Random(HashCode.Combine(index, 7919));
-        byte r = (byte)(90 + rnd.Next(0, 120));
-        byte g = (byte)(90 + rnd.Next(0, 120));
-        byte b = (byte)(90 + rnd.Next(0, 120));
-        return Color.FromArgb(255, r, g, b);
-    }
+    // Retained for potential future per-slot variation (unused now)
+    private static Color GenerateColor(int index) => CardSlotTheme.BaseColor;
 
     public async Task TryLoadImageAsync(HttpClient client, string setCode, string number, bool isBackFace)
     {
@@ -400,6 +421,9 @@ public class BinderViewModel : INotifyPropertyChanged
         private set { _pageDisplay = value; OnPropertyChanged(); }
     }
     private string _pageDisplay = "Page 1";
+
+    private Brush _binderBackground = Brushes.Black;
+    public Brush BinderBackground { get => _binderBackground; private set { _binderBackground = value; OnPropertyChanged(); } }
 
     public ICommand NextCommand { get; }
     public ICommand PrevCommand { get; }
@@ -569,6 +593,8 @@ public class BinderViewModel : INotifyPropertyChanged
     // numberStart-numberEnd  (inclusive range) optionally followed by ; prefix for name hints (ignored here)
     public async Task LoadFromFileAsync(string path)
     {
+    // Recompute slot theme (seeded by file path + last write ticks for variability when file changes)
+    try { var fi = new FileInfo(path); CardSlotTheme.Recalculate(path + fi.LastWriteTimeUtc.Ticks); } catch { CardSlotTheme.Recalculate(path); }
     var lines = await File.ReadAllLinesAsync(path);
     // Compute hash of input file contents for metadata/image cache lookup
     string fileHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", lines))));
@@ -1202,7 +1228,25 @@ public class BinderViewModel : INotifyPropertyChanged
             PageDisplay = $"Binder {binderNumber}: Page {local} (Back Cover)";
         }
         OnPropertyChanged(nameof(PageDisplay));
+        UpdateBinderBackground(binderNumber);
         CommandManager.InvalidateRequerySuggested();
+    }
+
+    private void UpdateBinderBackground(int binderNumber)
+    {
+        // Binder 1 black, then cycle rainbow: red, orange, yellow, green, blue, indigo, violet
+        if (binderNumber <= 1) { BinderBackground = Brushes.Black; return; }
+        var colors = new[] { Colors.Red, Color.FromRgb(255,140,0), Colors.Yellow, Colors.Green, Colors.Blue, Color.FromRgb(75,0,130), Color.FromRgb(138,43,226) };
+        int idx = (binderNumber - 2) % colors.Length;
+        var c = colors[idx];
+        // Create a gradient to mimic colored cover with dark interior edges
+        var brush = new LinearGradientBrush();
+        brush.StartPoint = new Point(0,0);
+        brush.EndPoint = new Point(1,1);
+        brush.GradientStops.Add(new GradientStop(c, 0));
+        brush.GradientStops.Add(new GradientStop(Color.FromRgb((byte)(c.R/3),(byte)(c.G/3),(byte)(c.B/3)), 1));
+        if (brush.CanFreeze) brush.Freeze();
+        BinderBackground = brush;
     }
 
     private void FillPage(ObservableCollection<CardSlot> collection, int pageNumber)
