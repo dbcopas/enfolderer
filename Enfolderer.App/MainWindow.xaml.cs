@@ -795,6 +795,7 @@ public class BinderViewModel : INotifyPropertyChanged
 
     private string? _currentFileHash;
     private const int CacheSchemaVersion = 4; // refined two-sided classification logic
+    private const bool PokemonMode = true; // Branch dedicated to Pokémon support
     private static readonly HashSet<string> PhysicallyTwoSidedLayouts = new(StringComparer.OrdinalIgnoreCase)
     {
         // Layouts that represent distinct physical faces requiring two binder slots
@@ -829,13 +830,13 @@ public class BinderViewModel : INotifyPropertyChanged
             var json = File.ReadAllText(path);
             var data = JsonSerializer.Deserialize<CardCacheEntry>(json);
             if (data == null) return false;
-            if (string.IsNullOrEmpty(data.Layout)) return false; // layout required to classify
+            if (!PokemonMode && string.IsNullOrEmpty(data.Layout)) return false; // layout required only for MTG
             bool physTwoSided = data.Layout != null && PhysicallyTwoSidedLayouts.Contains(data.Layout);
             bool effectiveMfc = data.IsMfc && physTwoSided;
             var ce = new CardEntry(data.Name, data.Number, data.Set, effectiveMfc, false, data.FrontRaw, data.BackRaw);
             entry = ce;
             CardImageUrlStore.Set(data.Set, data.Number, data.FrontImageUrl, data.BackImageUrl);
-            CardLayoutStore.Set(data.Set, data.Number, data.Layout);
+            if (data.Layout != null) CardLayoutStore.Set(data.Set, data.Number, data.Layout);
             return true;
         }
         catch (Exception ex)
@@ -1003,69 +1004,29 @@ public class BinderViewModel : INotifyPropertyChanged
         try
         {
             await ApiRateLimiter.WaitAsync();
-            var url = $"https://api.scryfall.com/cards/{setCode.ToLowerInvariant()}/{Uri.EscapeDataString(number)}";
-            var resp = await Http.GetAsync(url);
-            if (!resp.IsSuccessStatusCode) return null;
+            // Pokémon card id pattern: {setCode}-{number}
+            var id = $"{setCode.ToLowerInvariant()}-{number}";
+            var url = $"https://api.pokemontcg.io/v2/cards/{id}";
+            var req = new HttpRequestMessage(HttpMethod.Get, url);
+            // Optional API key via env var
+            var apiKey = Environment.GetEnvironmentVariable("POKEMON_TCG_API_KEY");
+            if (!string.IsNullOrWhiteSpace(apiKey)) req.Headers.TryAddWithoutValidation("X-Api-Key", apiKey);
+            var resp = await Http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode) { Debug.WriteLine($"[PokemonAPI] {url} status {(int)resp.StatusCode}"); return null; }
             await using var stream = await resp.Content.ReadAsStreamAsync();
             using var doc = await JsonDocument.ParseAsync(stream);
-            var root = doc.RootElement;
+            if (!doc.RootElement.TryGetProperty("data", out var dataEl)) return null;
             string? displayName = overrideName;
-            string? frontRaw = null; string? backRaw = null; bool isMfc = false;
-            string? frontImg = null; string? backImg = null;
-            // Distinguish true two-sided physical cards (transform/modal_dfc/battle/etc) vs split/aftermath/adventure where both halves are on one physical face.
-            bool hasRootImageUris = root.TryGetProperty("image_uris", out var rootImgs); // split & similar layouts usually have this
-            string? layout = null; if (root.TryGetProperty("layout", out var layoutProp) && layoutProp.ValueKind == JsonValueKind.String) layout = layoutProp.GetString();
-            bool isPhysicallyTwoSidedLayout = layout != null && PhysicallyTwoSidedLayouts.Contains(layout);
-            bool forcedSingleByLayout = layout != null && SingleFaceMultiLayouts.Contains(layout);
-            if (root.TryGetProperty("card_faces", out var faces) && faces.ValueKind == JsonValueKind.Array && faces.GetArrayLength() >= 2)
+            if (displayName == null && dataEl.TryGetProperty("name", out var nameProp) && nameProp.ValueKind==JsonValueKind.String) displayName = nameProp.GetString();
+            if (string.IsNullOrWhiteSpace(displayName)) displayName = number;
+            string? frontImg = null;
+            if (dataEl.TryGetProperty("images", out var imagesEl) && imagesEl.ValueKind==JsonValueKind.Object)
             {
-                var f0 = faces[0]; var f1 = faces[1];
-                // Heuristic: if not explicitly single-face layout and either layout is physically two-sided OR root lacks image_uris OR both faces have different illustration ids.
-                bool facesHaveDistinctArt = false;
-                try
-                {
-                    if (f0.TryGetProperty("illustration_id", out var ill0) && f1.TryGetProperty("illustration_id", out var ill1) && ill0.ValueKind==JsonValueKind.String && ill1.ValueKind==JsonValueKind.String && ill0.GetString()!=ill1.GetString())
-                        facesHaveDistinctArt = true;
-                } catch {}
-                bool treatAsTwoSided = !forcedSingleByLayout && (isPhysicallyTwoSidedLayout || !hasRootImageUris || facesHaveDistinctArt);
-                if (treatAsTwoSided)
-                {
-                    // True double-sided regardless of presence of root image_uris
-                    frontRaw = f0.GetProperty("name").GetString();
-                    backRaw = f1.GetProperty("name").GetString();
-                    isMfc = true;
-                    if (displayName == null) displayName = $"{frontRaw} ({backRaw})";
-                    // Prefer face-specific images
-                    if (f0.TryGetProperty("image_uris", out var f0Imgs) && f0Imgs.TryGetProperty("normal", out var f0Norm)) frontImg = f0Norm.GetString(); else if (f0.TryGetProperty("image_uris", out f0Imgs) && f0Imgs.TryGetProperty("large", out var f0Large)) frontImg = f0Large.GetString();
-                    if (f1.TryGetProperty("image_uris", out var f1Imgs) && f1Imgs.TryGetProperty("normal", out var f1Norm)) backImg = f1Norm.GetString(); else if (f1.TryGetProperty("image_uris", out f1Imgs) && f1Imgs.TryGetProperty("large", out var f1Large)) backImg = f1Large.GetString();
-                    // Fallback to root if any missing
-                    if (frontImg == null && hasRootImageUris)
-                    {
-                        if (rootImgs.TryGetProperty("normal", out var rootNorm)) frontImg = rootNorm.GetString(); else if (rootImgs.TryGetProperty("large", out var rootLarge)) frontImg = rootLarge.GetString();
-                    }
-                }
-                else
-                {
-                    // Multi-face metadata but single physical face (split/aftermath/adventure etc) -> single slot
-                    if (displayName == null && root.TryGetProperty("name", out var npropSplit)) displayName = npropSplit.GetString();
-                    if (hasRootImageUris)
-                    {
-                        if (rootImgs.TryGetProperty("normal", out var rootNorm2)) frontImg = rootNorm2.GetString();
-                        else if (rootImgs.TryGetProperty("large", out var rootLarge2)) frontImg = rootLarge2.GetString();
-                    }
-                    else if (f0.TryGetProperty("image_uris", out var f0Imgs2) && f0Imgs2.TryGetProperty("normal", out var f0Norm2)) frontImg = f0Norm2.GetString();
-                }
+                if (imagesEl.TryGetProperty("large", out var largeProp) && largeProp.ValueKind==JsonValueKind.String) frontImg = largeProp.GetString();
+                else if (imagesEl.TryGetProperty("small", out var smallProp) && smallProp.ValueKind==JsonValueKind.String) frontImg = smallProp.GetString();
             }
-            else
-            {
-                if (displayName == null && root.TryGetProperty("name", out var nprop)) displayName = nprop.GetString();
-                if (root.TryGetProperty("image_uris", out var singleImgs) && singleImgs.TryGetProperty("normal", out var singleNorm)) frontImg = singleNorm.GetString();
-                else if (root.TryGetProperty("image_uris", out singleImgs) && singleImgs.TryGetProperty("large", out var singleLarge)) frontImg = singleLarge.GetString();
-            }
-            if (string.IsNullOrWhiteSpace(displayName)) displayName = $"{number}"; // fallback
-            CardImageUrlStore.Set(setCode, number, frontImg, backImg);
-            CardLayoutStore.Set(setCode, number, layout);
-            return new CardEntry(displayName!, number, setCode, isMfc, false, frontRaw, backRaw);
+            CardImageUrlStore.Set(setCode, number, frontImg, null);
+            return new CardEntry(displayName!, number, setCode, false, false, null, null);
         }
         catch { return null; }
     }
