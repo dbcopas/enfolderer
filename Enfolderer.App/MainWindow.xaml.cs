@@ -14,13 +14,14 @@ using System.Threading.Tasks;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using System.Globalization;
+using System.Windows.Data;
 
 namespace Enfolderer.App;
 
@@ -56,6 +57,32 @@ public partial class MainWindow : Window
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+}
+
+internal static class NetworkLogger
+{
+    private static readonly object _lock = new();
+    private static string? _logDir;
+    private static string LogDirectory => _logDir ??= ImageCacheStore.CacheRoot; // reuse cache root (game‑specific)
+    private static string LogPath => System.IO.Path.Combine(LogDirectory, "network.log");
+    public static void Log(string kind, string url, int? statusCode = null, string? note = null)
+    {
+        try
+        {
+            Directory.CreateDirectory(LogDirectory);
+            var ts = DateTime.UtcNow.ToString("o");
+            var line = new StringBuilder();
+            line.Append(ts).Append('\t').Append(kind).Append('\t').Append(url);
+            if (statusCode.HasValue) line.Append('\t').Append(statusCode.Value);
+            if (!string.IsNullOrWhiteSpace(note)) line.Append('\t').Append(note!.Replace('\n',' ').Replace('\r',' '));
+            line.Append('\n');
+            lock (_lock)
+            {
+                File.AppendAllText(LogPath, line.ToString());
+            }
+        }
+        catch { /* never throw */ }
+    }
 }
 
 public record CardEntry(string Name, string Number, string? Set, bool IsModalDoubleFaced, bool IsBackFace = false, string? FrontRaw = null, string? BackRaw = null)
@@ -110,7 +137,10 @@ public record CardEntry(string Name, string Number, string? Set, bool IsModalDou
 public static class ImageCacheStore
 {
     public static readonly ConcurrentDictionary<string, BitmapImage> Cache = new(StringComparer.OrdinalIgnoreCase);
-    public static string CacheRoot { get; } = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Enfolderer", "cache");
+    // Use a distinct cache root for this branch (Pokémon) so it doesn't collide with the MTG version's cache.
+    // MTG original path: %LocalAppData%/Enfolderer/cache
+    // Pokémon path now:  %LocalAppData%/EnfoldererPokemon/cache
+    public static string CacheRoot { get; } = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EnfoldererPokemon", "cache");
     static ImageCacheStore()
     {
         try { Directory.CreateDirectory(CacheRoot); } catch { }
@@ -306,17 +336,21 @@ public class CardSlot : INotifyPropertyChanged
                 // Fetch metadata once to populate image URLs
                 var apiUrl = $"https://api.scryfall.com/cards/{setCode.ToLowerInvariant()}/{Uri.EscapeDataString(number)}";
                 Debug.WriteLine($"[CardSlot] API fetch {apiUrl} face={faceIndex} (metadata for image URL)");
+                NetworkLogger.Log("REQUEST_METADATA", apiUrl);
+                BinderViewModel.Global?.HttpStarted();
                 await ApiRateLimiter.WaitAsync();
                 await FetchGate.WaitAsync();
                 HttpResponseMessage resp = null!;
                 try { resp = await client.GetAsync(apiUrl, HttpCompletionOption.ResponseHeadersRead); }
                 finally { FetchGate.Release(); }
-                using (resp)
+            using (resp)
                 {
+                    NetworkLogger.Log("RESPONSE_METADATA", apiUrl, (int)resp.StatusCode);
                     if (!resp.IsSuccessStatusCode)
                     {
                         string body = string.Empty; try { body = await resp.Content.ReadAsStringAsync(); } catch { }
                         Debug.WriteLine($"[CardSlot] API status {(int)resp.StatusCode} {resp.ReasonPhrase} Body: {body}");
+                BinderViewModel.Global?.HttpFinished(false);
                         return;
                     }
                     await using var stream = await resp.Content.ReadAsStreamAsync();
@@ -333,13 +367,16 @@ public class CardSlot : INotifyPropertyChanged
                     if (front == null && root.TryGetProperty("image_uris", out singleImgs) && singleImgs.TryGetProperty("large", out var singleLarge)) front = singleLarge.GetString();
                     CardImageUrlStore.Set(setCode, number, front, back);
                     imgUrl = faceIndex == 0 ? front : back;
+                    BinderViewModel.Global?.HttpFinished(true);
                 }
             }
             if (string.IsNullOrWhiteSpace(imgUrl)) { Debug.WriteLine("[CardSlot] No cached or fetched image URL."); return; }
             var cacheKey = imgUrl + (isBackFace ? "|back" : "|front");
             if (ImageCacheStore.Cache.TryGetValue(cacheKey, out var cachedBmp)) { ImageSource = cachedBmp; return; }
             if (ImageCacheStore.TryLoadFromDisk(cacheKey, out var diskBmp)) { ImageSource = diskBmp; return; }
+            BinderViewModel.Global?.HttpStarted();
             await ApiRateLimiter.WaitAsync();
+            NetworkLogger.Log("REQUEST_IMAGE", imgUrl);
             var bytes = await client.GetByteArrayAsync(imgUrl);
             try
             {
@@ -347,15 +384,21 @@ public class CardSlot : INotifyPropertyChanged
                 ImageSource = bmp2;
                 ImageCacheStore.Cache[cacheKey] = bmp2;
                 ImageCacheStore.PersistImage(cacheKey, bytes);
+                NetworkLogger.Log("RESPONSE_IMAGE", imgUrl, 200, $"{bytes.Length} bytes");
+                BinderViewModel.Global?.HttpFinished(true);
             }
             catch (Exception exBmp)
             {
                 Debug.WriteLine($"[CardSlot] Bitmap create failed: {exBmp.Message}");
+                BinderViewModel.Global?.HttpFinished(false);
+                NetworkLogger.Log("ERROR_IMAGE", imgUrl, null, exBmp.Message);
             }
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[CardSlot] Image fetch failed {setCode} {number}: {ex.Message}");
+            BinderViewModel.Global?.HttpFinished(false);
+            if (!string.IsNullOrWhiteSpace(setCode)) NetworkLogger.Log("ERROR_IMAGE_FETCH", $"{setCode}:{number}", null, ex.Message);
         }
     }
 
@@ -378,7 +421,46 @@ public class CardSlot : INotifyPropertyChanged
 
 public class BinderViewModel : INotifyPropertyChanged
 {
-    private const int SlotsPerPage = 12; // 4x3
+    public static BinderViewModel? Global { get; private set; }
+    private int _slotsPerPage = 12; // default 4x3
+    private int _columns = 4; // default for 12-pocket (4x3)
+    private int _rows = 3;
+    private int _layoutRows = 3;
+    private int _layoutCols = 4;
+    public int SlotsPerPage => _slotsPerPage;
+    public IEnumerable<int> PocketOptions { get; } = new [] { 4, 9, 12 };
+    private int _selectedPocketCount = 12;
+    public int SelectedPocketCount
+    {
+        get => _selectedPocketCount;
+        set
+        {
+            if (_selectedPocketCount == value) return;
+            if (value != 4 && value != 9 && value != 12) return;
+            _selectedPocketCount = value;
+            OnPropertyChanged();
+            ApplyPocketLayout(value);
+        }
+    }
+    public int LayoutRows { get => _layoutRows; private set { _layoutRows = value; OnPropertyChanged(); } }
+    public int LayoutColumns { get => _layoutCols; private set { _layoutCols = value; OnPropertyChanged(); } }
+    private void ApplyPocketLayout(int pockets)
+    {
+        switch (pockets)
+        {
+            case 4: _columns = 2; _rows = 2; break;       // 2x2 small page (e.g., jumbo/oversized proxy)
+            case 9: _columns = 3; _rows = 3; break;       // 3x3 standard Pokémon page size
+            case 12: _columns = 4; _rows = 3; break;      // 4x3 quad binder
+        }
+        _slotsPerPage = _columns * _rows;
+        LayoutRows = _rows;
+        LayoutColumns = _columns;
+        RebuildViews();
+        BuildOrderedFaces();
+        if (_currentViewIndex >= _views.Count) _currentViewIndex = Math.Max(0, _views.Count -1);
+        Refresh();
+        OnPropertyChanged(nameof(SlotsPerPage));
+    }
     // Binder has 20 physical (double-sided) pages => 40 numbered sides (pages) we display
     private const int PagesPerBinder = 40; // numbered sides per binder
     private readonly List<CardEntry> _cards = new();
@@ -415,6 +497,31 @@ public class BinderViewModel : INotifyPropertyChanged
     }
     private string _status = "Ready";
 
+    // HTTP Activity Tracking
+    private int _httpInFlight;
+    private int _httpCompleted;
+    private int _httpFailed;
+    private readonly object _httpLock = new();
+    public int HttpInFlight { get => _httpInFlight; private set { _httpInFlight = value; OnPropertyChanged(); OnPropertyChanged(nameof(HttpActivitySummary)); } }
+    public int HttpCompleted { get => _httpCompleted; private set { _httpCompleted = value; OnPropertyChanged(); OnPropertyChanged(nameof(HttpActivitySummary)); } }
+    public int HttpFailed { get => _httpFailed; private set { _httpFailed = value; OnPropertyChanged(); OnPropertyChanged(nameof(HttpActivitySummary)); } }
+    public string HttpActivitySummary => $"HTTP: {HttpInFlight} active | {HttpCompleted} ok | {HttpFailed} err";
+    public void HttpStarted()
+    {
+        Interlocked.Increment(ref _httpInFlight);
+        OnPropertyChanged(nameof(HttpInFlight));
+        OnPropertyChanged(nameof(HttpActivitySummary));
+    }
+    public void HttpFinished(bool success)
+    {
+        Interlocked.Decrement(ref _httpInFlight);
+        if (success) Interlocked.Increment(ref _httpCompleted); else Interlocked.Increment(ref _httpFailed);
+        OnPropertyChanged(nameof(HttpInFlight));
+        OnPropertyChanged(nameof(HttpCompleted));
+        OnPropertyChanged(nameof(HttpFailed));
+        OnPropertyChanged(nameof(HttpActivitySummary));
+    }
+
     public string PageDisplay
     {
         get => _pageDisplay;
@@ -440,6 +547,9 @@ public class BinderViewModel : INotifyPropertyChanged
 
     public BinderViewModel()
     {
+    Global = this;
+    // Detect Pokémon API key presence once at startup
+    _apiKeyPresent = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("POKEMON_TCG_API_KEY"));
     NextCommand = new RelayCommand(_ => { _currentViewIndex++; Refresh(); }, _ => _currentViewIndex < _views.Count - 1);
     PrevCommand = new RelayCommand(_ => { _currentViewIndex--; Refresh(); }, _ => _currentViewIndex > 0);
     FirstCommand = new RelayCommand(_ => { _currentViewIndex = 0; Refresh(); }, _ => _currentViewIndex != 0);
@@ -451,6 +561,11 @@ public class BinderViewModel : INotifyPropertyChanged
         Refresh();
     }
 
+    // API Key indicator
+    private bool _apiKeyPresent;
+    public bool ApiKeyPresent { get => _apiKeyPresent; private set { _apiKeyPresent = value; OnPropertyChanged(); OnPropertyChanged(nameof(ApiKeyDisplay)); } }
+    public string ApiKeyDisplay => ApiKeyPresent ? "API Key✓" : "API Key✗";
+
     private record PageView(int? LeftPage, int? RightPage, int BinderIndex);
 
     private void RebuildViews()
@@ -458,7 +573,7 @@ public class BinderViewModel : INotifyPropertyChanged
         _views.Clear();
         // total pages needed based on card faces
     int totalFaces = _orderedFaces.Count;
-        int totalPages = (int)Math.Ceiling(totalFaces / (double)SlotsPerPage);
+    int totalPages = (int)Math.Ceiling(totalFaces / (double)SlotsPerPage);
         if (totalPages == 0) totalPages = 1; // at least one page even if empty
         int remaining = totalPages;
         int globalPage = 1;
@@ -763,7 +878,7 @@ public class BinderViewModel : INotifyPropertyChanged
             }
         }
         // Lazy initial fetch: just enough for first two pages (current + lookahead)
-        int neededFaces = SlotsPerPage * 2; // 24
+    int neededFaces = SlotsPerPage * 2;
         var initialSpecIndexes = new HashSet<int>();
         for (int i = 0; i < _specs.Count && initialSpecIndexes.Count < neededFaces; i++) initialSpecIndexes.Add(i);
         await ResolveSpecsAsync(fetchList, initialSpecIndexes);
@@ -929,6 +1044,32 @@ public class BinderViewModel : INotifyPropertyChanged
     {
         int total = targetIndexes.Count;
         int done = 0;
+        // Pokémon optimization: bulk fetch per set to avoid N HTTP calls
+        if (PokemonMode && total > 0)
+        {
+            var bySet = new Dictionary<string, List<(string number,string? nameOverride,int specIndex)>>();
+            foreach (var f in fetchList)
+            {
+                if (!targetIndexes.Contains(f.specIndex)) continue;
+                if (!bySet.TryGetValue(f.setCode, out var list)) { list = new(); bySet[f.setCode] = list; }
+                list.Add((f.number, f.nameOverride, f.specIndex));
+            }
+            foreach (var kvp in bySet)
+            {
+                if (kvp.Value.Count == 0) continue;
+                await BulkFetchPokemonSetAsync(kvp.Key, kvp.Value);
+                // Mark resolved specs as done count increment
+                foreach (var spec in kvp.Value)
+                {
+                    if (_specs[spec.specIndex].Resolved != null)
+                    {
+                        Interlocked.Increment(ref done);
+                        targetIndexes.Remove(spec.specIndex); // remove so we don't refetch below
+                    }
+                }
+                Status = $"Bulk set {kvp.Key} {(int)(done*100.0/Math.Max(1,total))}%";
+            }
+        }
         var concurrency = new SemaphoreSlim(6);
         var tasks = new List<Task>();
         foreach (var f in fetchList)
@@ -979,6 +1120,175 @@ public class BinderViewModel : INotifyPropertyChanged
         await Task.WhenAll(tasks);
     }
 
+    private static readonly TimeSpan PokemonSetCacheTtl = TimeSpan.FromHours(12);
+    private string PokemonSetCachePath(string setCode)
+    {
+        Directory.CreateDirectory(System.IO.Path.Combine(MetaCacheDir, "sets"));
+        return System.IO.Path.Combine(MetaCacheDir, "sets", CacheGamePrefix + setCode.ToLowerInvariant() + ".json");
+    }
+    private async Task BulkFetchPokemonSetAsync(string setCode, List<(string number,string? nameOverride,int specIndex)> specs)
+    {
+        try
+        {
+            // Load from cache if fresh
+            Dictionary<string, JsonElement>? map = null;
+            var cachePath = PokemonSetCachePath(setCode);
+            if (File.Exists(cachePath))
+            {
+                var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath);
+                if (age < PokemonSetCacheTtl)
+                {
+                    try
+                    {
+                        using var fs = File.OpenRead(cachePath);
+                        using var doc = await JsonDocument.ParseAsync(fs);
+                        if (doc.RootElement.TryGetProperty("data", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                        {
+                            map = new(StringComparer.OrdinalIgnoreCase);
+                            foreach (var el in arr.EnumerateArray())
+                            {
+                                if (el.TryGetProperty("number", out var numProp) && numProp.ValueKind==JsonValueKind.String)
+                                {
+                                    // Clone element so it survives after JsonDocument disposal
+                                    map[numProp.GetString() ?? string.Empty] = el.Clone();
+                                }
+                            }
+                        }
+                    }
+                    catch { map = null; }
+                }
+            }
+            if (map == null)
+            {
+                // Retry with decreasing page sizes if we encounter 504 / 5xx
+                int[] pageSizes = new[] {500, 250, 100};
+                foreach (var pageSize in pageSizes)
+                {
+                    for (int attempt = 1; attempt <= 3; attempt++)
+                    {
+                        await ApiRateLimiter.WaitAsync();
+                        var bulkUrl = $"https://api.pokemontcg.io/v2/cards?q=set.id:{setCode.ToLowerInvariant()}&pageSize={pageSize}";
+                        var req = new HttpRequestMessage(HttpMethod.Get, bulkUrl);
+                        var apiKey = Environment.GetEnvironmentVariable("POKEMON_TCG_API_KEY");
+                        if (!string.IsNullOrWhiteSpace(apiKey)) req.Headers.TryAddWithoutValidation("X-Api-Key", apiKey);
+                        NetworkLogger.Log("REQUEST_BULK", bulkUrl, note:$"attempt={attempt} size={pageSize}");
+                        BinderViewModel.Global?.HttpStarted();
+                        HttpResponseMessage resp = null!;
+                        try
+                        {
+                            resp = await Http.SendAsync(req);
+                            NetworkLogger.Log("RESPONSE_BULK", bulkUrl, (int)resp.StatusCode, $"attempt={attempt}");
+                            if (resp.IsSuccessStatusCode)
+                            {
+                                await using var stream = await resp.Content.ReadAsStreamAsync();
+                                using var doc = await JsonDocument.ParseAsync(stream);
+                                if (doc.RootElement.TryGetProperty("data", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                                {
+                                    map = new(StringComparer.OrdinalIgnoreCase);
+                                    foreach (var el in arr.EnumerateArray())
+                                    {
+                                        if (el.TryGetProperty("number", out var numProp) && numProp.ValueKind==JsonValueKind.String)
+                                        {
+                                            map[numProp.GetString() ?? string.Empty] = el.Clone();
+                                        }
+                                    }
+                                    try { File.WriteAllText(cachePath, doc.RootElement.GetRawText()); } catch {}
+                                }
+                                BinderViewModel.Global?.HttpFinished(true);
+                                break; // success
+                            }
+                            else
+                            {
+                                BinderViewModel.Global?.HttpFinished(false);
+                                // On 504/5xx retry (unless last attempt of last size)
+                                if ((int)resp.StatusCode >= 500 && attempt < 3)
+                                {
+                                    var delay = TimeSpan.FromMilliseconds(400 * Math.Pow(2, attempt - 1));
+                                    await Task.Delay(delay);
+                                    continue; // retry same page size
+                                }
+                                if ((int)resp.StatusCode >= 500 && attempt == 3)
+                                {
+                                    // Move to next (smaller) page size
+                                    break;
+                                }
+                                // Non-retriable failure
+                                NetworkLogger.Log("ERROR_BULK", bulkUrl, (int)resp.StatusCode, $"non-retriable attempt={attempt}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            BinderViewModel.Global?.HttpFinished(false);
+                            NetworkLogger.Log("ERROR_BULK", $"{setCode}", null, $"exception attempt={attempt} size={pageSize} {ex.Message}");
+                            if (attempt == 3) break; // give up this size
+                            await Task.Delay(TimeSpan.FromMilliseconds(400 * Math.Pow(2, attempt - 1)));
+                        }
+                        finally
+                        {
+                            resp?.Dispose();
+                        }
+                        if (map != null) break; // success within attempts
+                    }
+                    if (map != null) break; // success at this page size
+                }
+                if (map == null)
+                {
+                    Debug.WriteLine($"[PokemonBulk] Exhausted retries for set {setCode}");
+                    NetworkLogger.Log("ERROR_BULK", setCode, null, "exhausted retries");
+                    return;
+                }
+            }
+            if (map == null || map.Count==0) return;
+            foreach (var spec in specs)
+            {
+                if (string.IsNullOrWhiteSpace(spec.number)) continue;
+                if (!map.TryGetValue(spec.number, out var cardEl))
+                {
+                    // Sometimes numbers have suffixes (e.g., 12a). Try startswith match.
+                    var alt = map.Keys.FirstOrDefault(k => k.StartsWith(spec.number, StringComparison.OrdinalIgnoreCase));
+                    if (alt != null) cardEl = map[alt]; else continue;
+                }
+                try
+                {
+                string? name = spec.nameOverride;
+                if (name == null && cardEl.TryGetProperty("name", out var nameProp) && nameProp.ValueKind==JsonValueKind.String) name = nameProp.GetString();
+                if (string.IsNullOrWhiteSpace(name)) name = spec.number;
+                string? img = null;
+                if (cardEl.TryGetProperty("images", out var imgObj) && imgObj.ValueKind==JsonValueKind.Object)
+                {
+                    if (imgObj.TryGetProperty("large", out var largeP) && largeP.ValueKind==JsonValueKind.String) img = largeP.GetString();
+                    else if (imgObj.TryGetProperty("small", out var smallP) && smallP.ValueKind==JsonValueKind.String) img = smallP.GetString();
+                }
+                // rarity/types enrichment
+                string rarity = string.Empty;
+                if (cardEl.TryGetProperty("rarity", out var rarityP) && rarityP.ValueKind==JsonValueKind.String) rarity = rarityP.GetString() ?? string.Empty;
+                string typesStr = string.Empty;
+                if (cardEl.TryGetProperty("types", out var typesArr) && typesArr.ValueKind==JsonValueKind.Array)
+                {
+                    var sb = new StringBuilder();
+                    foreach (var t in typesArr.EnumerateArray()) if (t.ValueKind==JsonValueKind.String) { if (sb.Length>0) sb.Append('/'); sb.Append(t.GetString()); }
+                    typesStr = sb.ToString();
+                }
+                if (!string.IsNullOrEmpty(rarity) || !string.IsNullOrEmpty(typesStr))
+                    name = name + (string.IsNullOrEmpty(typesStr)?"":" ["+typesStr+"]") + (string.IsNullOrEmpty(rarity)?"":" {"+rarity+"}");
+                var ce = new CardEntry(name!, spec.number, setCode, false, false, null, null);
+                _specs[spec.specIndex] = _specs[spec.specIndex] with { Resolved = ce };
+                CardImageUrlStore.Set(setCode, spec.number, img, null);
+                PersistCardToCache(ce);
+                }
+                catch (Exception exCard)
+                {
+                    NetworkLogger.Log("ERROR_BULK_CARD_PARSE", setCode+":"+spec.number, null, exCard.Message);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[PokemonBulk] Error {setCode}: {ex.Message}");
+            NetworkLogger.Log("ERROR_BULK", setCode, null, ex.Message);
+        }
+    }
+
     private void RebuildCardListFromSpecs()
     {
         _cards.Clear();
@@ -1006,6 +1316,7 @@ public class BinderViewModel : INotifyPropertyChanged
     {
         try
         {
+            HttpStarted();
             await ApiRateLimiter.WaitAsync();
             // Pokémon card id pattern: {setCode}-{number}
             var id = $"{setCode.ToLowerInvariant()}-{number}";
@@ -1014,8 +1325,54 @@ public class BinderViewModel : INotifyPropertyChanged
             // Optional API key via env var
             var apiKey = Environment.GetEnvironmentVariable("POKEMON_TCG_API_KEY");
             if (!string.IsNullOrWhiteSpace(apiKey)) req.Headers.TryAddWithoutValidation("X-Api-Key", apiKey);
+            NetworkLogger.Log("REQUEST_CARD", url);
             var resp = await Http.SendAsync(req);
-            if (!resp.IsSuccessStatusCode) { Debug.WriteLine($"[PokemonAPI] {url} status {(int)resp.StatusCode}"); return null; }
+            NetworkLogger.Log("RESPONSE_CARD", url, (int)resp.StatusCode);
+            if (!resp.IsSuccessStatusCode)
+            {
+                // Fallback: search by set & number if direct id fetch fails (some promos / alt numbering)
+                Debug.WriteLine($"[PokemonAPI] Direct ID miss {id} status {(int)resp.StatusCode}; attempting search.");
+                // Finish the failed direct call
+                HttpFinished(false);
+                var searchQ = $"https://api.pokemontcg.io/v2/cards?q=set.id:{setCode.ToLowerInvariant()} number:{number}";
+                var searchReq = new HttpRequestMessage(HttpMethod.Get, searchQ);
+                if (!string.IsNullOrWhiteSpace(apiKey)) searchReq.Headers.TryAddWithoutValidation("X-Api-Key", apiKey);
+                NetworkLogger.Log("REQUEST_SEARCH", searchQ);
+                resp.Dispose();
+                HttpStarted();
+                resp = await Http.SendAsync(searchReq);
+                NetworkLogger.Log("RESPONSE_SEARCH", searchQ, (int)resp.StatusCode);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    Debug.WriteLine($"[PokemonAPI] Search miss for set={setCode} number={number} status {(int)resp.StatusCode}");
+                    HttpFinished(false);
+                    NetworkLogger.Log("ERROR_SEARCH", searchQ, (int)resp.StatusCode);
+                    return null;
+                }
+                await using var sStream = await resp.Content.ReadAsStreamAsync();
+                using var sDoc = await JsonDocument.ParseAsync(sStream);
+                if (!sDoc.RootElement.TryGetProperty("data", out var sArr) || sArr.ValueKind != JsonValueKind.Array || sArr.GetArrayLength()==0)
+                {
+                    Debug.WriteLine($"[PokemonAPI] Search returned 0 for {setCode} {number}");
+                    HttpFinished(false);
+                    NetworkLogger.Log("EMPTY_SEARCH", searchQ);
+                    return null;
+                }
+                // Use first result
+                var dataElFallback = sArr[0];
+                string? displayNameFallback = overrideName;
+                if (displayNameFallback == null && dataElFallback.TryGetProperty("name", out var nameProp2) && nameProp2.ValueKind==JsonValueKind.String) displayNameFallback = nameProp2.GetString();
+                if (string.IsNullOrWhiteSpace(displayNameFallback)) displayNameFallback = number;
+                string? frontImgFallback = null;
+                if (dataElFallback.TryGetProperty("images", out var imagesEl2) && imagesEl2.ValueKind==JsonValueKind.Object)
+                {
+                    if (imagesEl2.TryGetProperty("large", out var largeProp2) && largeProp2.ValueKind==JsonValueKind.String) frontImgFallback = largeProp2.GetString();
+                    else if (imagesEl2.TryGetProperty("small", out var smallProp2) && smallProp2.ValueKind==JsonValueKind.String) frontImgFallback = smallProp2.GetString();
+                }
+                CardImageUrlStore.Set(setCode, number, frontImgFallback, null);
+                HttpFinished(true);
+                return new CardEntry(displayNameFallback!, number, setCode, false, false, null, null);
+            }
             await using var stream = await resp.Content.ReadAsStreamAsync();
             using var doc = await JsonDocument.ParseAsync(stream);
             if (!doc.RootElement.TryGetProperty("data", out var dataEl)) return null;
@@ -1041,9 +1398,15 @@ public class BinderViewModel : INotifyPropertyChanged
             if (!string.IsNullOrEmpty(rarity) || !string.IsNullOrEmpty(typesStr))
                 displayName = displayName + (string.IsNullOrEmpty(typesStr)?"":" ["+typesStr+"]") + (string.IsNullOrEmpty(rarity)?"":" {"+rarity+"}");
             CardImageUrlStore.Set(setCode, number, frontImg, null);
+            HttpFinished(true);
             return new CardEntry(displayName!, number, setCode, false, false, null, null);
         }
-        catch { return null; }
+        catch
+        {
+            HttpFinished(false);
+            NetworkLogger.Log("ERROR_CARD", $"{setCode}:{number}");
+            return null;
+        }
     }
 
     private void BuildOrderedFaces()
@@ -1055,7 +1418,7 @@ public class BinderViewModel : INotifyPropertyChanged
         int globalSlot = 0;
         while (remaining.Count > 0)
         {
-            int col = (globalSlot % SlotsPerPage) % 4; // 0..3 within row
+            int col = (globalSlot % SlotsPerPage) % _columns; // dynamic columns
 
             bool IsPairStart(List<CardEntry> list, int idx)
             {
@@ -1229,9 +1592,9 @@ public class BinderViewModel : INotifyPropertyChanged
     {
         if (pageNumber <= 0) return;
     // Metadata resolution happens asynchronously; placeholders shown until resolved
-        int startIndex = (pageNumber - 1) * SlotsPerPage;
+    int startIndex = (pageNumber - 1) * SlotsPerPage;
         var tasks = new List<Task>();
-        for (int i = 0; i < SlotsPerPage; i++)
+    for (int i = 0; i < SlotsPerPage; i++)
         {
             int gi = startIndex + i;
             if (gi < _orderedFaces.Count)
@@ -1322,3 +1685,20 @@ public class RelayCommand : ICommand
         remove => CommandManager.RequerySuggested -= value;
     }
 }
+
+public class BoolToBrushConverter : IValueConverter
+{
+    public Brush TrueBrush { get; set; } = Brushes.LimeGreen;
+    public Brush FalseBrush { get; set; } = Brushes.OrangeRed;
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        try
+        {
+            if (value is bool b) return b ? TrueBrush : FalseBrush;
+        }
+        catch { }
+        return FalseBrush;
+    }
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) => Binding.DoNothing;
+}
+

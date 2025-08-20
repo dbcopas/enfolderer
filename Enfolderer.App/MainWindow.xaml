@@ -35,6 +35,8 @@
                 </Grid>
             </Border>
         </DataTemplate>
+    <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    <local:BoolToBrushConverter x:Key="BoolToBrushConverter" />
     </Window.Resources>
     <DockPanel>
         <Menu DockPanel.Dock="Top">
@@ -47,6 +49,10 @@
         <StatusBar DockPanel.Dock="Bottom">
             <StatusBarItem Content="{Binding Status}" />
             <StatusBarItem Content="{Binding PageDisplay}" />
+            <StatusBarItem Content="{Binding HttpActivitySummary}" />
+            <StatusBarItem>
+                <TextBlock Text="{Binding ApiKeyDisplay}" Foreground="{Binding ApiKeyPresent, Converter={StaticResource BoolToBrushConverter}}" />
+            </StatusBarItem>
         </StatusBar>
         <Grid>
             <Grid.RowDefinitions>
@@ -93,6 +99,8 @@
                     <Button Style="{StaticResource NavButtonStyle}" Content="Next ▶" Command="{Binding NextCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Last ⏭" Command="{Binding LastCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Binder Next ⏩" Command="{Binding NextBinderCommand}" />
+                    <TextBlock Text="Layout:" Margin="20,0,4,0" VerticalAlignment="Center" />
+                    <ComboBox Width="70" ItemsSource="{Binding PocketOptions}" SelectedItem="{Binding SelectedPocketCount}" />
                 </StackPanel>
                 <!-- Jump controls at far right -->
                 <StackPanel Orientation="Horizontal" Grid.Column="6" VerticalAlignment="Center" Margin="10,0,0,0">
@@ -113,7 +121,7 @@
                 <ItemsControl Grid.Column="0" ItemsSource="{Binding LeftSlots}" ItemTemplate="{StaticResource CardTemplate}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <UniformGrid Rows="3" Columns="4" />
+                            <UniformGrid Rows="{Binding LayoutRows}" Columns="{Binding LayoutColumns}" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                 </ItemsControl>
@@ -124,7 +132,7 @@
                 <ItemsControl Grid.Column="2" ItemsSource="{Binding RightSlots}" ItemTemplate="{StaticResource CardTemplate}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <UniformGrid Rows="3" Columns="4" />
+                            <UniformGrid Rows="{Binding LayoutRows}" Columns="{Binding LayoutColumns}" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                 </ItemsControl>
