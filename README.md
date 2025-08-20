@@ -82,7 +82,8 @@ Legacy CSV style (Name;Number;Set) is still parsed by the older loader, but the 
 5. After all specs resolve, metadata + image URLs are persisted and a `.done` sentinel written.
 
 ### Caching Details
-Cache Root: `%LocalAppData%/Enfolderer/cache`
+Cache Root (MTG): `%LocalAppData%/Enfolderer/cache`
+Cache Root (Pokémon branch): `%LocalAppData%/EnfoldererPokemon/cache`
 * `meta/<hash>.json`  — serialized faces (fronts + backs) including image URLs
 * `meta/<hash>.done`  — presence means cache complete (safe to reuse)
 * `<hash-of-url>.img` — raw image bytes (one per face variant)
