@@ -115,6 +115,50 @@ dotnet run --project Enfolderer.App
 ```
 Open a declarative collection file (`File > Open`).
 
+## Pokémon API Key (Optional)
+When running the Pokémon branch you can supply an API key for https://api.pokemontcg.io to potentially improve reliability (fewer 5xx / throttling responses) and attribute requests.
+
+Environment Variable:
+* `POKEMON_TCG_API_KEY` — key value from your pokemontcg.io account.
+
+Set it (current PowerShell session):
+```
+$Env:POKEMON_TCG_API_KEY = "your_key_here"
+```
+Persist for your Windows user:
+```
+setx POKEMON_TCG_API_KEY "your_key_here"
+```
+Restart your IDE / shell after setting permanently.
+
+UI Indicator:
+* Status bar shows `API Key✓` (green) when detected, `API Key✗` (red) when absent.
+
+Security Note: Key is only read from process environment; it is not written to disk or logged (except the presence boolean). Avoid checking it into source.
+
+## Pocket Layout Toggle (4 / 9 / 12)
+You can switch the binder page layout at runtime between:
+* 12‑pocket: 4×3 (default quad page)
+* 9‑pocket: 3×3 (traditional Pokémon page)
+* 4‑pocket: 2×2 (small / showcase)
+
+How:
+* Use the `Layout:` ComboBox in the navigation bar to choose 4, 9 or 12.
+* The grid reflows immediately for both left and right pages; pagination & ordering recompute.
+
+Current Pair Alignment Behavior:
+* The existing pair alignment logic (ensuring two‑card groups start on an even column) adapts to the active column count. For 2×2 and 3×3 layouts this still prevents a pair from being split across rows where possible.
+* If no single can be pulled forward, a pair may straddle a row (fallback) rather than leaving a gap.
+
+Limitations / Future Ideas:
+* Persist selected layout across sessions (not implemented yet).
+* Independent layout per binder (currently global).
+* Optional scaling / padding tweaks per layout size.
+
+## Caching (Pokémon Branch Additions)
+* Separate cache root: `%LocalAppData%/EnfoldererPokemon/cache` to avoid collision with MTG cache.
+* Set‑level bulk JSON (up to 12h TTL) + per‑card cache files prefixed with `pkm_`.
+
 ### Release (Single EXE)
 Self‑contained, single file (win-x64):
 ```
