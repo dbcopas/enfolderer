@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -58,13 +59,14 @@ public partial class MainWindow : Window
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
 }
 
-public record CardEntry(string Name, string Number, string? Set, bool IsModalDoubleFaced, bool IsBackFace = false, string? FrontRaw = null, string? BackRaw = null)
+public record CardEntry(string Name, string Number, string? Set, bool IsModalDoubleFaced, bool IsBackFace = false, string? FrontRaw = null, string? BackRaw = null, string? DisplayNumber = null)
 {
-    public string Display => string.IsNullOrWhiteSpace(Number) ? Name : $"{Number} {Name}";
+    public string EffectiveNumber => DisplayNumber ?? Number;
+    public string Display => string.IsNullOrWhiteSpace(EffectiveNumber) ? Name : $"{EffectiveNumber} {Name}";
     public static CardEntry FromCsv(string line)
     {
         // Format: name;number;set(optional);flags(optional)  (Only first 3 considered now). MFC indicated by name suffix "|MFC" or a trailing ;MFC field.
-        if (string.IsNullOrWhiteSpace(line)) throw new ArgumentException("Empty line");
+        if (string.IsNullOrWhiteSpace(line)) throw new ArgumentException("Empty line"); 
         var raw = line.Split(';');
         if (raw.Length < 2) throw new ArgumentException("Must have at least name;number");
         string name = raw[0].Trim();
@@ -270,10 +272,10 @@ public class CardSlot : INotifyPropertyChanged
     public ImageSource? ImageSource { get => _imageSource; private set { _imageSource = value; OnPropertyChanged(); } }
     public CardSlot(CardEntry entry, int index)
     {
-        Name = entry.Name;
-        Number = entry.Number;
+    Name = entry.Name;
+    Number = entry.EffectiveNumber;
         Set = entry.Set ?? string.Empty;
-        Tooltip = entry.Display + (string.IsNullOrEmpty(Set) ? string.Empty : $" ({Set})");
+    Tooltip = entry.Display + (string.IsNullOrEmpty(Set) ? string.Empty : $" ({Set})");
     Background = Brushes.Black;
     }
     public CardSlot(string placeholder, int index)
@@ -336,6 +338,21 @@ public class CardSlot : INotifyPropertyChanged
                 }
             }
             if (string.IsNullOrWhiteSpace(imgUrl)) { Debug.WriteLine("[CardSlot] No cached or fetched image URL."); return; }
+            // Support local file path for placeholder backs
+            if (File.Exists(imgUrl))
+            {
+                try
+                {
+                    var bytesLocal = File.ReadAllBytes(imgUrl);
+                    var bmpLocal = CreateFrozenBitmap(bytesLocal);
+                    ImageSource = bmpLocal;
+                    return;
+                }
+                catch (Exception exLocal)
+                {
+                    Debug.WriteLine($"[CardSlot] Local image load failed {imgUrl}: {exLocal.Message}");
+                }
+            }
             var cacheKey = imgUrl + (isBackFace ? "|back" : "|front");
             if (ImageCacheStore.Cache.TryGetValue(cacheKey, out var cachedBmp)) { ImageSource = cachedBmp; return; }
             if (ImageCacheStore.TryLoadFromDisk(cacheKey, out var diskBmp)) { ImageSource = diskBmp; return; }
@@ -387,6 +404,8 @@ public class BinderViewModel : INotifyPropertyChanged
     private readonly ConcurrentDictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
     private readonly List<PageView> _views = new(); // sequence of display views across all binders
     private int _currentViewIndex = 0;
+    private string? _currentCollectionDir; // directory of currently loaded collection file
+    private string? _localBackImagePath; // cached resolved local back image path (or null if not found)
     private static readonly HttpClient Http = CreateClient();
     private static HttpClient CreateClient()
     {
@@ -402,6 +421,48 @@ public class BinderViewModel : INotifyPropertyChanged
     c.DefaultRequestHeaders.UserAgent.ParseAdd("(+https://github.com/yourrepo)");
         c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         return c;
+    }
+    private string? ResolveLocalBackImagePath(bool logIfMissing)
+    {
+        // Candidate file names (allow some common variations)
+        var names = new[]
+        {
+            "Magic_card_back.jpg",
+            "magic_card_back.jpg",
+            "card_back.jpg",
+            "back.jpg",
+            "Magic_card_back.jpeg",
+            "Magic_card_back.png"
+        };
+        // Candidate directories to search (in order)
+        var dirs = new List<string?>
+        {
+            _currentCollectionDir,
+            AppContext.BaseDirectory,
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Enfolderer"),
+            Directory.Exists(System.IO.Path.Combine(AppContext.BaseDirectory, "images")) ? System.IO.Path.Combine(AppContext.BaseDirectory, "images") : null
+        };
+        foreach (var d in dirs.Where(d => !string.IsNullOrWhiteSpace(d)))
+        {
+            try
+            {
+                foreach (var n in names)
+                {
+                    var candidate = System.IO.Path.Combine(d!, n);
+                    if (File.Exists(candidate))
+                    {
+                        Debug.WriteLine($"[BackImage] Using local back image: {candidate}");
+                        return candidate;
+                    }
+                }
+            }
+            catch { }
+        }
+        if (logIfMissing)
+        {
+            Debug.WriteLine("[BackImage] Local back image not found. Searched directories: " + string.Join(";", dirs.Where(d=>!string.IsNullOrWhiteSpace(d))) + " names: " + string.Join(',', names));
+        }
+        return null;
     }
     // Removed per refactor (ImageCacheStore used instead)
 
@@ -570,7 +631,7 @@ public class BinderViewModel : INotifyPropertyChanged
                         backDisplay = $"{entry.BackRaw} ({entry.FrontRaw})";
                     else
                         backDisplay = entry.Name + " (Back)";
-                    _cards.Add(new CardEntry(backDisplay, entry.Number, entry.Set, false, true, entry.FrontRaw, entry.BackRaw));
+                    _cards.Add(new CardEntry(backDisplay, entry.Number, entry.Set, false, true, entry.FrontRaw, entry.BackRaw, entry.DisplayNumber));
                 }
             }
             catch
@@ -595,6 +656,8 @@ public class BinderViewModel : INotifyPropertyChanged
     {
     // Recompute slot theme (seeded by file path + last write ticks for variability when file changes)
     try { var fi = new FileInfo(path); CardSlotTheme.Recalculate(path + fi.LastWriteTimeUtc.Ticks); } catch { CardSlotTheme.Recalculate(path); }
+    _currentCollectionDir = System.IO.Path.GetDirectoryName(path);
+    _localBackImagePath = null; // reset; will lazily resolve when first placeholder encountered
     var lines = await File.ReadAllLinesAsync(path);
     // Compute hash of input file contents for metadata/image cache lookup
     string fileHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", lines))));
@@ -613,11 +676,52 @@ public class BinderViewModel : INotifyPropertyChanged
     _specs.Clear();
         string? currentSet = null;
     var fetchList = new List<(string setCode,string number,string? nameOverride,int specIndex)>();
+        // Helper for paired range expansion (primary & secondary ranges of equal length)
+        static List<string> ExpandSimpleNumericRange(string text)
+        {
+            var list = new List<string>();
+            text = text.Trim();
+            if (string.IsNullOrEmpty(text)) return list;
+            if (text.Contains('-'))
+            {
+                var parts = text.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2 && int.TryParse(parts[0], out int s) && int.TryParse(parts[1], out int e) && s <= e)
+                {
+                    for (int n = s; n <= e; n++) list.Add(n.ToString());
+                    return list;
+                }
+            }
+            if (int.TryParse(text, out int single)) list.Add(single.ToString());
+            return list;
+        }
         foreach (var raw in lines)
         {
             if (string.IsNullOrWhiteSpace(raw)) continue;
             var line = raw.Trim();
             if (line.StartsWith('#')) continue;
+            // Backface placeholder syntax: "N;backface" => insert N placeholder slots showing MTG card back
+            var backfaceMatch = Regex.Match(line, @"^(?<count>\d+)\s*;\s*backface$", RegexOptions.IgnoreCase);
+            if (backfaceMatch.Success)
+            {
+                if (int.TryParse(backfaceMatch.Groups["count"].Value, out int backCount) && backCount > 0)
+                {
+                    // Resolve local placeholder image path (cached) on first use
+                    if (_localBackImagePath == null)
+                        _localBackImagePath = ResolveLocalBackImagePath(logIfMissing:true);
+                    bool hasLocal = _localBackImagePath != null && File.Exists(_localBackImagePath);
+                    for (int bi = 0; bi < backCount; bi++)
+                    {
+                        var spec = new CardSpec("__BACK__", "BACK", overrideName: null, explicitEntry: true);
+                        _specs.Add(spec);
+                        var entry = new CardEntry("Backface", "BACK", "__BACK__", false, false, null, null, string.Empty);
+                        // Map image URL (front & back same) to local file if present, else fallback to remote standard back.
+                        var frontUrl = hasLocal ? _localBackImagePath! : "https://c1.scryfall.com/file/scryfall-card-backs/en.png";
+                        CardImageUrlStore.Set("__BACK__", "BACK", frontUrl, frontUrl);
+                        _specs[^1] = _specs[^1] with { Resolved = entry };
+                    }
+                }
+                continue; // processed line
+            }
             if (line.StartsWith('=') && line.Length>1)
             {
                 currentSet = line.Substring(1).Trim();
@@ -676,6 +780,29 @@ public class BinderViewModel : INotifyPropertyChanged
                     _specs.Add(new CardSpec(currentSet, fullNum, nameOverride, false));
                     fetchList.Add((currentSet, fullNum, nameOverride, _specs.Count-1));
                     continue;
+                }
+            }
+            // Paired range syntax: 296-340&&361-405 -> single slots whose NUMBER displays as "296(361)", name remains the fetched card name.
+            if (numberPart.Contains("&&"))
+            {
+                var pairSegs = numberPart.Split("&&", 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                if (pairSegs.Length == 2)
+                {
+                    var primaryList = ExpandSimpleNumericRange(pairSegs[0]);
+                    var secondaryList = ExpandSimpleNumericRange(pairSegs[1]);
+                    if (primaryList.Count > 0 && primaryList.Count == secondaryList.Count)
+                    {
+                        for (int i = 0; i < primaryList.Count; i++)
+                        {
+                            var prim = primaryList[i];
+                            var sec = secondaryList[i];
+                            var numberDisplay = prim + "(" + sec + ")";
+                            // numberDisplayOverride stores the composite number; overrideName stays null so real name is fetched
+                            _specs.Add(new CardSpec(currentSet, prim, null, false, numberDisplay));
+                            fetchList.Add((currentSet, prim, null, _specs.Count -1));
+                        }
+                        continue; // processed line
+                    }
                 }
             }
             // Star suffix syntax: "★1-36" expands to 1★,2★,...,36★ (input has leading star, meaning output gets trailing star)
@@ -859,7 +986,7 @@ public class BinderViewModel : INotifyPropertyChanged
             if (string.IsNullOrEmpty(data.Layout)) return false; // layout required to classify
             bool physTwoSided = data.Layout != null && PhysicallyTwoSidedLayouts.Contains(data.Layout);
             bool effectiveMfc = data.IsMfc && physTwoSided;
-            var ce = new CardEntry(data.Name, data.Number, data.Set, effectiveMfc, false, data.FrontRaw, data.BackRaw);
+            var ce = new CardEntry(data.Name, data.Number, data.Set, effectiveMfc, false, data.FrontRaw, data.BackRaw, null);
             entry = ce;
             CardImageUrlStore.Set(data.Set, data.Number, data.FrontImageUrl, data.BackImageUrl);
             CardLayoutStore.Set(data.Set, data.Number, data.Layout);
@@ -907,7 +1034,7 @@ public class BinderViewModel : INotifyPropertyChanged
             {
                 bool physTwoSided = f.Layout != null && PhysicallyTwoSidedLayouts.Contains(f.Layout);
                 bool effectiveMfc = f.IsMfc && physTwoSided && !f.IsBack;
-                var ce = new CardEntry(f.Name, f.Number, f.Set, effectiveMfc, f.IsBack, f.FrontRaw, f.BackRaw);
+                var ce = new CardEntry(f.Name, f.Number, f.Set, effectiveMfc, f.IsBack, f.FrontRaw, f.BackRaw, null);
                 _cards.Add(ce);
                 if (!f.IsBack)
                     CardImageUrlStore.Set(f.Set ?? string.Empty, f.Number, f.FrontImageUrl, f.BackImageUrl);
@@ -1009,18 +1136,25 @@ public class BinderViewModel : INotifyPropertyChanged
         {
             var s = _specs[i];
             if (s.Resolved != null)
-                _cards.Add(s.Resolved);
+            {
+                var resolved = s.Resolved;
+                // Attach display number without altering canonical number used for API/cache
+                if (s.numberDisplayOverride != null && resolved.DisplayNumber != s.numberDisplayOverride)
+                    resolved = resolved with { DisplayNumber = s.numberDisplayOverride };
+                _cards.Add(resolved);
+            }
             else
             {
-                var placeholderName = s.overrideName ?? s.number;
-                _cards.Add(new CardEntry(placeholderName, s.number, s.setCode, false));
+                var placeholderName = s.overrideName ?? s.number; // unresolved: show number placeholder
+                var displayNumber = s.numberDisplayOverride; // may be null
+                _cards.Add(new CardEntry(placeholderName, s.number, s.setCode, false, false, null, null, displayNumber));
             }
             if (_mfcBacks.TryGetValue(i, out var back))
                 _cards.Add(back);
         }
     }
 
-    private record CardSpec(string setCode, string number, string? overrideName, bool explicitEntry)
+    private record CardSpec(string setCode, string number, string? overrideName, bool explicitEntry, string? numberDisplayOverride = null)
     {
         public CardEntry? Resolved { get; set; }
     }
@@ -1086,6 +1220,11 @@ public class BinderViewModel : INotifyPropertyChanged
                         if (rootImgs.TryGetProperty("normal", out var rootNorm) && rootNorm.ValueKind==JsonValueKind.String) frontImg = rootNorm.GetString();
                         else if (rootImgs.TryGetProperty("large", out var rootLarge) && rootLarge.ValueKind==JsonValueKind.String) frontImg = rootLarge.GetString();
                     }
+                    // Additional fallback: if back image missing but Scryfall supplied a single root image (some older layouts), reuse front image so slot isn't blank
+                    if (backImg == null && frontImg != null)
+                    {
+                        backImg = frontImg; // better to show duplicate art than empty slot
+                    }
                 }
                 else
                 {
@@ -1137,6 +1276,7 @@ public class BinderViewModel : INotifyPropertyChanged
                     Debug.WriteLine($"[BuildOrderedFaces] Null entry at index {idx} in remaining list (IsPairStart). Treating as single.");
                     return false;
                 }
+                bool IsBackPlaceholder(CardEntry ce) => string.Equals(ce.Number, "BACK", StringComparison.OrdinalIgnoreCase);
                 // MFC front + back
                 if (c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
                 {
@@ -1149,6 +1289,8 @@ public class BinderViewModel : INotifyPropertyChanged
                     var n = list[idx + 1];
                     if (n != null && !n.IsModalDoubleFaced && !n.IsBackFace)
                     {
+                        // Treat consecutive backface placeholders as independent singles (never force pair alignment)
+                        if (IsBackPlaceholder(c) && IsBackPlaceholder(n)) return false;
                         var cName = c.Name ?? string.Empty;
                         var nName = n.Name ?? string.Empty;
                         if (string.Equals(cName.Trim(), nName.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
@@ -1172,6 +1314,9 @@ public class BinderViewModel : INotifyPropertyChanged
                 var prev = list[idx - 1];
                 if (prev != null && !prev.IsModalDoubleFaced && !prev.IsBackFace && !c.IsModalDoubleFaced && !c.IsBackFace)
                 {
+                    bool IsBackPlaceholder(CardEntry ce) => string.Equals(ce.Number, "BACK", StringComparison.OrdinalIgnoreCase);
+                    // If both are backface placeholders, treat as independent singles
+                    if (IsBackPlaceholder(prev) && IsBackPlaceholder(c)) return false;
                     var prevName = prev.Name ?? string.Empty;
                     var cName = c.Name ?? string.Empty;
                     if (string.Equals(prevName.Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
@@ -1191,7 +1336,11 @@ public class BinderViewModel : INotifyPropertyChanged
                     int singleIndex = -1;
                     for (int i = 1; i < remaining.Count; i++)
                     {
-                        if (!IsPairStart(remaining, i) && !IsSecondOfPair(remaining, i) && !remaining[i].IsBackFace)
+                        var cand = remaining[i];
+                        bool isBackPlaceholder = string.Equals(cand.Number, "BACK", StringComparison.OrdinalIgnoreCase);
+                        // Backface placeholder acts as barrier: stop searching beyond this point so we don't reorder across it
+                        if (isBackPlaceholder) break;
+                        if (!IsPairStart(remaining, i) && !IsSecondOfPair(remaining, i) && !cand.IsBackFace)
                         {
                             singleIndex = i;
                             break;
