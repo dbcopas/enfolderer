@@ -805,6 +805,95 @@ public class BinderViewModel : INotifyPropertyChanged
                     }
                 }
             }
+            // Generalized attached OR spaced prefix + range or single: e.g. J1-5, J1, 2024-0 7-8 (prefix may include digits and hyphens), 2024-07
+            // Skip this block if it's a pure numeric range (e.g. 1-44) so later generic range logic handles it.
+            bool isPureNumericRange = Regex.IsMatch(numberPart, @"^\d+-\d+$");
+            if (!isPureNumericRange)
+            {
+                // Pattern 1: Attached prefix: <prefix><start>(-<end>)? where prefix must contain at least one letter (avoid treating 1-44 as prefix 1- + 44)
+                var attachedPrefixMatch = Regex.Match(numberPart, @"^(?<pfx>(?=.*[A-Za-z])[A-Za-z0-9\-]{1,24}?)(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+                if (attachedPrefixMatch.Success)
+                {
+                    var pfx = attachedPrefixMatch.Groups["pfx"].Value;
+                    var startStr = attachedPrefixMatch.Groups["start"].Value;
+                    var endGrp = attachedPrefixMatch.Groups["end"];
+                    int width = startStr.Length; // preserve zero padding
+                    if (endGrp.Success && int.TryParse(startStr, out int aps) && int.TryParse(endGrp.Value, out int ape) && aps <= ape)
+                    {
+                        for (int n = aps; n <= ape; n++)
+                        {
+                            var fullNum = pfx + n.ToString().PadLeft(width, '0');
+                            _specs.Add(new CardSpec(currentSet, fullNum, null, false));
+                            fetchList.Add((currentSet, fullNum, null, _specs.Count -1));
+                        }
+                        continue;
+                    }
+                    else
+                    {
+                        // Single
+                        var fullNum = pfx + startStr;
+                        _specs.Add(new CardSpec(currentSet, fullNum, nameOverride, false));
+                        fetchList.Add((currentSet, fullNum, nameOverride, _specs.Count -1));
+                        continue;
+                    }
+                }
+            }
+            // Pattern 2: Spaced general prefix with range or single (expands earlier letter-only rule): <prefix> <start>(-<end>)?
+            var spacedPrefixMatch = Regex.Match(numberPart, @"^(?<pfx>[A-Za-z0-9\-]{1,24})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+            if (spacedPrefixMatch.Success)
+            {
+                var pfx = spacedPrefixMatch.Groups["pfx"].Value;
+                var startStr = spacedPrefixMatch.Groups["start"].Value;
+                var endGrp = spacedPrefixMatch.Groups["end"];
+                int width = startStr.Length;
+                if (endGrp.Success && int.TryParse(startStr, out int sps) && int.TryParse(endGrp.Value, out int spe) && sps <= spe)
+                {
+                    for (int n = sps; n <= spe; n++)
+                    {
+                        var fullNum = pfx + n.ToString().PadLeft(width, '0');
+                        _specs.Add(new CardSpec(currentSet, fullNum, null, false));
+                        fetchList.Add((currentSet, fullNum, null, _specs.Count-1));
+                    }
+                    continue;
+                }
+                else
+                {
+                    var fullNum = pfx + startStr;
+                    _specs.Add(new CardSpec(currentSet, fullNum, nameOverride, false));
+                    fetchList.Add((currentSet, fullNum, nameOverride, _specs.Count-1));
+                    continue;
+                }
+            }
+            // Pattern 3: Range with suffix (e.g. 2J-b, 5J-b or 01X etc.)  start-end<suffix> OR start-end <suffix>
+            var rangeSuffixMatch = Regex.Match(numberPart, @"^(?<start>\d+)-(?: (?<endSpace>\d+)|(?<end>\d+))(?<suffix>[A-Za-z][A-Za-z0-9\-]+)$", RegexOptions.Compiled);
+            if (rangeSuffixMatch.Success)
+            {
+                string startStr = rangeSuffixMatch.Groups["start"].Value;
+                string endStr = rangeSuffixMatch.Groups["end"].Success ? rangeSuffixMatch.Groups["end"].Value : rangeSuffixMatch.Groups["endSpace"].Value;
+                string suffix = rangeSuffixMatch.Groups["suffix"].Value;
+                if (int.TryParse(startStr, out int rs) && int.TryParse(endStr, out int re) && rs <= re)
+                {
+                    int width = startStr.Length;
+                    for (int n = rs; n <= re; n++)
+                    {
+                        var fullNum = n.ToString().PadLeft(width, '0') + suffix;
+                        _specs.Add(new CardSpec(currentSet, fullNum, null, false));
+                        fetchList.Add((currentSet, fullNum, null, _specs.Count -1));
+                    }
+                    continue;
+                }
+            }
+            // Pattern 4: Single number with suffix (e.g. 2J-b)
+            var singleSuffixMatch = Regex.Match(numberPart, @"^(?<num>\d+)(?<suffix>[A-Za-z][A-Za-z0-9\-]+)$", RegexOptions.Compiled);
+            if (singleSuffixMatch.Success)
+            {
+                var numStr = singleSuffixMatch.Groups["num"].Value;
+                var suffix = singleSuffixMatch.Groups["suffix"].Value;
+                var fullNum = numStr + suffix;
+                _specs.Add(new CardSpec(currentSet, fullNum, nameOverride, false));
+                fetchList.Add((currentSet, fullNum, nameOverride, _specs.Count -1));
+                continue;
+            }
             // Star suffix syntax: "★1-36" expands to 1★,2★,...,36★ (input has leading star, meaning output gets trailing star)
             if (numberPart.StartsWith('★'))
             {
@@ -900,10 +989,12 @@ public class BinderViewModel : INotifyPropertyChanged
                 var pieces = numberPart.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
                 if (pieces.Length==2 && int.TryParse(pieces[0], out int startNum) && int.TryParse(pieces[1], out int endNum) && startNum<=endNum)
                 {
+                    int padWidth = (pieces[0].StartsWith('0') && pieces[0].Length == pieces[1].Length) ? pieces[0].Length : 0;
                     for (int n=startNum; n<=endNum; n++)
                     {
-                        _specs.Add(new CardSpec(currentSet, n.ToString(), null, false));
-                        fetchList.Add((currentSet, n.ToString(), null, _specs.Count-1));
+                        var numStr = padWidth>0 ? n.ToString().PadLeft(padWidth,'0') : n.ToString();
+                        _specs.Add(new CardSpec(currentSet, numStr, null, false));
+                        fetchList.Add((currentSet, numStr, null, _specs.Count-1));
                     }
                 }
                 continue;
