@@ -1467,6 +1467,7 @@ public class BinderViewModel : INotifyPropertyChanged
                     Debug.WriteLine($"[BuildOrderedFaces] Null entry at index {idx} in remaining list (IsPairStart). Treating as single.");
                     return false;
                 }
+        bool IsNazgul(CardEntry ce) => string.Equals(ce.Name?.Trim(), "Nazgûl", StringComparison.OrdinalIgnoreCase);
                 bool IsBackPlaceholder(CardEntry ce) => string.Equals(ce.Number, "BACK", StringComparison.OrdinalIgnoreCase);
                 // MFC front + back
                 if (c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
@@ -1482,6 +1483,8 @@ public class BinderViewModel : INotifyPropertyChanged
                     {
                         // Treat consecutive backface placeholders as independent singles (never force pair alignment)
                         if (IsBackPlaceholder(c) && IsBackPlaceholder(n)) return false;
+            // Nazgûl copies are always treated as independent singles (no enforced pairing)
+            if (IsNazgul(c) && IsNazgul(n)) return false;
                         var cName = c.Name ?? string.Empty;
                         var nName = n.Name ?? string.Empty;
                         if (string.Equals(cName.Trim(), nName.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
@@ -1506,8 +1509,11 @@ public class BinderViewModel : INotifyPropertyChanged
                 if (prev != null && !prev.IsModalDoubleFaced && !prev.IsBackFace && !c.IsModalDoubleFaced && !c.IsBackFace)
                 {
                     bool IsBackPlaceholder(CardEntry ce) => string.Equals(ce.Number, "BACK", StringComparison.OrdinalIgnoreCase);
+                    bool IsNazgul(CardEntry ce) => string.Equals(ce.Name?.Trim(), "Nazgûl", StringComparison.OrdinalIgnoreCase);
                     // If both are backface placeholders, treat as independent singles
                     if (IsBackPlaceholder(prev) && IsBackPlaceholder(c)) return false;
+                    // Nazgûl copies: never second of a forced pair
+                    if (IsNazgul(prev) && IsNazgul(c)) return false;
                     var prevName = prev.Name ?? string.Empty;
                     var cName = c.Name ?? string.Empty;
                     if (string.Equals(prevName.Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
