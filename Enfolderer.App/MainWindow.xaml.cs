@@ -57,6 +57,43 @@ public partial class MainWindow : Window
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+
+    protected override void OnPreviewMouseWheel(MouseWheelEventArgs e)
+    {
+        if (_vm == null) { base.OnPreviewMouseWheel(e); return; }
+        try
+        {
+            bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+            int delta = e.Delta; // >0 wheel up, <0 wheel down
+            if (shift)
+            {
+                if (delta > 0)
+                {
+                    if (_vm.PrevBinderCommand.CanExecute(null)) _vm.PrevBinderCommand.Execute(null);
+                }
+                else if (delta < 0)
+                {
+                    if (_vm.NextBinderCommand.CanExecute(null)) _vm.NextBinderCommand.Execute(null);
+                }
+            }
+            else
+            {
+                if (delta > 0)
+                {
+                    if (_vm.PrevCommand.CanExecute(null)) _vm.PrevCommand.Execute(null);
+                }
+                else if (delta < 0)
+                {
+                    if (_vm.NextCommand.CanExecute(null)) _vm.NextCommand.Execute(null);
+                }
+            }
+            e.Handled = true; // prevent default scroll (there's no scroll viewer anyway)
+        }
+        finally
+        {
+            base.OnPreviewMouseWheel(e);
+        }
+    }
 }
 
 public record CardEntry(string Name, string Number, string? Set, bool IsModalDoubleFaced, bool IsBackFace = false, string? FrontRaw = null, string? BackRaw = null, string? DisplayNumber = null)
@@ -674,6 +711,8 @@ public class BinderViewModel : INotifyPropertyChanged
     }
     _cards.Clear();
     _specs.Clear();
+    _mfcBacks.Clear();
+    _orderedFaces.Clear();
         string? currentSet = null;
     var fetchList = new List<(string setCode,string number,string? nameOverride,int specIndex)>();
         // Helper for paired range expansion (primary & secondary ranges of equal length)
@@ -1042,12 +1081,10 @@ public class BinderViewModel : INotifyPropertyChanged
     private const int CacheSchemaVersion = 5; // bump: refined two-sided classification & invalidating prior misclassification cache
     private static readonly HashSet<string> PhysicallyTwoSidedLayouts = new(StringComparer.OrdinalIgnoreCase)
     {
-        // Layouts that represent distinct physical faces requiring two binder slots
         "transform","modal_dfc","battle","double_faced_token","double_faced_card","prototype","reversible_card"
     };
     private static readonly HashSet<string> SingleFaceMultiLayouts = new(StringComparer.OrdinalIgnoreCase)
     {
-        // Multi-face metadata but single physical face
         "split","aftermath","adventure","meld","flip","leveler","saga","class","plane","planar","scheme","vanguard","token","emblem","art_series"
     };
     private record CachedFace(string Name, string Number, string? Set, bool IsMfc, bool IsBack, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion);
