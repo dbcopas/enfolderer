@@ -96,6 +96,14 @@
                 </StackPanel>
                 <!-- Jump controls at far right -->
                 <StackPanel Orientation="Horizontal" Grid.Column="6" VerticalAlignment="Center" Margin="10,0,0,0">
+                    <TextBlock Text="Layout:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <ComboBox Width="70" SelectedValue="{Binding LayoutMode}" SelectedValuePath="Content" Margin="0,0,10,0">
+                        <ComboBoxItem Content="4x3" />
+                        <ComboBoxItem Content="3x3" />
+                        <ComboBoxItem Content="2x2" />
+                    </ComboBox>
+                    <TextBlock Text="Pages/Binder:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <TextBox Width="60" Text="{Binding PagesPerBinder, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBlock Text="Binder:" VerticalAlignment="Center" Margin="0,0,4,0" />
                     <TextBox Width="40" Text="{Binding JumpBinderInput, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBlock Text="Page:" VerticalAlignment="Center" Margin="10,0,4,0" />
@@ -113,7 +121,7 @@
                 <ItemsControl Grid.Column="0" ItemsSource="{Binding LeftSlots}" ItemTemplate="{StaticResource CardTemplate}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <UniformGrid Rows="3" Columns="4" />
+                            <UniformGrid Rows="{Binding RowsPerPage}" Columns="{Binding ColumnsPerPage}" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                 </ItemsControl>
@@ -124,7 +132,7 @@
                 <ItemsControl Grid.Column="2" ItemsSource="{Binding RightSlots}" ItemTemplate="{StaticResource CardTemplate}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <UniformGrid Rows="3" Columns="4" />
+                            <UniformGrid Rows="{Binding RowsPerPage}" Columns="{Binding ColumnsPerPage}" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                 </ItemsControl>
