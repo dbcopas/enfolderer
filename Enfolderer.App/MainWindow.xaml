@@ -45,8 +45,15 @@
             </MenuItem>
         </Menu>
         <StatusBar DockPanel.Dock="Bottom">
+            <StatusBarItem>
+                <TextBlock Text="{Binding ApiStatus}" />
+            </StatusBarItem>
             <StatusBarItem Content="{Binding Status}" />
             <StatusBarItem Content="{Binding PageDisplay}" />
+            <Separator />
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock Text="{Binding HttpPanel}" TextAlignment="Right" />
+            </StatusBarItem>
         </StatusBar>
         <Grid>
             <Grid.RowDefinitions>

@@ -344,6 +344,7 @@ public class CardSlot : INotifyPropertyChanged
             {
                 // Fetch metadata once to populate image URLs
                 var apiUrl = $"https://api.scryfall.com/cards/{setCode.ToLowerInvariant()}/{Uri.EscapeDataString(number)}";
+                BinderViewModel.WithVm(vm => vm.FlashMetaUrl(apiUrl));
                 Debug.WriteLine($"[CardSlot] API fetch {apiUrl} face={faceIndex} (metadata for image URL)");
                 await ApiRateLimiter.WaitAsync();
                 await FetchGate.WaitAsync();
@@ -394,6 +395,8 @@ public class CardSlot : INotifyPropertyChanged
             if (ImageCacheStore.Cache.TryGetValue(cacheKey, out var cachedBmp)) { ImageSource = cachedBmp; return; }
             if (ImageCacheStore.TryLoadFromDisk(cacheKey, out var diskBmp)) { ImageSource = diskBmp; return; }
             await ApiRateLimiter.WaitAsync();
+            try { BinderViewModel.WithVm(vm => BinderViewModel.SetImageUrlName(imgUrl, Name)); } catch { }
+            BinderViewModel.WithVm(vm => vm.FlashImageFetch(Name));
             var bytes = await client.GetByteArrayAsync(imgUrl);
             try
             {
@@ -466,18 +469,39 @@ public class BinderViewModel : INotifyPropertyChanged
     private string? _currentCollectionDir; // directory of currently loaded collection file
     private string? _localBackImagePath; // cached resolved local back image path (or null if not found)
     private static readonly HttpClient Http = CreateClient();
+    private class HttpLoggingHandler : DelegatingHandler
+    {
+        public HttpLoggingHandler(HttpMessageHandler inner) : base(inner) { }
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var url = request.RequestUri?.ToString() ?? string.Empty;
+            var sw = Stopwatch.StartNew();
+            HttpStart(url);
+            try
+            {
+                var resp = await base.SendAsync(request, cancellationToken);
+                sw.Stop();
+                HttpDone(url, (int)resp.StatusCode, sw.ElapsedMilliseconds);
+                return resp;
+            }
+            catch (Exception)
+            {
+                sw.Stop();
+                HttpDone(url, -1, sw.ElapsedMilliseconds);
+                throw;
+            }
+        }
+    }
     private static HttpClient CreateClient()
     {
-        var handler = new SocketsHttpHandler
+        var sockets = new SocketsHttpHandler
         {
             AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
             PooledConnectionLifetime = TimeSpan.FromMinutes(5)
         };
-        var c = new HttpClient(handler);
-    // User-Agent must be a series of product tokens and optional comments; remove invalid free-form text
-    c.DefaultRequestHeaders.UserAgent.ParseAdd("Enfolderer/0.1");
-    // Optional comment with project URL
-    c.DefaultRequestHeaders.UserAgent.ParseAdd("(+https://github.com/yourrepo)");
+        var c = new HttpClient(new HttpLoggingHandler(sockets));
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("Enfolderer/0.1");
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("(+https://github.com/yourrepo)");
         c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         return c;
     }
@@ -548,6 +572,120 @@ public class BinderViewModel : INotifyPropertyChanged
     private readonly List<Brush> _generatedRandomBinderBrushes = new();
     private readonly Random _rand = new();
 
+    // HTTP instrumentation fields
+    private static int _httpInFlight;
+    private static int _http404;
+    private static int _http500;
+    private static bool _debugHttpLogging = false;
+    private static WeakReference<BinderViewModel>? _instanceRef;
+    private static CancellationTokenSource? _apiFlashCts;
+    private static readonly ConcurrentDictionary<string,string> _imageUrlNameMap = new(StringComparer.OrdinalIgnoreCase);
+    private string _apiStatus = string.Empty; // transient left side text for image/metadata fetch (short form)
+    public string ApiStatus { get => _apiStatus; private set { _apiStatus = value; OnPropertyChanged(); } }
+    private string _httpPanel = string.Empty; // right side combined panel (latest call + counters)
+    public string HttpPanel { get => _httpPanel; private set { _httpPanel = value; OnPropertyChanged(); } }
+    private static readonly object _httpLogLock = new();
+    private static string HttpLogPath => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "http.log");
+    private static void RegisterInstance(BinderViewModel vm) => _instanceRef = new WeakReference<BinderViewModel>(vm);
+    public static void WithVm(Action<BinderViewModel> act) { if (_instanceRef!=null && _instanceRef.TryGetTarget(out var vm)) { try { act(vm); } catch { } } }
+    private static string CountersString() { int error = _http404 + _http500; return $"InFlight={_httpInFlight} Err={error}"; }
+    private string? _currentHttpLabel;
+    private void UpdatePanel(string? latest = null)
+    {
+        var counters = CountersString();
+        if (!string.IsNullOrEmpty(latest))
+        {
+            _currentHttpLabel = latest;
+            HttpPanel = $"{latest}  |  {counters}";
+            // schedule expiration after 2s if no new label arrives
+            var captured = latest;
+            _ = Task.Run(async () => {
+                try { await Task.Delay(2000); } catch { return; }
+                if (captured == _currentHttpLabel) // still the latest
+                {
+                    Application.Current?.Dispatcher?.Invoke(() => {
+                        if (captured == _currentHttpLabel)
+                        {
+                            _currentHttpLabel = null;
+                            HttpPanel = counters = CountersString(); // refresh counters only
+                        }
+                    });
+                }
+            });
+        }
+        else
+        {
+            _currentHttpLabel = null;
+            HttpPanel = counters;
+        }
+    }
+    public void FlashImageFetch(string cardName)
+    {
+        try {
+            _apiFlashCts?.Cancel();
+            var cts = new CancellationTokenSource();
+            _apiFlashCts = cts;
+            Application.Current?.Dispatcher?.Invoke(() => ApiStatus = $"fetching image for {cardName}");
+            _ = Task.Run(async () => { try { await Task.Delay(2000, cts.Token); } catch { return; } if (!cts.IsCancellationRequested) Application.Current?.Dispatcher?.Invoke(() => { if (ReferenceEquals(cts, _apiFlashCts)) ApiStatus = string.Empty; }); });
+        } catch { }
+    }
+    public void FlashMetaUrl(string url)
+    {
+        try {
+            if (string.IsNullOrWhiteSpace(url)) return;
+            _apiFlashCts?.Cancel();
+            var cts = new CancellationTokenSource();
+            _apiFlashCts = cts;
+            Application.Current?.Dispatcher?.Invoke(() => ApiStatus = url);
+            _ = Task.Run(async () => { try { await Task.Delay(2000, cts.Token); } catch { return; } if (!cts.IsCancellationRequested) Application.Current?.Dispatcher?.Invoke(() => { if (ReferenceEquals(cts, _apiFlashCts)) ApiStatus = string.Empty; }); });
+        } catch { }
+    }
+    private void RefreshSummaryIfIdle() { /* no-op now; counters always separate */ }
+    private static void LogHttp(string line)
+    { if (!_debugHttpLogging) return; try { lock(_httpLogLock) { Directory.CreateDirectory(ImageCacheStore.CacheRoot); File.AppendAllText(HttpLogPath, line + Environment.NewLine); } } catch { } }
+    private static void HttpStart(string url)
+    {
+        Interlocked.Increment(ref _httpInFlight);
+        LogHttp($"[{DateTime.UtcNow:O}] REQ {url}");
+        var label = BuildDisplayLabel(url);
+        WithVm(vm => vm.UpdatePanel(latest:label));
+    }
+    private static void HttpDone(string url, int status, long ms)
+    {
+        Interlocked.Decrement(ref _httpInFlight);
+        if (status==404) Interlocked.Increment(ref _http404); else if (status==500) Interlocked.Increment(ref _http500);
+        LogHttp($"[{DateTime.UtcNow:O}] RESP {status} {ms}ms {url}");
+        var label = BuildDisplayLabel(url);
+        WithVm(vm => vm.UpdatePanel(latest:label));
+    }
+    private static string BuildDisplayLabel(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return string.Empty;
+        try
+        {
+            if (url.Contains("/cards/", StringComparison.OrdinalIgnoreCase)) return url; // metadata URL full
+            if (_imageUrlNameMap.TryGetValue(url, out var name)) return $"img: {name}";
+        }
+        catch { }
+        return ShortenUrl(url);
+    }
+    public static void SetImageUrlName(string url, string name)
+    {
+        if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(name)) return;
+        _imageUrlNameMap[url] = name;
+    }
+    private static string ShortenUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return string.Empty;
+        try {
+            // If it's a Scryfall card image URL, reduce to last path segment before query
+            var u = new Uri(url);
+            var last = u.Segments.Length>0 ? u.Segments[^1].Trim('/') : url;
+            if (last.Length>40) last = last[..40];
+            return last;
+        } catch { return url; }
+    }
+
     public ICommand NextCommand { get; }
     public ICommand PrevCommand { get; }
     public ICommand FirstCommand { get; }
@@ -563,6 +701,8 @@ public class BinderViewModel : INotifyPropertyChanged
 
     public BinderViewModel()
     {
+    RegisterInstance(this);
+    if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
     NextCommand = new RelayCommand(_ => { _currentViewIndex++; Refresh(); }, _ => _currentViewIndex < _views.Count - 1);
     PrevCommand = new RelayCommand(_ => { _currentViewIndex--; Refresh(); }, _ => _currentViewIndex > 0);
     FirstCommand = new RelayCommand(_ => { _currentViewIndex = 0; Refresh(); }, _ => _currentViewIndex != 0);
@@ -572,6 +712,7 @@ public class BinderViewModel : INotifyPropertyChanged
     JumpToPageCommand = new RelayCommand(_ => JumpToBinderPage(), _ => CanJumpToBinderPage());
         RebuildViews();
         Refresh();
+    UpdatePanel();
     }
 
     private record PageView(int? LeftPage, int? RightPage, int BinderIndex);
@@ -735,8 +876,9 @@ public class BinderViewModel : INotifyPropertyChanged
             if (!string.IsNullOrEmpty(payload))
             {
                 var parts = payload.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                foreach (var part in parts)
+                foreach (var partRaw in parts)
                 {
+                    var part = partRaw.Trim();
                     if (part.StartsWith("pages=", StringComparison.OrdinalIgnoreCase))
                     {
                         if (int.TryParse(part.Substring(6), out int pages) && pages>0) PagesPerBinder = pages;
@@ -744,6 +886,8 @@ public class BinderViewModel : INotifyPropertyChanged
                     }
                     if (string.Equals(part, "4x3", StringComparison.OrdinalIgnoreCase) || string.Equals(part, "3x3", StringComparison.OrdinalIgnoreCase) || string.Equals(part, "2x2", StringComparison.OrdinalIgnoreCase))
                     { LayoutMode = part.ToLowerInvariant(); continue; }
+                    if (part.Equals("httplog", StringComparison.OrdinalIgnoreCase) || part.Equals("debughttp", StringComparison.OrdinalIgnoreCase))
+                    { _debugHttpLogging = true; continue; }
                     if (TryParseColorToken(part, out var b)) _customBinderBrushes.Add(b);
                 }
             }

@@ -66,16 +66,17 @@ Core rules:
 14. (Optional) First non‑comment line starting with `**` is a binder directive: comma separated tokens specifying:
 		* Layout token: `4x3`, `3x3`, or `2x2`
 		* Pages per binder: `pages=40` (any positive integer)
-		* Color names or hex codes (WPF `ColorConverter` names or 6‑digit hex without `#`) used sequentially for binder covers after Binder 1 (which is always black). Example:
-			`** 4x3, pages=50, Crimson, 0044AA, DarkGoldenrod`
+		* HTTP debug logging flag: `httplog` (or `debughttp`) to emit a rolling `http.log` in cache root with each request/response (+ duration & status). (Environment override also: set `ENFOLDERER_HTTP_DEBUG=1`).
+		* Color names or hex codes (WPF `ColorConverter` names or 6‑digit hex without `#`) used sequentially for binder covers. Example:
+			`** 4x3, pages=50, httplog, Crimson, 0044AA, DarkGoldenrod`
 		Remaining binders beyond the explicit list get randomly generated colors.
 
 Order is preserved except normal singles may be internally shifted forward to satisfy pair alignment; backface placeholders and their relative positions act as ordering barriers.
 
 Example:
 ```
-# Binder directive: 3x3 layout, 36 pages per binder, two fixed colors then random
-** 3x3,pages=36,Firebrick,2E8B57
+# Binder directive: 3x3 layout, 36 pages per binder, enable HTTP logging, two fixed colors then random
+** 3x3,pages=36,httplog,Firebrick,2E8B57
 
 # Strixhaven Mystical Archive (STA) + Tokens
 =STA
