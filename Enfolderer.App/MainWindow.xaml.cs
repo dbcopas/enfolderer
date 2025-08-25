@@ -432,9 +432,31 @@ public class CardSlot : INotifyPropertyChanged
 
 public class BinderViewModel : INotifyPropertyChanged
 {
-    private const int SlotsPerPage = 12; // 4x3
-    // Binder has 20 physical (double-sided) pages => 40 numbered sides (pages) we display
-    private const int PagesPerBinder = 40; // numbered sides per binder
+    // Dynamic layout configuration (default 4x3, 40 sides per binder)
+    private int _rowsPerPage = 3;
+    private int _columnsPerPage = 4;
+    public int RowsPerPage { get => _rowsPerPage; set { if (value>0 && value!=_rowsPerPage) { _rowsPerPage = value; OnPropertyChanged(); RecomputeAfterLayoutChange(); } } }
+    public int ColumnsPerPage { get => _columnsPerPage; set { if (value>0 && value!=_columnsPerPage) { _columnsPerPage = value; OnPropertyChanged(); RecomputeAfterLayoutChange(); } } }
+    public int SlotsPerPage => RowsPerPage * ColumnsPerPage;
+    private int _pagesPerBinder = 40; // displayed sides per binder (not physical sheets)
+    public int PagesPerBinder { get => _pagesPerBinder; set { if (value>0 && value!=_pagesPerBinder) { _pagesPerBinder = value; OnPropertyChanged(); RebuildViews(); Refresh(); } } }
+    private string _layoutMode = "4x3"; // UI selection token
+    public string LayoutMode { get => _layoutMode; set { if (!string.Equals(_layoutMode, value, StringComparison.OrdinalIgnoreCase)) { _layoutMode = value; OnPropertyChanged(); ApplyLayoutModeToken(); } } }
+    private void ApplyLayoutModeToken()
+    {
+        switch (_layoutMode.ToLowerInvariant())
+        {
+            case "3x3": RowsPerPage = 3; ColumnsPerPage = 3; break;
+            case "2x2": RowsPerPage = 2; ColumnsPerPage = 2; break;
+            default: RowsPerPage = 3; ColumnsPerPage = 4; _layoutMode = "4x3"; OnPropertyChanged(nameof(LayoutMode)); break;
+        }
+    }
+    private void RecomputeAfterLayoutChange()
+    {
+        BuildOrderedFaces();
+        RebuildViews();
+        Refresh();
+    }
     private readonly List<CardEntry> _cards = new();
     private readonly List<CardEntry> _orderedFaces = new(); // reordered faces honoring placement constraints
     private readonly List<CardSpec> _specs = new(); // raw specs in file order
@@ -522,6 +544,9 @@ public class BinderViewModel : INotifyPropertyChanged
 
     private Brush _binderBackground = Brushes.Black;
     public Brush BinderBackground { get => _binderBackground; private set { _binderBackground = value; OnPropertyChanged(); } }
+    private readonly List<Brush> _customBinderBrushes = new();
+    private readonly List<Brush> _generatedRandomBinderBrushes = new();
+    private readonly Random _rand = new();
 
     public ICommand NextCommand { get; }
     public ICommand PrevCommand { get; }
@@ -555,7 +580,7 @@ public class BinderViewModel : INotifyPropertyChanged
     {
         _views.Clear();
         // total pages needed based on card faces
-    int totalFaces = _orderedFaces.Count;
+        int totalFaces = _orderedFaces.Count;
         int totalPages = (int)Math.Ceiling(totalFaces / (double)SlotsPerPage);
         if (totalPages == 0) totalPages = 1; // at least one page even if empty
         int remaining = totalPages;
@@ -696,6 +721,36 @@ public class BinderViewModel : INotifyPropertyChanged
     _currentCollectionDir = System.IO.Path.GetDirectoryName(path);
     _localBackImagePath = null; // reset; will lazily resolve when first placeholder encountered
     var lines = await File.ReadAllLinesAsync(path);
+    // Directive: first non-comment line starting with ** can specify colors/layout/pages
+    _customBinderBrushes.Clear();
+    _generatedRandomBinderBrushes.Clear();
+    foreach (var dirLine in lines)
+    {
+        if (string.IsNullOrWhiteSpace(dirLine)) continue;
+        var tl = dirLine.Trim();
+        if (tl.StartsWith('#')) continue;
+        if (tl.StartsWith("**"))
+        {
+            var payload = tl.Substring(2).Trim();
+            if (!string.IsNullOrEmpty(payload))
+            {
+                var parts = payload.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                foreach (var part in parts)
+                {
+                    if (part.StartsWith("pages=", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (int.TryParse(part.Substring(6), out int pages) && pages>0) PagesPerBinder = pages;
+                        continue;
+                    }
+                    if (string.Equals(part, "4x3", StringComparison.OrdinalIgnoreCase) || string.Equals(part, "3x3", StringComparison.OrdinalIgnoreCase) || string.Equals(part, "2x2", StringComparison.OrdinalIgnoreCase))
+                    { LayoutMode = part.ToLowerInvariant(); continue; }
+                    if (TryParseColorToken(part, out var b)) _customBinderBrushes.Add(b);
+                }
+            }
+            break; // processed directive (only first considered)
+        }
+        break; // first non-comment line not directive stops search
+    }
     // Compute hash of input file contents for metadata/image cache lookup
     string fileHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", lines))));
     _currentFileHash = fileHash;
@@ -737,6 +792,7 @@ public class BinderViewModel : INotifyPropertyChanged
         {
             if (string.IsNullOrWhiteSpace(raw)) continue;
             var line = raw.Trim();
+            if (line.StartsWith("**")) continue; // skip directive line completely
             if (line.StartsWith('#')) continue;
             // Backface placeholder syntax: "N;backface" => insert N placeholder slots showing MTG card back
             var backfaceMatch = Regex.Match(line, @"^(?<count>\d+)\s*;\s*backface$", RegexOptions.IgnoreCase);
@@ -1388,12 +1444,19 @@ public class BinderViewModel : INotifyPropertyChanged
     {
         _orderedFaces.Clear();
         if (_cards.Count == 0) return;
+        // In 3x3 layout we disable pair grouping (MFC adjacency + duplicate-name pairing) and
+        // preserve the natural sequence (front then back already injected during load).
+        if (string.Equals(LayoutMode, "3x3", StringComparison.OrdinalIgnoreCase))
+        {
+            _orderedFaces.AddRange(_cards);
+            return;
+        }
         // Work on a queue (list) of indices; we will remove as we schedule.
         var remaining = new List<CardEntry>(_cards); // copy
         int globalSlot = 0;
         while (remaining.Count > 0)
         {
-            int col = (globalSlot % SlotsPerPage) % 4; // 0..3 within row
+            int col = (globalSlot % SlotsPerPage) % ColumnsPerPage; // column within current row
 
             bool IsPairStart(List<CardEntry> list, int idx)
             {
@@ -1457,8 +1520,8 @@ public class BinderViewModel : INotifyPropertyChanged
             if (IsPairStart(remaining, 0)) groupSize = 2; else groupSize = 1;
             if (groupSize == 2)
             {
-                // Need to start pair at even column (0 or 2). Column 3 cannot host first half of a pair.
-                if (col == 1 || col == 3)
+                // Need to start pair at an even column. Last column cannot host first half of a pair.
+                if (col % 2 == 1 || col == ColumnsPerPage -1)
                 {
                     // Find first true single later (not part of any pair front or back, nor second half)
                     int singleIndex = -1;
@@ -1558,12 +1621,25 @@ public class BinderViewModel : INotifyPropertyChanged
 
     private void UpdateBinderBackground(int binderNumber)
     {
-        // Binder 1 black, then cycle rainbow: red, orange, yellow, green, blue, indigo, violet
-        if (binderNumber <= 1) { BinderBackground = Brushes.Black; return; }
-        var colors = new[] { Colors.Red, Color.FromRgb(255,140,0), Colors.Yellow, Colors.Green, Colors.Blue, Color.FromRgb(75,0,130), Color.FromRgb(138,43,226) };
-        int idx = (binderNumber - 2) % colors.Length;
-        var c = colors[idx];
-        // Create a gradient to mimic colored cover with dark interior edges
+        // Binder numbering starts at 1; we no longer force binder 1 to black.
+        int idx = binderNumber - 1; // zero-based index into custom/random sequence
+        Brush baseBrush;
+        if (idx < _customBinderBrushes.Count)
+        {
+            baseBrush = _customBinderBrushes[idx];
+        }
+        else
+        {
+            int needed = idx - _customBinderBrushes.Count;
+            while (_generatedRandomBinderBrushes.Count <= needed)
+            {
+                var col = Color.FromRgb((byte)_rand.Next(48,256), (byte)_rand.Next(48,256), (byte)_rand.Next(48,256));
+                _generatedRandomBinderBrushes.Add(new SolidColorBrush(col));
+            }
+            baseBrush = _generatedRandomBinderBrushes[needed];
+        }
+        var solid = baseBrush as SolidColorBrush;
+        var c = solid?.Color ?? Colors.Gray;
         var brush = new LinearGradientBrush();
         brush.StartPoint = new Point(0,0);
         brush.EndPoint = new Point(1,1);
@@ -1595,6 +1671,41 @@ public class BinderViewModel : INotifyPropertyChanged
             }
         }
         _ = Task.WhenAll(tasks);
+    }
+
+    private bool TryParseColorToken(string token, out Brush brush)
+    {
+        brush = Brushes.Transparent;
+        if (string.IsNullOrWhiteSpace(token)) return false;
+        token = token.Trim();
+        // Try known colors via ColorConverter
+        try
+        {
+            var obj = ColorConverter.ConvertFromString(token);
+            if (obj is Color col)
+            {
+                var solid = new SolidColorBrush(col);
+                if (solid.CanFreeze) solid.Freeze();
+                brush = solid;
+                return true;
+            }
+        }
+        catch { }
+        // Hex shorthand without #
+        if (Regex.IsMatch(token, "^[0-9A-Fa-f]{6}$"))
+        {
+            try
+            {
+                byte r = Convert.ToByte(token.Substring(0,2),16);
+                byte g = Convert.ToByte(token.Substring(2,2),16);
+                byte b = Convert.ToByte(token.Substring(4,2),16);
+                var solid = new SolidColorBrush(Color.FromRgb(r,g,b));
+                if (solid.CanFreeze) solid.Freeze();
+                brush = solid;
+                return true;
+            } catch { }
+        }
+        return false;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

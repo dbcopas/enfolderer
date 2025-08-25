@@ -1,6 +1,6 @@
 # Enfolderer MTG Binder
 
-WPF application for visualizing a Magic: The Gathering collection in virtual quad binders (4×3 = 12 slots per page). Each physical binder = 20 double‑sided pages (40 displayed sides). The app auto‑adds binders as your list grows beyond the 480 face capacity of one binder.
+WPF application for visualizing a Magic: The Gathering collection in virtual binders. Layout is now dynamic (4×3 / 3×3 / 2×2 selectable) and pages‑per‑binder is configurable (default 40 displayed sides / 20 physical sheets). The app auto‑adds binders as your list grows.
 
 Physical pagination is emulated:
 * Page 1: single right page (front cover opened)
@@ -9,6 +9,9 @@ Physical pagination is emulated:
 
 ## Key Features (Current)
 * Unlimited binders with correct cover / spread pagination
+* Dynamic page geometry: choose 4x3 (12 slots), 3x3 (9), or 2x2 (4) at runtime (toolbar)
+* Configurable pages per binder (sides) at runtime or via directive
+* Custom binder color sequence via leading file directive (see below) with random continuation afterwards
 * Deterministic global ordering with adjacency & alignment constraints
 	* Physical two‑sided (transform / modal_dfc / battle etc.) cards auto‑inject synthetic back immediately after the front
 	* Duplicate consecutive names treated as a pair
@@ -60,11 +63,20 @@ Core rules:
 11. Backface placeholders: `N;backface` (e.g. `5;backface`) creates N card-back slots, never reordered.
 12. Comments: lines starting with `#`
 13. Blank lines: ignored
+14. (Optional) First non‑comment line starting with `**` is a binder directive: comma separated tokens specifying:
+		* Layout token: `4x3`, `3x3`, or `2x2`
+		* Pages per binder: `pages=40` (any positive integer)
+		* Color names or hex codes (WPF `ColorConverter` names or 6‑digit hex without `#`) used sequentially for binder covers after Binder 1 (which is always black). Example:
+			`** 4x3, pages=50, Crimson, 0044AA, DarkGoldenrod`
+		Remaining binders beyond the explicit list get randomly generated colors.
 
 Order is preserved except normal singles may be internally shifted forward to satisfy pair alignment; backface placeholders and their relative positions act as ordering barriers.
 
 Example:
 ```
+# Binder directive: 3x3 layout, 36 pages per binder, two fixed colors then random
+** 3x3,pages=36,Firebrick,2E8B57
+
 # Strixhaven Mystical Archive (STA) + Tokens
 =STA
 1-10
@@ -128,6 +140,7 @@ Toolbar / UI offers:
 * First / Prev / Next / Last
 * Prev Binder / Next Binder
 * Jump to Binder + Page (1‑based)
+* Layout selector + live pages/binder field (updates pagination immediately)
 Page label displays binder number and local page numbers (covers annotated).
 
 ## Image Fetching & Card Back Placeholders
