@@ -465,6 +465,10 @@ public class BinderViewModel : INotifyPropertyChanged
     private readonly List<CardSpec> _specs = new(); // raw specs in file order
     private readonly ConcurrentDictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
     private readonly List<PageView> _views = new(); // sequence of display views across all binders
+    // Explicit pair keys (e.g. base number + language variant) -> enforced pair placement regardless of name differences
+    private readonly Dictionary<CardEntry,string> _explicitPairKeys = new();
+    // Pending variant pairs captured during parse before resolution (set, baseNumber, variantNumber)
+    private readonly List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs = new();
     private int _currentViewIndex = 0;
     private string? _currentCollectionDir; // directory of currently loaded collection file
     private string? _localBackImagePath; // cached resolved local back image path (or null if not found)
@@ -1252,6 +1256,8 @@ public class BinderViewModel : INotifyPropertyChanged
                 var variantDisplay = baseNum + " (" + seg + ")"; // show language in display number
                 _specs.Add(new CardSpec(currentSet, variantNumber, nameOverride, false, variantDisplay));
                 fetchList.Add((currentSet, variantNumber, nameOverride, _specs.Count-1));
+                // Record explicit pair key (set+baseNum) used later after resolution to enforce pairing
+                try { _pendingExplicitVariantPairs.Add((currentSet, baseNum, variantNumber)); } catch { }
                 continue;
             }
             // Single number
@@ -1476,6 +1482,7 @@ public class BinderViewModel : INotifyPropertyChanged
     private void RebuildCardListFromSpecs()
     {
         _cards.Clear();
+        _explicitPairKeys.Clear();
         for (int i=0;i<_specs.Count;i++)
         {
             var s = _specs[i];
@@ -1486,6 +1493,18 @@ public class BinderViewModel : INotifyPropertyChanged
                 if (s.numberDisplayOverride != null && resolved.DisplayNumber != s.numberDisplayOverride)
                     resolved = resolved with { DisplayNumber = s.numberDisplayOverride };
                 _cards.Add(resolved);
+                // After adding card, if it matches a pending variant pair, map base+variant to same pair key
+                try
+                {
+                    foreach (var pending in _pendingExplicitVariantPairs)
+                    {
+                        if (!string.Equals(pending.set, resolved.Set, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (string.Equals(resolved.Number, pending.baseNum, StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Locate variant entry if already added later; handled after loop as well
+                        }
+                    }
+                } catch { }
             }
             else
             {
@@ -1495,6 +1514,18 @@ public class BinderViewModel : INotifyPropertyChanged
             }
             if (_mfcBacks.TryGetValue(i, out var back))
                 _cards.Add(back);
+        }
+        // Build explicit pair key map now that all resolved/placeholder entries exist
+        foreach (var tup in _pendingExplicitVariantPairs)
+        {
+            CardEntry? baseEntry = _cards.FirstOrDefault(c => string.Equals(c.Set, tup.set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number, tup.baseNum, StringComparison.OrdinalIgnoreCase));
+            CardEntry? varEntry = _cards.FirstOrDefault(c => string.Equals(c.Set, tup.set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number, tup.variantNum, StringComparison.OrdinalIgnoreCase));
+            if (baseEntry != null && varEntry != null)
+            {
+                string key = $"{tup.set.ToLowerInvariant()}|{tup.baseNum.ToLowerInvariant()}|{tup.variantNum.ToLowerInvariant()}";
+                _explicitPairKeys[baseEntry] = key;
+                _explicitPairKeys[varEntry] = key;
+            }
         }
     }
 
@@ -1662,7 +1693,19 @@ public class BinderViewModel : INotifyPropertyChanged
                     var next = list[idx + 1];
                     if (next != null && next.IsBackFace) return true;
                 }
-                // Duplicate pair
+                // Explicit variant pair (base + language variant) irrespective of name match
+                if (_explicitPairKeys.Count > 0)
+                {
+                    if (idx + 1 < list.Count && c != null && _explicitPairKeys.TryGetValue(c, out var key1))
+                    {
+                        var n2 = list[idx + 1];
+                        if (n2 != null && _explicitPairKeys.TryGetValue(n2, out var key2) && key1 == key2)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                // Duplicate pair (exactly two identical names, excluding long runs)
                 if (!c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
                 {
                     var n = list[idx + 1];
@@ -1707,9 +1750,16 @@ public class BinderViewModel : INotifyPropertyChanged
                 }
                 // MFC back face is inherently second
                 if (c.IsBackFace) return true;
-                // Duplicate second if previous + this form pair
+                // Explicit variant pair second
+                if (_explicitPairKeys.Count > 0)
+                {
+                    var prevExp = list[idx - 1];
+                    if (prevExp != null && c != null && _explicitPairKeys.TryGetValue(prevExp, out var pk1) && _explicitPairKeys.TryGetValue(c, out var pk2) && pk1 == pk2)
+                        return true;
+                }
+                // Duplicate second if previous + this form a standard duplicate-name pair
                 var prev = list[idx - 1];
-                if (prev != null && !prev.IsModalDoubleFaced && !prev.IsBackFace && !c.IsModalDoubleFaced && !c.IsBackFace)
+                if (prev != null && c != null && !prev.IsModalDoubleFaced && !prev.IsBackFace && !c.IsModalDoubleFaced && !c.IsBackFace)
                 {
                     bool IsBackPlaceholder(CardEntry ce) => string.Equals(ce.Number, "BACK", StringComparison.OrdinalIgnoreCase);
                     bool IsNazgul(CardEntry ce) => string.Equals(ce.Name?.Trim(), "Nazgûl", StringComparison.OrdinalIgnoreCase);
