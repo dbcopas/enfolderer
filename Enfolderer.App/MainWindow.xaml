@@ -45,12 +45,20 @@
             </MenuItem>
         </Menu>
         <StatusBar DockPanel.Dock="Bottom">
+            <!-- Primary status (metadata resolving / all metadata loaded) -->
+            <StatusBarItem>
+                <TextBlock Text="{Binding Status}" />
+            </StatusBarItem>
+            <!-- Current page indicator -->
+            <StatusBarItem>
+                <TextBlock Text="{Binding PageDisplay}" />
+            </StatusBarItem>
+            <!-- Transient image / metadata fetch flash placed AFTER page to avoid left edge jumping -->
             <StatusBarItem>
                 <TextBlock Text="{Binding ApiStatus}" />
             </StatusBarItem>
-            <StatusBarItem Content="{Binding Status}" />
-            <StatusBarItem Content="{Binding PageDisplay}" />
             <Separator />
+            <!-- HTTP panel (latest call + counters) right-aligned -->
             <StatusBarItem HorizontalAlignment="Right">
                 <TextBlock Text="{Binding HttpPanel}" TextAlignment="Right" />
             </StatusBarItem>
