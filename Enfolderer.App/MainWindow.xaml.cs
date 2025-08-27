@@ -1595,6 +1595,33 @@ public class BinderViewModel : INotifyPropertyChanged
             _orderedFaces.AddRange(_cards);
             return;
         }
+        // Precompute cards that belong to duplicate name runs of length >=3 so we disable forced pairing for them.
+        var longRunCards = new HashSet<CardEntry>();
+        int iRun = 0;
+        while (iRun < _cards.Count)
+        {
+            var c = _cards[iRun];
+            if (c != null && !c.IsModalDoubleFaced && !c.IsBackFace)
+            {
+                string name = (c.Name ?? string.Empty).Trim();
+                int j = iRun + 1;
+                while (j < _cards.Count)
+                {
+                    var n = _cards[j];
+                    if (n == null || n.IsModalDoubleFaced || n.IsBackFace) break;
+                    if (!string.Equals(name, (n.Name ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)) break;
+                    j++;
+                }
+                int runLen = j - iRun;
+                if (runLen >= 3)
+                {
+                    for (int k = iRun; k < j; k++) longRunCards.Add(_cards[k]);
+                }
+                iRun = j;
+                continue;
+            }
+            iRun++;
+        }
         // Work on a queue (list) of indices; we will remove as we schedule.
         var remaining = new List<CardEntry>(_cards); // copy
         int globalSlot = 0;
@@ -1631,7 +1658,23 @@ public class BinderViewModel : INotifyPropertyChanged
             if (IsNazgul(c) && IsNazgul(n)) return false;
                         var cName = c.Name ?? string.Empty;
                         var nName = n.Name ?? string.Empty;
-                        if (string.Equals(cName.Trim(), nName.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+                        if (string.Equals(cName.Trim(), nName.Trim(), StringComparison.OrdinalIgnoreCase))
+                        {
+                            // If either card is in a long run (>=3), do not treat as a pair
+                            if (longRunCards.Contains(c) || longRunCards.Contains(n)) return false;
+                            // Check if there is a third consecutive with same name; if so, treat all as singles
+                            if (idx + 2 < list.Count)
+                            {
+                                var third = list[idx + 2];
+                                if (third != null && !third.IsModalDoubleFaced && !third.IsBackFace)
+                                {
+                                    var tName = third.Name ?? string.Empty;
+                                    if (string.Equals(cName.Trim(), tName.Trim(), StringComparison.OrdinalIgnoreCase))
+                                        return false; // 3+ run -> no enforced pairing
+                                }
+                            }
+                            return true; // exactly two
+                        }
                     }
                 }
                 return false;
@@ -1660,7 +1703,16 @@ public class BinderViewModel : INotifyPropertyChanged
                     if (IsNazgul(prev) && IsNazgul(c)) return false;
                     var prevName = prev.Name ?? string.Empty;
                     var cName = c.Name ?? string.Empty;
-                    if (string.Equals(prevName.Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase)) return true;
+                    if (string.Equals(prevName.Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        // If either card belongs to a long run (>=3), skip pairing logic.
+                        if (longRunCards.Contains(prev) || longRunCards.Contains(c)) return false;
+                        // Ensure not part of a 3+ run: if previous-previous shares name or next shares name, skip
+                        bool hasPrevPrev = idx - 2 >= 0 && list[idx - 2] != null && !list[idx - 2].IsModalDoubleFaced && !list[idx - 2].IsBackFace && string.Equals((list[idx-2].Name??string.Empty).Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase);
+                        bool hasNext = idx + 1 < list.Count && list[idx + 1] != null && !list[idx + 1].IsModalDoubleFaced && !list[idx + 1].IsBackFace && string.Equals((list[idx+1].Name??string.Empty).Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase);
+                        if (hasPrevPrev || hasNext) return false; // part of 3+ run => not a strict second
+                        return true; // exactly a second of a 2-run
+                    }
                 }
                 return false;
             }
