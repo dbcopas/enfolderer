@@ -66,14 +66,15 @@ Treasure;Token;2
 GR 1-8
 RA 1-8
 WS 1-8
-# Big score
-=BIG
-31-60
-66-95
+
 # Stellar Sights
 =EOS
 1-45||46-90
+
 # Multiverse Legends
 =MUL
 1-65&&131-195
 
+# Final Fantasy Through the Ages
+=FCA
+1-64
