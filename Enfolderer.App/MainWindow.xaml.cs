@@ -343,7 +343,7 @@ public class CardSlot : INotifyPropertyChanged
             if (string.IsNullOrEmpty(imgUrl))
             {
                 // Fetch metadata once to populate image URLs
-                var apiUrl = $"https://api.scryfall.com/cards/{setCode.ToLowerInvariant()}/{Uri.EscapeDataString(number)}";
+                var apiUrl = ScryfallUrlHelper.BuildCardApiUrl(setCode, number);
                 BinderViewModel.WithVm(vm => vm.FlashMetaUrl(apiUrl));
                 Debug.WriteLine($"[CardSlot] API fetch {apiUrl} face={faceIndex} (metadata for image URL)");
                 await ApiRateLimiter.WaitAsync();
@@ -1238,6 +1238,22 @@ public class BinderViewModel : INotifyPropertyChanged
                 }
                 continue;
             }
+            // Variant language/extra path segment syntax: N+xx => two entries: N and N/xx (API path segment variant)
+            var plusVariantMatch = Regex.Match(numberPart, @"^(?<base>[A-Za-z0-9]+)\+(?<seg>[A-Za-z]{1,8})$", RegexOptions.Compiled);
+            if (plusVariantMatch.Success)
+            {
+                var baseNum = plusVariantMatch.Groups["base"].Value;
+                var seg = plusVariantMatch.Groups["seg"].Value.ToLowerInvariant();
+                // Base printing
+                _specs.Add(new CardSpec(currentSet, baseNum, nameOverride, false));
+                fetchList.Add((currentSet, baseNum, nameOverride, _specs.Count-1));
+                // Variant printing uses extra path segment (e.g. 804/ja)
+                var variantNumber = baseNum + "/" + seg;
+                var variantDisplay = baseNum + " (" + seg + ")"; // show language in display number
+                _specs.Add(new CardSpec(currentSet, variantNumber, nameOverride, false, variantDisplay));
+                fetchList.Add((currentSet, variantNumber, nameOverride, _specs.Count-1));
+                continue;
+            }
             // Single number
             var num = numberPart.Trim();
             if (num.Length>0)
@@ -1492,7 +1508,7 @@ public class BinderViewModel : INotifyPropertyChanged
         try
         {
             await ApiRateLimiter.WaitAsync();
-            var url = $"https://api.scryfall.com/cards/{setCode.ToLowerInvariant()}/{Uri.EscapeDataString(number)}";
+            var url = ScryfallUrlHelper.BuildCardApiUrl(setCode, number);
             var resp = await Http.GetAsync(url);
             if (!resp.IsSuccessStatusCode) return null;
             await using var stream = await resp.Content.ReadAsStreamAsync();
@@ -1981,5 +1997,18 @@ public class RelayCommand : ICommand
     {
         add => CommandManager.RequerySuggested += value;
         remove => CommandManager.RequerySuggested -= value;
+    }
+}
+
+internal static class ScryfallUrlHelper
+{
+    public static string BuildCardApiUrl(string setCode, string number)
+    {
+        if (string.IsNullOrWhiteSpace(setCode)) return string.Empty;
+        setCode = setCode.ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(number)) return $"https://api.scryfall.com/cards/{setCode}";
+        var segments = number.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                             .Select(s => Uri.EscapeDataString(s));
+        return $"https://api.scryfall.com/cards/{setCode}/" + string.Join('/', segments);
     }
 }

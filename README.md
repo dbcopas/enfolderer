@@ -14,7 +14,7 @@ Physical pagination is emulated:
 * Custom binder color sequence via leading file directive (see below) with random continuation afterwards
 * Deterministic global ordering with adjacency & alignment constraints
 	* Physical two‑sided (transform / modal_dfc / battle etc.) cards auto‑inject synthetic back immediately after the front
-	* Duplicate consecutive names treated as a pair
+	* Exactly two consecutive identical names are treated as a pair (runs of 3+ identical names are NOT forced into pairs and remain independent singles)
 	* Pairs start only at columns 0 or 2 (never split across rows)
 	* Ordinary singles may be pulled forward to fix misalignment (backface placeholders act as hard barriers and are never moved)
 * Rich declarative input format (set sections + powerful collector number expressions)
@@ -23,6 +23,7 @@ Physical pagination is emulated:
 	* Interleaving of multiple sequences with `||`
 	* Generalized prefixes (attached or spaced) and suffixes (e.g. `J1-5`, `2024-07`, `2J-b`, `5J-b`, `ABC 01-03`)
 	* Star syntax (`★1-36` => `1★..36★`, or `★12` => `12★`)
+	* Variant / translation shortcut: `N+lang` (e.g. `804+ja`) expands to two slots: base `N` and language variant fetched via `N/lang` (API path extra segment). Variant slot shows display number `N (lang)`.
 	* Backface placeholders: `N;backface` injects N binder back slots using a local / fallback card back image
 	* Explicit custom entries using `Name;SET;Number` (bypasses API)
 	* Name overrides via `Number;Custom Name`
@@ -64,6 +65,7 @@ Core rules:
 12. Comments: lines starting with `#`
 13. Blank lines: ignored
 14. (Optional) First non‑comment line starting with `**` is a binder directive: comma separated tokens specifying:
+15. Variant / translation shortcut: `N+lang` (letters 1‑8). Produces two entries: canonical `N` and variant `N/lang`. The variant's display number is `N (lang)` while API metadata is fetched from `https://api.scryfall.com/cards/SET/N/lang`.
 		* Layout token: `4x3`, `3x3`, or `2x2`
 		* Pages per binder: `pages=40` (any positive integer)
 		* HTTP debug logging flag: `httplog` (or `debughttp`) to emit a rolling `http.log` in cache root with each request/response (+ duration & status). (Environment override also: set `ENFOLDERER_HTTP_DEBUG=1`).
@@ -112,7 +114,7 @@ Legacy CSV style (Name;Number;Set) is still parsed by the older loader, but the 
 
 ### Adjacency & Layout Rules
 * Physical two‑sided (transform / modal_dfc / battle / etc.) fronts + synthetic backs form a locked pair.
-* Consecutive identical names form a pair.
+* Exactly two consecutive identical names form a pair. Sequences of 3 or more identical names are left as separate singles (no enforced pairing) to preserve natural run ordering.
 * Pair start columns: 0 or 2 only (ensures each pair lives fully inside a row).
 * Singles may be advanced to repair alignment (never leap over placeholder backfaces).
 * Backface placeholders (`N;backface`) are immovable barriers.
