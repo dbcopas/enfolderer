@@ -1821,8 +1821,7 @@ public class BinderViewModel : INotifyPropertyChanged
                     {
                         var cand = remaining[i];
                         bool isBackPlaceholder = string.Equals(cand.Number, "BACK", StringComparison.OrdinalIgnoreCase);
-                        // Backface placeholder acts as barrier: stop searching beyond this point so we don't reorder across it
-                        if (isBackPlaceholder) break;
+                        if (isBackPlaceholder) continue; // skip placeholder itself but keep searching beyond it
                         if (!IsPairStart(remaining, i) && !IsSecondOfPair(remaining, i) && !cand.IsBackFace)
                         {
                             singleIndex = i;
