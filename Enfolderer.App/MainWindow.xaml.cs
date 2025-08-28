@@ -1227,6 +1227,30 @@ public class BinderViewModel : INotifyPropertyChanged
                     }
                 }
             }
+            // Range with language variant syntax: N-M+lang => for each number k in [N,M] add k and k/lang variant
+            var rangeVariantMatch = Regex.Match(numberPart, @"^(?<start>\d+)-(?:)(?<end>\d+)\+(?<lang>[A-Za-z]{1,8})$", RegexOptions.Compiled);
+            if (rangeVariantMatch.Success)
+            {
+                var startStr = rangeVariantMatch.Groups["start"].Value;
+                var endStr = rangeVariantMatch.Groups["end"].Value;
+                var lang = rangeVariantMatch.Groups["lang"].Value.ToLowerInvariant();
+                if (int.TryParse(startStr, out int rs) && int.TryParse(endStr, out int re) && rs <= re)
+                {
+                    int padWidth = (startStr.StartsWith('0') && startStr.Length == endStr.Length) ? startStr.Length : 0;
+                    for (int k = rs; k <= re; k++)
+                    {
+                        var baseNum = padWidth>0 ? k.ToString().PadLeft(padWidth,'0') : k.ToString();
+                        _specs.Add(new CardSpec(currentSet, baseNum, nameOverride, false));
+                        fetchList.Add((currentSet, baseNum, nameOverride, _specs.Count-1));
+                        var variantNumber = baseNum + "/" + lang;
+                        var variantDisplay = baseNum + " (" + lang + ")";
+                        _specs.Add(new CardSpec(currentSet, variantNumber, nameOverride, false, variantDisplay));
+                        fetchList.Add((currentSet, variantNumber, nameOverride, _specs.Count-1));
+                        try { _pendingExplicitVariantPairs.Add((currentSet, baseNum, variantNumber)); } catch { }
+                    }
+                    continue;
+                }
+            }
             if (numberPart.Contains('-', StringComparison.Ordinal))
             {
                 var pieces = numberPart.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
