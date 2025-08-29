@@ -19,6 +19,14 @@ public sealed class CardCollectionData
 {
     public Dictionary<(string set,string collector),(int cardId,int? gatherer)> MainIndex { get; } = new(StringTupleComparer.OrdinalIgnoreCase);
     public Dictionary<(string set,string collector), int> Quantities { get; } = new(StringTupleComparer.OrdinalIgnoreCase);
+    // Variant quantities keyed by (set, baseCollectorNumber, modifier) retaining non-token modifiers
+    public Dictionary<(string set,string collector,string modifier), int> VariantQuantities { get; } = new(StringVariantTupleComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string,string[]> ModifierSynonyms = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "JP", new[]{ "jp","jpn","ja","japanese" } },
+    { "JPN", new[]{ "jpn","jp","ja","japanese" } },
+    { "ART JP", new[]{ "art jp","artjp","alt jp","jp art","jp alt","jp-art","art-jp" } }
+    };
 
     private string? _loadedFolder;
 
@@ -33,8 +41,10 @@ public sealed class CardCollectionData
         string collectionPath = Path.Combine(folder, "mtgstudio.collection");
         if (!File.Exists(mainDbPath) || !File.Exists(collectionPath)) return; // silently ignore if either missing
 
-        MainIndex.Clear();
-        Quantities.Clear();
+    MainIndex.Clear();
+    Quantities.Clear();
+    VariantQuantities.Clear();
+    _cardRows.Clear();
 
         // 1. Load main card index
         var reverse = new Dictionary<int, List<(string set,string collector)>>();
@@ -120,6 +130,15 @@ public sealed class CardCollectionData
                     string collectorTrim = (!keepModifier || string.IsNullOrEmpty(modifier)) ? trimmed : trimmed + modifier;
                     AddIndexEntry(set, collectorTrim, cardId, gatherer, reverse, allowOverwrite:false);
                 }
+                // Record full row including non-token modifier for later variant quantity lookup
+                if (!_cardRows.ContainsKey(cardId))
+                {
+                    _cardRows[cardId] = (set.ToLowerInvariant(), baseKey, modifier); // store baseKey (normalized) + raw modifier
+                }
+                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1" && string.Equals(set, "WAR", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(modifier))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Collection][ROW] WAR card row cardId={cardId} baseKey={baseKey} modifier={modifier}");
+                }
                 if (cardId == 71099)
                 {
                     System.Diagnostics.Debug.WriteLine($"[Collection][DEBUG] CardId 71099 set={set} baseKey={baseKey} modifier={modifier} keepModifier={keepModifier} insertedKeys: {collectorPrimary}{(trimmed!=baseKey?", "+collectorTrimIfDifferent(baseKey, trimmed, keepModifier, modifier):string.Empty)}");
@@ -157,7 +176,8 @@ public sealed class CardCollectionData
             else
             {
                 using var cmd = con.CreateCommand();
-                cmd.CommandText = $"SELECT {qtyCardIdCol} AS CardId, {qtyCol} AS Qty FROM CollectionCards WHERE {qtyCol} > 0";
+                // Pull all rows (including Qty=0) so variant entries with zero can be recognized explicitly.
+                cmd.CommandText = $"SELECT {qtyCardIdCol} AS CardId, {qtyCol} AS Qty FROM CollectionCards";
                 using var r = cmd.ExecuteReader();
                 int ordCardId = r.GetOrdinal("CardId");
                 int ordQty = r.GetOrdinal("Qty");
@@ -165,11 +185,13 @@ public sealed class CardCollectionData
                 {
                     int? cardId = SafeGetInt(r, ordCardId);
                     int? qty = SafeGetInt(r, ordQty);
-                    if (cardId == null || qty == null || qty <= 0) continue;
+                    if (cardId == null || qty == null) continue;
+                    bool positive = qty > 0;
                     if (!reverse.TryGetValue(cardId.Value, out var keys)) continue;
                     foreach (var key in keys)
                     {
-                        Quantities[key] = qty.Value;
+                        if (positive)
+                            Quantities[key] = qty.Value; // only store positives in base map
                         // Add base-number alias when collector has numeric prefix + letter suffix (e.g., 270a -> 270)
                         var (setLower, collector) = key;
                         if (!string.IsNullOrEmpty(collector))
@@ -187,6 +209,21 @@ public sealed class CardCollectionData
                                         System.Diagnostics.Debug.WriteLine($"[Collection][DEBUG] Alias added cardId=71099 {setLower}:{numericPart} -> qty={qty}");
                                     }
                                 }
+                            }
+                        }
+                        if (_cardRows.TryGetValue(cardId.Value, out var row))
+                        {
+                            var (rSet, rCollector, rModifier) = row;
+                            if (!string.IsNullOrEmpty(rModifier) && !IsTokenModifier(rModifier))
+                            {
+                                var modLower = rModifier.ToLowerInvariant();
+                                VariantQuantities[(rSet, rCollector, modLower)] = qty.Value; // include zero
+                                var trimmedCollector = rCollector.TrimStart('0');
+                                if (trimmedCollector.Length == 0) trimmedCollector = "0";
+                                if (!string.Equals(trimmedCollector, rCollector, StringComparison.Ordinal))
+                                    VariantQuantities[(rSet, trimmedCollector, modLower)] = qty.Value;
+                                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1" && rSet == "war")
+                                    System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT-ADD] WAR variant collector={rCollector} modifier={modLower} qty={qty.Value}");
                             }
                         }
                         if (cardId == 71099)
@@ -262,5 +299,46 @@ public sealed class CardCollectionData
         if (string.Equals(baseKey, trimmed, StringComparison.Ordinal)) return trimmed;
         if (!keepModifier || string.IsNullOrEmpty(modifier)) return trimmed;
         return trimmed + modifier;
+    }
+
+    // Internal row cache for variant lookups
+    private readonly Dictionary<int,(string set,string collector,string modifier)> _cardRows = new();
+
+    // Variant key comparer
+    private sealed class StringVariantTupleComparer : IEqualityComparer<(string a,string b,string c)>
+    {
+        public static readonly StringVariantTupleComparer OrdinalIgnoreCase = new();
+        public bool Equals((string a,string b,string c) x, (string a,string b,string c) y) =>
+            string.Equals(x.a, y.a, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(x.b, y.b, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(x.c, y.c, StringComparison.OrdinalIgnoreCase);
+        public int GetHashCode((string a,string b,string c) obj) => HashCode.Combine(
+            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.a),
+            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.b),
+            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.c));
+    }
+
+    public bool TryGetVariantQuantity(string set, string collector, string modifier, out int qty)
+    {
+        qty = 0;
+        if (string.IsNullOrWhiteSpace(set) || string.IsNullOrWhiteSpace(collector) || string.IsNullOrWhiteSpace(modifier)) return false;
+        return VariantQuantities.TryGetValue((set.ToLowerInvariant(), collector, modifier.ToLowerInvariant()), out qty);
+    }
+
+    public bool TryGetVariantQuantityFlexible(string set, string collector, string modifier, out int qty)
+    {
+        if (TryGetVariantQuantity(set, collector, modifier, out qty)) return true;
+        // Try synonym groups
+        foreach (var kvp in ModifierSynonyms)
+        {
+            if (kvp.Value.Any(v => string.Equals(v, modifier, StringComparison.OrdinalIgnoreCase)) || string.Equals(kvp.Key, modifier, StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var alt in kvp.Value.Append(kvp.Key).Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (TryGetVariantQuantity(set, collector, alt, out qty)) return true;
+                }
+            }
+        }
+        return false;
     }
 }

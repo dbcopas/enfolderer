@@ -440,6 +440,41 @@ public class CardSlot : INotifyPropertyChanged
 
 public class BinderViewModel : INotifyPropertyChanged
 {
+    // ==== Restored state fields (previously lost during file corruption) ====
+    private static BinderViewModel? _singleton;
+    private static readonly object _singletonLock = new();
+    public static void RegisterInstance(BinderViewModel vm) { lock(_singletonLock) _singleton = vm; }
+    public static void WithVm(Action<BinderViewModel> action) { BinderViewModel? vm; lock(_singletonLock) vm = _singleton; if (vm!=null) { try { action(vm); } catch { } } }
+
+    private static CancellationTokenSource? _apiFlashCts;
+    private string _apiStatus = string.Empty;
+    public string ApiStatus { get => _apiStatus; private set { if (_apiStatus!=value) { _apiStatus = value; OnPropertyChanged(); } } }
+
+    private string _status = string.Empty;
+    public string Status { get => _status; private set { if (_status!=value) { _status = value; OnPropertyChanged(); } } }
+
+    private static bool _debugHttpLogging = false;
+    private static readonly object _httpLogLock = new();
+    private static int _httpInFlight = 0; private static int _http404 = 0; private static int _http500 = 0;
+    private static readonly ConcurrentDictionary<string,string> _imageUrlNameMap = new(StringComparer.OrdinalIgnoreCase);
+    private static string HttpLogPath => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "http-log.txt");
+
+    private void UpdatePanel(string? latest = null)
+    {
+        // Minimal implementation: reflect latest URL/status plus simple counters.
+        if (!string.IsNullOrEmpty(latest)) ApiStatus = latest;
+    }
+
+    // UI-bound collections & properties (redeclared after corruption)
+    public ObservableCollection<CardSlot> LeftSlots { get; } = new();
+    public ObservableCollection<CardSlot> RightSlots { get; } = new();
+    private string _pageDisplay = string.Empty;
+    public string PageDisplay { get => _pageDisplay; private set { if (_pageDisplay!=value) { _pageDisplay = value; OnPropertyChanged(); } } }
+    private Brush _binderBackground = Brushes.Black;
+    public Brush BinderBackground { get => _binderBackground; private set { if (_binderBackground!=value) { _binderBackground = value; OnPropertyChanged(); } } }
+    private readonly List<Brush> _customBinderBrushes = new();
+    private readonly List<Brush> _generatedRandomBinderBrushes = new();
+    private readonly Random _rand = new(12345);
     // Dynamic layout configuration (default 4x3, 40 sides per binder)
     private int _rowsPerPage = 3;
     private int _columnsPerPage = 4;
@@ -517,138 +552,54 @@ public class BinderViewModel : INotifyPropertyChanged
     }
     private string? ResolveLocalBackImagePath(bool logIfMissing)
     {
-        // Candidate file names (allow some common variations)
-        var names = new[]
-        {
-            "Magic_card_back.jpg",
-            "magic_card_back.jpg",
-            "card_back.jpg",
-            "back.jpg",
-            "Magic_card_back.jpeg",
-            "Magic_card_back.png"
-        };
-        // Candidate directories to search (in order)
-        var dirs = new List<string?>
+        var names = new[] { "Magic_card_back.jpg", "magic_card_back.jpg", "card_back.jpg", "back.jpg", "Magic_card_back.jpeg", "Magic_card_back.png" };
+        var dirs = new[]
         {
             _currentCollectionDir,
             AppContext.BaseDirectory,
             System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Enfolderer"),
             Directory.Exists(System.IO.Path.Combine(AppContext.BaseDirectory, "images")) ? System.IO.Path.Combine(AppContext.BaseDirectory, "images") : null
         };
-        foreach (var d in dirs.Where(d => !string.IsNullOrWhiteSpace(d)))
+        foreach (var dir in dirs.Where(d => !string.IsNullOrWhiteSpace(d)))
         {
             try
             {
-                foreach (var n in names)
+                foreach (var name in names)
                 {
-                    var candidate = System.IO.Path.Combine(d!, n);
-                    if (File.Exists(candidate))
-                    {
-                        Debug.WriteLine($"[BackImage] Using local back image: {candidate}");
-                        return candidate;
-                    }
+                    var path = System.IO.Path.Combine(dir!, name);
+                    if (File.Exists(path)) return path;
                 }
             }
             catch { }
         }
         if (logIfMissing)
-        {
-            Debug.WriteLine("[BackImage] Local back image not found. Searched directories: " + string.Join(";", dirs.Where(d=>!string.IsNullOrWhiteSpace(d))) + " names: " + string.Join(',', names));
-        }
+            Debug.WriteLine("[BackImage] No local card back image found.");
         return null;
-    }
-    // Removed per refactor (ImageCacheStore used instead)
-
-    public ObservableCollection<CardSlot> LeftSlots { get; } = new();
-    public ObservableCollection<CardSlot> RightSlots { get; } = new();
-
-    public string Status
-    {
-        get => _status;
-        private set { _status = value; OnPropertyChanged(); }
-    }
-    private string _status = "Ready";
-
-    public string PageDisplay
-    {
-        get => _pageDisplay;
-        private set { _pageDisplay = value; OnPropertyChanged(); }
-    }
-    private string _pageDisplay = "Page 1";
-
-    private Brush _binderBackground = Brushes.Black;
-    public Brush BinderBackground { get => _binderBackground; private set { _binderBackground = value; OnPropertyChanged(); } }
-    private readonly List<Brush> _customBinderBrushes = new();
-    private readonly List<Brush> _generatedRandomBinderBrushes = new();
-    private readonly Random _rand = new();
-
-    // HTTP instrumentation fields
-    private static int _httpInFlight;
-    private static int _http404;
-    private static int _http500;
-    private static bool _debugHttpLogging = false;
-    private static WeakReference<BinderViewModel>? _instanceRef;
-    private static CancellationTokenSource? _apiFlashCts;
-    private static readonly ConcurrentDictionary<string,string> _imageUrlNameMap = new(StringComparer.OrdinalIgnoreCase);
-    private string _apiStatus = string.Empty; // transient left side text for image/metadata fetch (short form)
-    public string ApiStatus { get => _apiStatus; private set { _apiStatus = value; OnPropertyChanged(); } }
-    private string _httpPanel = string.Empty; // right side combined panel (latest call + counters)
-    public string HttpPanel { get => _httpPanel; private set { _httpPanel = value; OnPropertyChanged(); } }
-    private static readonly object _httpLogLock = new();
-    private static string HttpLogPath => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "http.log");
-    private static void RegisterInstance(BinderViewModel vm) => _instanceRef = new WeakReference<BinderViewModel>(vm);
-    public static void WithVm(Action<BinderViewModel> act) { if (_instanceRef!=null && _instanceRef.TryGetTarget(out var vm)) { try { act(vm); } catch { } } }
-    private static string CountersString() { int error = _http404 + _http500; return $"InFlight={_httpInFlight} Err={error}"; }
-    private string? _currentHttpLabel;
-    private void UpdatePanel(string? latest = null)
-    {
-        var counters = CountersString();
-        if (!string.IsNullOrEmpty(latest))
-        {
-            _currentHttpLabel = latest;
-            HttpPanel = $"{latest}  |  {counters}";
-            // schedule expiration after 2s if no new label arrives
-            var captured = latest;
-            _ = Task.Run(async () => {
-                try { await Task.Delay(2000); } catch { return; }
-                if (captured == _currentHttpLabel) // still the latest
-                {
-                    Application.Current?.Dispatcher?.Invoke(() => {
-                        if (captured == _currentHttpLabel)
-                        {
-                            _currentHttpLabel = null;
-                            HttpPanel = counters = CountersString(); // refresh counters only
-                        }
-                    });
-                }
-            });
-        }
-        else
-        {
-            _currentHttpLabel = null;
-            HttpPanel = counters;
-        }
     }
     public void FlashImageFetch(string cardName)
     {
-        try {
+        try
+        {
             _apiFlashCts?.Cancel();
             var cts = new CancellationTokenSource();
             _apiFlashCts = cts;
             Application.Current?.Dispatcher?.Invoke(() => ApiStatus = $"fetching image for {cardName}");
             _ = Task.Run(async () => { try { await Task.Delay(2000, cts.Token); } catch { return; } if (!cts.IsCancellationRequested) Application.Current?.Dispatcher?.Invoke(() => { if (ReferenceEquals(cts, _apiFlashCts)) ApiStatus = string.Empty; }); });
-        } catch { }
+        }
+        catch { }
     }
     public void FlashMetaUrl(string url)
     {
-        try {
+        try
+        {
             if (string.IsNullOrWhiteSpace(url)) return;
             _apiFlashCts?.Cancel();
             var cts = new CancellationTokenSource();
             _apiFlashCts = cts;
             Application.Current?.Dispatcher?.Invoke(() => ApiStatus = url);
             _ = Task.Run(async () => { try { await Task.Delay(2000, cts.Token); } catch { return; } if (!cts.IsCancellationRequested) Application.Current?.Dispatcher?.Invoke(() => { if (ReferenceEquals(cts, _apiFlashCts)) ApiStatus = string.Empty; }); });
-        } catch { }
+        }
+        catch { }
     }
     private void RefreshSummaryIfIdle() { /* no-op now; counters always separate */ }
     private static void LogHttp(string line)
@@ -1362,6 +1313,39 @@ public class BinderViewModel : INotifyPropertyChanged
         {
             var c = _cards[i];
             if (string.IsNullOrEmpty(c.Set) || string.IsNullOrEmpty(c.Number)) continue;
+            // Authoritative variant path: WAR star-number (Japanese alternate planeswalkers)
+            if (string.Equals(c.Set, "WAR", StringComparison.OrdinalIgnoreCase) && c.Number.Contains('★'))
+            {
+                string starBaseRaw = c.Number.Replace("★", string.Empty);
+                string starTrim = starBaseRaw.TrimStart('0'); if (starTrim.Length == 0) starTrim = "0";
+                int qtyVariant = 0; // default 0 even if not present
+                bool variantFound = false;
+                if (int.TryParse(starBaseRaw, out _))
+                {
+                    // Try both JP and ART JP variant buckets flexibly
+                    if (_collection.TryGetVariantQuantityFlexible(c.Set, starBaseRaw, "Art JP", out var artQty) ||
+                        _collection.TryGetVariantQuantityFlexible(c.Set, starTrim, "Art JP", out artQty) ||
+                        _collection.TryGetVariantQuantityFlexible(c.Set, starBaseRaw, "JP", out artQty) ||
+                        _collection.TryGetVariantQuantityFlexible(c.Set, starTrim, "JP", out artQty))
+                    {
+                        qtyVariant = artQty;
+                        variantFound = true;
+                    }
+                }
+                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                {
+                    if (variantFound)
+                        Debug.WriteLine($"[Collection][VARIANT] WAR star authoritative {c.Number} -> base={starBaseRaw}/{starTrim} JP qty={qtyVariant}");
+                    else
+                        Debug.WriteLine($"[Collection][VARIANT-MISS] WAR star authoritative {c.Number} attempted base={starBaseRaw}/{starTrim} JP (flex) defaulting 0");
+                }
+                if (c.Quantity != qtyVariant)
+                {
+                    _cards[i] = c with { Quantity = qtyVariant };
+                    updated++;
+                }
+                continue; // skip base fallback entirely for star variants
+            }
             string baseNum = c.Number.Split('/')[0];
             string trimmed = baseNum.TrimStart('0');
             if (trimmed.Length == 0) trimmed = "0";
