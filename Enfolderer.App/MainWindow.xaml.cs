@@ -307,6 +307,9 @@ public class CardSlot : INotifyPropertyChanged
     public Brush Background { get; }
     private ImageSource? _imageSource;
     public ImageSource? ImageSource { get => _imageSource; private set { _imageSource = value; OnPropertyChanged(); } }
+    private int _quantity;
+    public int Quantity { get => _quantity; set { if (_quantity != value) { _quantity = value; OnPropertyChanged(); OnPropertyChanged(nameof(QuantityDisplay)); } } }
+    public string QuantityDisplay => _quantity >= 0 ? _quantity.ToString() : "0";
     public CardSlot(CardEntry entry, int index)
     {
     Name = entry.Name;
@@ -314,6 +317,7 @@ public class CardSlot : INotifyPropertyChanged
         Set = entry.Set ?? string.Empty;
     Tooltip = entry.Display + (string.IsNullOrEmpty(Set) ? string.Empty : $" ({Set})");
     Background = Brushes.Black;
+    _quantity = entry.Quantity; // may be -1 if not yet enriched
     }
     public CardSlot(string placeholder, int index)
     {
@@ -322,6 +326,7 @@ public class CardSlot : INotifyPropertyChanged
         Set = string.Empty;
         Tooltip = placeholder;
     Background = Brushes.Black;
+    _quantity = 0;
     }
     // Retained for potential future per-slot variation (unused now)
     private static Color GenerateColor(int index) => CardSlotTheme.BaseColor;
@@ -1787,7 +1792,7 @@ public class BinderViewModel : INotifyPropertyChanged
         bool IsNazgul(CardEntry ce) => string.Equals(ce.Name?.Trim(), "Nazgûl", StringComparison.OrdinalIgnoreCase);
                 bool IsBackPlaceholder(CardEntry ce) => string.Equals(ce.Number, "BACK", StringComparison.OrdinalIgnoreCase);
                 // MFC front + back
-                if (c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
+                if (c != null && c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
                 {
                     var next = list[idx + 1];
                     if (next != null && next.IsBackFace) return true;
@@ -1805,7 +1810,7 @@ public class BinderViewModel : INotifyPropertyChanged
                     }
                 }
                 // Duplicate pair (exactly two identical names, excluding long runs)
-                if (!c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
+                if (c != null && !c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
                 {
                     var n = list[idx + 1];
                     if (n != null && !n.IsModalDoubleFaced && !n.IsBackFace)
