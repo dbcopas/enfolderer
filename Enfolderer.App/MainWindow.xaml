@@ -21,11 +21,25 @@
                     Background="{Binding Background}"
                     ToolTip="{Binding Tooltip}">
                 <Grid>
+                    <Grid.Resources>
+                        <Style TargetType="Border" x:Key="QtyBadgeStyle">
+                            <Setter Property="Background" Value="#AA000000" />
+                            <Setter Property="CornerRadius" Value="4" />
+                            <Setter Property="Padding" Value="2,0" />
+                            <Setter Property="HorizontalAlignment" Value="Left" />
+                            <Setter Property="VerticalAlignment" Value="Top" />
+                            <Setter Property="Margin" Value="3" />
+                        </Style>
+                    </Grid.Resources>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <Image Source="{Binding ImageSource}" Stretch="Uniform" Margin="3" Grid.Row="0"/>
+                    <!-- Quantity badge overlay (top-left) -->
+                    <Border Style="{StaticResource QtyBadgeStyle}" Grid.Row="0">
+                        <TextBlock Text="{Binding QuantityDisplay}" FontSize="11" Foreground="White" FontWeight="Bold" />
+                    </Border>
                     <StackPanel Grid.Row="1" Margin="2">
                         <TextBlock Text="{Binding Number}" FontSize="11" Foreground="#EEE" HorizontalAlignment="Center"/>
                         <TextBlock Text="{Binding Name}" TextWrapping="Wrap" FontSize="11" 
