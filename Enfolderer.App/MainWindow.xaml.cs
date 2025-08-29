@@ -96,7 +96,7 @@ public partial class MainWindow : Window
     }
 }
 
-public record CardEntry(string Name, string Number, string? Set, bool IsModalDoubleFaced, bool IsBackFace = false, string? FrontRaw = null, string? BackRaw = null, string? DisplayNumber = null)
+public record CardEntry(string Name, string Number, string? Set, bool IsModalDoubleFaced, bool IsBackFace = false, string? FrontRaw = null, string? BackRaw = null, string? DisplayNumber = null, int Quantity = -1)
 {
     public string EffectiveNumber => DisplayNumber ?? Number;
     public string Display => string.IsNullOrWhiteSpace(EffectiveNumber) ? Name : $"{EffectiveNumber} {Name}";
@@ -465,6 +465,7 @@ public class BinderViewModel : INotifyPropertyChanged
     private readonly List<CardSpec> _specs = new(); // raw specs in file order
     private readonly ConcurrentDictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
     private readonly List<PageView> _views = new(); // sequence of display views across all binders
+    private readonly CardCollectionData _collection = new(); // collection DB data
     // Explicit pair keys (e.g. base number + language variant) -> enforced pair placement regardless of name differences
     private readonly Dictionary<CardEntry,string> _explicitPairKeys = new();
     // Pending variant pairs captured during parse before resolution (set, baseNumber, variantNumber)
@@ -1298,6 +1299,30 @@ public class BinderViewModel : INotifyPropertyChanged
         for (int i = 0; i < _specs.Count && initialSpecIndexes.Count < neededFaces; i++) initialSpecIndexes.Add(i);
         await ResolveSpecsAsync(fetchList, initialSpecIndexes);
         RebuildCardListFromSpecs();
+        // Attempt to load local collection DBs (same folder as binder file)
+        var dir = System.IO.Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+        {
+            try
+            {
+                _collection.Load(dir);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Collection] Load failed (db): {ex.Message}");
+            }
+            if (_collection.IsLoaded && _collection.Quantities.Count > 0)
+            {
+                try
+                {
+                    EnrichQuantitiesFromCollection();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}");
+                }
+            }
+        }
         Status = $"Initial load {_cards.Count} faces (placeholders included).";
         BuildOrderedFaces();
         _currentViewIndex = 0;
@@ -1313,6 +1338,7 @@ public class BinderViewModel : INotifyPropertyChanged
             Application.Current.Dispatcher.Invoke(() =>
             {
                 RebuildCardListFromSpecs();
+                if (_collection.IsLoaded) EnrichQuantitiesFromCollection();
                 BuildOrderedFaces();
                 RebuildViews();
                 Refresh();
@@ -1321,6 +1347,55 @@ public class BinderViewModel : INotifyPropertyChanged
                 MarkCacheComplete(_currentFileHash);
             });
         });
+    }
+
+    private void EnrichQuantitiesFromCollection()
+    {
+        if (_collection.Quantities.Count == 0) return;
+        int updated = 0;
+        for (int i = 0; i < _cards.Count; i++)
+        {
+            var c = _cards[i];
+            if (string.IsNullOrEmpty(c.Set) || string.IsNullOrEmpty(c.Number)) continue;
+            string baseNum = c.Number.Split('/')[0];
+            string trimmed = baseNum.TrimStart('0');
+            if (trimmed.Length == 0) trimmed = "0";
+            var setLower = c.Set.ToLowerInvariant();
+            int qty;
+            bool found = _collection.Quantities.TryGetValue((setLower, baseNum), out qty);
+            if (!found && !string.Equals(trimmed, baseNum, StringComparison.Ordinal))
+                found = _collection.Quantities.TryGetValue((setLower, trimmed), out qty);
+            // If still not found and number contains letters (e.g., 270Borderless), try stripping trailing non-digits progressively
+            if (!found)
+            {
+                string candidate = baseNum;
+                while (candidate.Length > 0 && !found && !char.IsDigit(candidate[^1]))
+                {
+                    candidate = candidate.Substring(0, candidate.Length -1);
+                    if (candidate.Length == 0) break;
+                    found = _collection.Quantities.TryGetValue((setLower, candidate), out qty);
+                }
+            }
+            if (!found) {
+                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                {
+                    try
+                    {
+                        var sampleKeys = string.Join(", ", _collection.Quantities.Keys.Where(k => k.Item1 == setLower).Take(25).Select(k => k.Item1+":"+k.Item2));
+                        Debug.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found. Sample keys for set: {sampleKeys}");
+                    }
+                    catch { }
+                }
+                continue;
+            }
+            if (qty >= 0 && c.Quantity != qty)
+            {
+                _cards[i] = c with { Quantity = qty };
+                updated++;
+            }
+        }
+        if (updated > 0)
+            Debug.WriteLine($"[Collection] Quantities applied to {updated} faces");
     }
 
     private string? _currentFileHash;
