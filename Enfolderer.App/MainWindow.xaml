@@ -8,6 +8,7 @@
     Title="MTG Binder" Height="900" Width="1400" MinWidth="1100" MinHeight="700"
     Background="{Binding BinderBackground}">
     <Window.Resources>
+    <local:QuantityImageConverter x:Key="QuantityImageConverter" />
         <Style x:Key="CardSlotStyle" TargetType="Border">
             <Setter Property="Margin" Value="4" />
             <Setter Property="CornerRadius" Value="6" />
@@ -17,9 +18,9 @@
             <Setter Property="SnapsToDevicePixels" Value="True" />
         </Style>
         <DataTemplate x:Key="CardTemplate">
-            <Border Style="{StaticResource CardSlotStyle}"
-                    Background="{Binding Background}"
-                    ToolTip="{Binding Tooltip}">
+        <Border x:Name="RootBorder" Style="{StaticResource CardSlotStyle}"
+            Background="{Binding Background}"
+            ToolTip="{Binding Tooltip}">
                 <Grid>
                     <Grid.Resources>
                         <Style TargetType="Border" x:Key="QtyBadgeStyle">
@@ -35,7 +36,14 @@
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <Image Source="{Binding ImageSource}" Stretch="Uniform" Margin="3" Grid.Row="0"/>
+                    <Image x:Name="CardImage" Stretch="Uniform" Margin="3" Grid.Row="0">
+                        <Image.Source>
+                            <MultiBinding Converter="{StaticResource QuantityImageConverter}">
+                                <Binding Path="ImageSource" />
+                                <Binding Path="Quantity" />
+                            </MultiBinding>
+                        </Image.Source>
+                    </Image>
                     <!-- Quantity badge overlay (top-left) -->
                     <Border Style="{StaticResource QtyBadgeStyle}" Grid.Row="0">
                         <TextBlock Text="{Binding QuantityDisplay}" FontSize="11" Foreground="White" FontWeight="Bold" />
@@ -48,6 +56,13 @@
                     </StackPanel>
                 </Grid>
             </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Quantity}" Value="0">
+                    <Setter TargetName="CardImage" Property="UIElement.Opacity" Value="0.50" />
+                    <Setter TargetName="RootBorder" Property="Border.BorderBrush" Value="#FFDD4444" />
+                    <Setter TargetName="RootBorder" Property="Border.BorderThickness" Value="2" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
         </DataTemplate>
     </Window.Resources>
     <DockPanel>
