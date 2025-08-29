@@ -317,7 +317,7 @@ public class CardSlot : INotifyPropertyChanged
         Set = entry.Set ?? string.Empty;
     Tooltip = entry.Display + (string.IsNullOrEmpty(Set) ? string.Empty : $" ({Set})");
     Background = Brushes.Black;
-    _quantity = entry.Quantity; // may be -1 if not yet enriched
+    _quantity = entry.Quantity < 0 ? 0 : entry.Quantity; // treat unknown as 0 for unified zero visual state
     }
     public CardSlot(string placeholder, int index)
     {
