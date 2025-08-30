@@ -69,6 +69,7 @@
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
                 <MenuItem Header="_Open Collection..." Click="OpenCollection_Click" />
+                <MenuItem Header="Update mainDb from CSV..." Click="UpdateMainDbFromCsv_Click" />
                 <Separator />
                 <MenuItem Header="E_xit" Click="Exit_Click" />
             </MenuItem>

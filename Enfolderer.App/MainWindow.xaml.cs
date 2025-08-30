@@ -29,6 +29,76 @@ public partial class MainWindow : Window
 {
     private readonly BinderViewModel _vm;
 
+    private void UpdateMainDbFromCsv_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var dlg = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = "Select CSV File to Update mainDb.db",
+                    Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*"
+                };
+                if (dlg.ShowDialog(this) != true) return;
+                string csvPath = dlg.FileName;
+                // Look for mainDb.db in the same folder as the CSV file
+                string csvDir = System.IO.Path.GetDirectoryName(csvPath) ?? string.Empty;
+                string dbPath = System.IO.Path.Combine(csvDir, "mainDb.db");
+                if (!System.IO.File.Exists(dbPath))
+                {
+                    MessageBox.Show(this, $"mainDb.db not found in CSV folder: {dbPath}", "CSV Utility Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+                int updated = 0, inserted = 0, errors = 0;
+                var lines = File.ReadAllLines(csvPath);
+                using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+                con.Open();
+                foreach (var line in lines)
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var cols = line.Split(';');
+                    if (cols.Length < 6) { errors++; continue; }
+                    string nameRaw = cols[0].Trim();
+                    string name = nameRaw.Split('[')[0].Trim();
+                    string id = cols[3].Trim();
+                    string cardNumRarity = cols[4].Trim();
+                    string edition = cols[5].Trim();
+                if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(cardNumRarity) || string.IsNullOrEmpty(edition))
+                {
+                    errors++;
+                    continue;
+                }
+                    // Card number: everything except last char (rarity letter)
+                    string cardNum = cardNumRarity.Length > 1 ? cardNumRarity.Substring(0, cardNumRarity.Length - 2).Trim() : cardNumRarity.Substring(0, cardNumRarity.Length - 1).Trim();
+                    if (string.IsNullOrEmpty(cardNum)) {
+                        errors++;
+                        continue;
+                    }
+                    // Try update
+                    using var updateCmd = con.CreateCommand();
+                    updateCmd.CommandText = "UPDATE Cards SET id = @id WHERE edition = @edition AND collectorNumberValue = @number";
+                    updateCmd.Parameters.AddWithValue("@id", id);
+                    updateCmd.Parameters.AddWithValue("@edition", edition);
+                    updateCmd.Parameters.AddWithValue("@number", cardNum);
+                    int rows = updateCmd.ExecuteNonQuery();
+                    if (rows > 0) { updated++; continue; }
+                    // If not found, insert
+                    using var insertCmd = con.CreateCommand();
+                    insertCmd.CommandText = "INSERT INTO Cards (id, edition, collectorNumberValue, name) VALUES (@id, @edition, @number, @name)";
+                    insertCmd.Parameters.AddWithValue("@id", id);
+                    insertCmd.Parameters.AddWithValue("@edition", edition);
+                    insertCmd.Parameters.AddWithValue("@number", cardNum);
+                    insertCmd.Parameters.AddWithValue("@name", name);
+                    try { insertCmd.ExecuteNonQuery(); inserted++; } catch { errors++; }
+                }
+                con.Close();
+                MessageBox.Show(this, $"mainDb.db update complete:\nUpdated: {updated}\nInserted: {inserted}\nErrors: {errors}", "CSV Utility", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "CSV Utility Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
     public MainWindow()
     {
         InitializeComponent();
