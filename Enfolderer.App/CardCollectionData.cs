@@ -75,22 +75,20 @@ public sealed class CardCollectionData
 
             // Prefer 'id' per provided schema; include legacy/cardId variants.
             string? cardIdCol = FirstExisting(columns, "id", "ID", "cardId", "CardId", "card_id");
-            string? editionCol = FirstExisting(columns, "edition", "Edition", "set", "Set", "setCode", "SetCode", "set_code");
-            string? numberCol = FirstExisting(columns, "number", "Number", "collectorNumber", "CollectorNumber", "collector_number", "collector_no", "cardNumber"); // raw printed number (may include suffix like 001/284)
+            string? editionCol = FirstExisting(columns, "edition", "Edition", "set", "Set", "setCode", "SetCode", "set_code");    
             string? numberValueCol = FirstExisting(columns, "collectorNumberValue", "CollectorNumberValue", "collector_number_value", "numberValue", "NumberValue"); // base numeric value for matching
             string? modifierCol = FirstExisting(columns, "modifier", "Modifier", "mod", "Mod", "variant", "Variant", "variation"); // optional
-            string? gathererCol = FirstExisting(columns, "gathererId", "GathererId", "gatherer_id", "gatherer", "Gatherer"); // optional
+            
 
-            if (cardIdCol == null || editionCol == null || numberCol == null)
+            if (cardIdCol == null || editionCol == null)
             {
                 System.Diagnostics.Debug.WriteLine("[Collection] Main DB missing required columns (id/edition/collectorNumber). Aborting load.");
                 return;
             }
 
             // Build SELECT with aliases so downstream code is stable
-            string select = $"SELECT {cardIdCol} AS cardId, {editionCol} AS edition, {numberCol} AS number, " +
+            string select = $"SELECT {cardIdCol} AS cardId, {editionCol} AS edition, " +
                              (modifierCol != null ? $"{modifierCol} AS modifier, " : "NULL AS modifier, ") +
-                             (gathererCol != null ? $"{gathererCol} AS gathererId, " : "NULL AS gathererId, ") +
                              (numberValueCol != null ? $"{numberValueCol} AS numberValue " : "NULL AS numberValue ") +
                              "FROM Cards";
 
@@ -99,36 +97,31 @@ public sealed class CardCollectionData
             using var r = cmd.ExecuteReader();
             int ordCardId = r.GetOrdinal("cardId");
             int ordEdition = r.GetOrdinal("edition");
-            int ordNumber = r.GetOrdinal("number");
             int ordModifier = r.GetOrdinal("modifier");
-            int ordGatherer = r.GetOrdinal("gathererId");
             int ordNumberValue = r.GetOrdinal("numberValue");
             while (r.Read())
             {
                 int cardId = SafeGetInt(r, ordCardId) ?? -1;
                 if (cardId < 0) continue;
                 string set = (SafeGetString(r, ordEdition) ?? string.Empty).Trim();
-                string number = (SafeGetString(r, ordNumber) ?? string.Empty).Trim(); // printed collector number (may have slash)
                 string numberValue = (SafeGetString(r, ordNumberValue) ?? string.Empty).Trim(); // base numeric value
                 string modifier = (SafeGetString(r, ordModifier) ?? string.Empty).Trim();
-                int? gatherer = SafeGetInt(r, ordGatherer);
-                if (string.IsNullOrEmpty(set) || string.IsNullOrEmpty(number)) continue;
+                if (string.IsNullOrEmpty(set)) continue;
                 // Determine base key: prefer numberValue, fallback to pre-split number
-                string baseKey = !string.IsNullOrEmpty(numberValue) ? numberValue : number.Split('/')[0];
+                string baseKey =  numberValue;
                 baseKey = baseKey.Trim();
-                if (baseKey.Length == 0) baseKey = number; // last resort
                 // Only keep modifier in key if it's a token; otherwise drop it to unify variants.
                 bool keepModifier = IsTokenModifier(modifier);
                 string collectorPrimary = (!keepModifier || string.IsNullOrEmpty(modifier)) ? baseKey : baseKey + modifier;
                 // Add primary key
-                AddIndexEntry(set, collectorPrimary, cardId, gatherer, reverse);
+                AddIndexEntry(set, collectorPrimary, cardId, reverse);
                 // If baseKey has leading zeros, also add trimmed variant to maximize match robustness
                 string trimmed = baseKey.TrimStart('0');
                 if (trimmed.Length == 0) trimmed = "0"; // handle all-zero
                 if (!string.Equals(trimmed, baseKey, StringComparison.Ordinal))
                 {
                     string collectorTrim = (!keepModifier || string.IsNullOrEmpty(modifier)) ? trimmed : trimmed + modifier;
-                    AddIndexEntry(set, collectorTrim, cardId, gatherer, reverse, allowOverwrite:false);
+                    AddIndexEntry(set, collectorTrim, cardId, reverse, allowOverwrite:false);
                 }
                 // Record full row including non-token modifier for later variant quantity lookup
                 if (!_cardRows.ContainsKey(cardId))
@@ -244,13 +237,9 @@ public sealed class CardCollectionData
         System.Diagnostics.Debug.WriteLine($"[Collection] Loaded: MainIndex={MainIndex.Count} Quantities={Quantities.Count}");
     }
 
-    private void AddIndexEntry(string set, string collector, int cardId, int? gatherer, Dictionary<int, List<(string set,string collector)>> reverse, bool allowOverwrite = true)
+    private void AddIndexEntry(string set, string collector, int cardId, Dictionary<int, List<(string set,string collector)>> reverse, bool allowOverwrite = true)
     {
         var key = (set.ToLowerInvariant(), collector);
-        if (allowOverwrite || !MainIndex.ContainsKey(key))
-        {
-            MainIndex[key] = (cardId, gatherer);
-        }
         if (!reverse.TryGetValue(cardId, out var list))
         {
             list = new();
