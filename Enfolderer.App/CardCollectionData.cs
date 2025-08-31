@@ -32,6 +32,15 @@ public sealed class CardCollectionData
 
     public bool IsLoaded => _loadedFolder != null;
 
+    /// <summary>
+    /// Force a reload of the collection databases even if the same folder is already marked loaded.
+    /// </summary>
+    public void Reload(string folder)
+    {
+        _loadedFolder = null; // reset so Load will run
+        Load(folder);
+    }
+
     public void Load(string folder)
     {
         if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return;
