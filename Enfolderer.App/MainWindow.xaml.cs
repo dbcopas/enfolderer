@@ -156,9 +156,11 @@ public partial class MainWindow : Window
         try
         {
             bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+            bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
             int delta = e.Delta; // >0 wheel up, <0 wheel down
-            if (shift)
+            if (ctrl)
             {
+                // Ctrl + wheel = binder jump
                 if (delta > 0)
                 {
                     if (_vm.PrevBinderCommand.CanExecute(null)) _vm.PrevBinderCommand.Execute(null);
@@ -168,8 +170,21 @@ public partial class MainWindow : Window
                     if (_vm.NextBinderCommand.CanExecute(null)) _vm.NextBinderCommand.Execute(null);
                 }
             }
+            else if (shift)
+            {
+                // Shift + wheel = set boundary jump
+                if (delta > 0)
+                {
+                    if (_vm.PrevSetCommand.CanExecute(null)) _vm.PrevSetCommand.Execute(null);
+                }
+                else if (delta < 0)
+                {
+                    if (_vm.NextSetCommand.CanExecute(null)) _vm.NextSetCommand.Execute(null);
+                }
+            }
             else
             {
+                // No modifier = normal page navigation
                 if (delta > 0)
                 {
                     if (_vm.PrevCommand.CanExecute(null)) _vm.PrevCommand.Execute(null);
@@ -1011,6 +1026,8 @@ public class BinderViewModel : INotifyPropertyChanged
     public ICommand NextBinderCommand { get; }
     public ICommand PrevBinderCommand { get; }
     public ICommand JumpToPageCommand { get; }
+    public ICommand NextSetCommand { get; }
+    public ICommand PrevSetCommand { get; }
 
     private string _jumpBinderInput = "1";
     public string JumpBinderInput { get => _jumpBinderInput; set { _jumpBinderInput = value; OnPropertyChanged(); } }
@@ -1028,12 +1045,105 @@ public class BinderViewModel : INotifyPropertyChanged
         NextBinderCommand = new RelayCommand(_ => { JumpBinder(1); }, _ => CanJumpBinder(1));
         PrevBinderCommand = new RelayCommand(_ => { JumpBinder(-1); }, _ => CanJumpBinder(-1));
     JumpToPageCommand = new RelayCommand(_ => JumpToBinderPage(), _ => CanJumpToBinderPage());
+    NextSetCommand = new RelayCommand(_ => { JumpSet(forward:true); }, _ => CanJumpSet(forward:true));
+    PrevSetCommand = new RelayCommand(_ => { JumpSet(forward:false); }, _ => CanJumpSet(forward:false));
         RebuildViews();
         Refresh();
     UpdatePanel();
     }
 
     private record PageView(int? LeftPage, int? RightPage, int BinderIndex);
+
+    private bool CanJumpSet(bool forward)
+    {
+        if (_orderedFaces.Count == 0 || _views.Count == 0) return false;
+        if (forward)
+        {
+            // If already at last view, no forward set jump
+            if (_currentViewIndex >= _views.Count -1) return false;
+        }
+        else
+        {
+            if (_currentViewIndex <= 0) return false;
+        }
+        return true;
+    }
+
+    private void JumpSet(bool forward)
+    {
+        if (_orderedFaces.Count == 0 || _views.Count == 0) return;
+        var currentView = _views[_currentViewIndex];
+        // Determine anchor card indices displayed in current view
+        List<CardEntry> displayed = new();
+        if (currentView.LeftPage.HasValue) displayed.AddRange(GetFacesForPage(currentView.LeftPage.Value));
+        if (currentView.RightPage.HasValue) displayed.AddRange(GetFacesForPage(currentView.RightPage.Value));
+        if (displayed.Count == 0) return;
+        if (forward)
+        {
+            // Anchor = last displayed (bottom-right conceptual)
+            var anchor = displayed[^1];
+            string? anchorSet = anchor.Set;
+            if (anchorSet == null) return;
+            // Find first global face after anchor with different set
+            int globalIndex = _orderedFaces.FindIndex(f => ReferenceEquals(f, anchor));
+            if (globalIndex < 0) return;
+            string anchorSetLower = anchorSet.ToLowerInvariant();
+            int targetFaceIndex = -1;
+            for (int i = globalIndex + 1; i < _orderedFaces.Count; i++)
+            {
+                var f = _orderedFaces[i];
+                if (!string.Equals(f.Set, anchorSet, StringComparison.OrdinalIgnoreCase)) { targetFaceIndex = i; break; }
+            }
+            if (targetFaceIndex == -1) return; // no further set
+            // Determine page containing targetFaceIndex
+            int targetPage = (targetFaceIndex / SlotsPerPage) + 1; // pages are 1-based
+            // Find view containing targetPage prioritizing first view showing that page
+            int viewIdx = _views.FindIndex(v => (v.LeftPage.HasValue && v.LeftPage.Value == targetPage) || (v.RightPage.HasValue && v.RightPage.Value == targetPage));
+            if (viewIdx >= 0) { _currentViewIndex = viewIdx; Refresh(); }
+        }
+        else
+        {
+            // Backward: anchor = first displayed (top-left conceptual)
+            var anchor = displayed[0];
+            string? anchorSet = anchor.Set;
+            if (anchorSet == null) return;
+            int globalIndex = _orderedFaces.FindIndex(f => ReferenceEquals(f, anchor));
+            if (globalIndex < 0) return;
+            // Find last face before anchor with different set (start of previous set run)
+            int targetFaceIndex = -1;
+            string anchorSetLower = anchorSet.ToLowerInvariant();
+            for (int i = globalIndex -1; i >=0; i--)
+            {
+                var f = _orderedFaces[i];
+                if (!string.Equals(f.Set, anchorSet, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Now we are inside previous set region; we want its first face, so rewind to its run start
+                    int runStart = i;
+                    while (runStart -1 >=0 && !string.Equals(_orderedFaces[runStart -1].Set, anchorSet, StringComparison.OrdinalIgnoreCase) && string.Equals(_orderedFaces[runStart -1].Set, f.Set, StringComparison.OrdinalIgnoreCase))
+                        runStart--;
+                    targetFaceIndex = runStart;
+                    break;
+                }
+            }
+            if (targetFaceIndex == -1) return; // no previous set
+            int targetPage = (targetFaceIndex / SlotsPerPage) + 1;
+            int viewIdx = _views.FindIndex(v => (v.LeftPage.HasValue && v.LeftPage.Value == targetPage) || (v.RightPage.HasValue && v.RightPage.Value == targetPage));
+            if (viewIdx >= 0) { _currentViewIndex = viewIdx; Refresh(); }
+        }
+    }
+
+    private IEnumerable<CardEntry> GetFacesForPage(int pageNumber)
+    {
+        int startIndex = (pageNumber -1) * SlotsPerPage;
+        for (int i = 0; i < SlotsPerPage; i++)
+        {
+            int idx = startIndex + i;
+            if (idx >= 0 && idx < _orderedFaces.Count)
+            {
+                yield return _orderedFaces[idx];
+            }
+        }
+    }
 
     private void RebuildViews()
     {
