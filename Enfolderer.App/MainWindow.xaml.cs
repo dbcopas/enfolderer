@@ -101,7 +101,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        // Attempt to invoke generated InitializeComponent via reflection (design-time build may omit g.cs)
+        // Invoke generated InitializeComponent if present; otherwise manual load (design-time / analysis env may lack XAML compile)
         var init = GetType().GetMethod("InitializeComponent", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
         if (init != null)
         {
@@ -109,7 +109,6 @@ public partial class MainWindow : Window
         }
         else
         {
-            // Fallback manual load if generated method missing
             try
             {
                 var resourceLocater = new Uri("/Enfolderer.App;component/MainWindow.xaml", UriKind.Relative);
@@ -117,7 +116,7 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[WPF] Fallback XAML load failed: {ex.Message}");
+                Debug.WriteLine($"[WPF] Manual XAML load failed: {ex.Message}");
                 throw;
             }
         }
@@ -138,12 +137,7 @@ public partial class MainWindow : Window
             {
                 if (_vm != null)
                 {
-                    // Always clear quantities before loading to ensure fresh data from DB
-                    var collectionField = _vm.GetType().GetField("_collection", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    var collection = collectionField?.GetValue(_vm);
-                    var quantitiesProp = collection?.GetType().GetProperty("Quantities");
-                    var quantitiesDict = quantitiesProp?.GetValue(collection) as System.Collections.IDictionary;
-                    quantitiesDict?.Clear();
+                    // Force reload logic now handled internally by LoadFromFileAsync (it calls Reload)
                     await _vm.LoadFromFileAsync(dlg.FileName);
                 }
             }
@@ -619,6 +613,7 @@ public class BinderViewModel : INotifyPropertyChanged
             if (_collection.IsLoaded)
             {
                 EnrichQuantitiesFromCollection();
+                AdjustMfcQuantities();
                 BuildOrderedFaces();
                 RebuildViews();
                 Refresh();
@@ -924,7 +919,8 @@ public class BinderViewModel : INotifyPropertyChanged
                         backDisplay = $"{entry.BackRaw} ({entry.FrontRaw})";
                     else
                         backDisplay = entry.Name + " (Back)";
-                    _cards.Add(new CardEntry(backDisplay, entry.Number, entry.Set, false, true, entry.FrontRaw, entry.BackRaw, entry.DisplayNumber));
+                    // Preserve IsModalDoubleFaced=true for synthetic back so adjustment logic can detect
+                    _cards.Add(new CardEntry(backDisplay, entry.Number, entry.Set, true, true, entry.FrontRaw, entry.BackRaw, entry.DisplayNumber));
                 }
             }
             catch
@@ -1401,6 +1397,7 @@ public class BinderViewModel : INotifyPropertyChanged
                 try
                 {
                     EnrichQuantitiesFromCollection();
+                    AdjustMfcQuantities();
                 }
                 catch (Exception ex)
                 {
@@ -1424,6 +1421,7 @@ public class BinderViewModel : INotifyPropertyChanged
             {
                 RebuildCardListFromSpecs();
                 if (_collection.IsLoaded) EnrichQuantitiesFromCollection();
+                if (_collection.IsLoaded) AdjustMfcQuantities();
                 BuildOrderedFaces();
                 RebuildViews();
                 Refresh();
@@ -1514,6 +1512,48 @@ public class BinderViewModel : INotifyPropertyChanged
         }
         if (updated > 0)
             Debug.WriteLine($"[Collection] Quantities applied to {updated} faces");
+    }
+
+    // Adjust quantities for modal double-faced (MFC) cards so display follows rule:
+    // Q=0  => front 0, back 0
+    // Q=1  => front 1, back 0
+    // Q>=2 => front 2, back 2 (cap at 2 for display purposes)
+    private void AdjustMfcQuantities()
+    {
+        for (int i = 0; i < _cards.Count; i++)
+        {
+            var front = _cards[i];
+            if (!front.IsModalDoubleFaced || front.IsBackFace) continue; // only process front faces
+            int q = front.Quantity;
+            if (q < 0) continue; // not yet populated
+            int frontDisplay, backDisplay;
+            if (q <= 0) { frontDisplay = 0; backDisplay = 0; }
+            else if (q == 1) { frontDisplay = 1; backDisplay = 0; }
+            else { frontDisplay = 2; backDisplay = 2; }
+            if (front.Quantity != frontDisplay) _cards[i] = front with { Quantity = frontDisplay };
+            // locate matching back face (expected immediately next, but search fallback)
+            int backIndex = -1;
+            if (i + 1 < _cards.Count)
+            {
+                var candidate = _cards[i + 1];
+                if (candidate.IsModalDoubleFaced && candidate.IsBackFace && candidate.Set == front.Set && candidate.Number == front.Number)
+                    backIndex = i + 1;
+            }
+            if (backIndex == -1)
+            {
+                for (int j = i + 1; j < _cards.Count; j++)
+                {
+                    var cand = _cards[j];
+                    if (cand.IsModalDoubleFaced && cand.IsBackFace && cand.Set == front.Set && cand.Number == front.Number)
+                    { backIndex = j; break; }
+                }
+            }
+            if (backIndex >= 0)
+            {
+                var back = _cards[backIndex];
+                if (back.Quantity != backDisplay) _cards[backIndex] = back with { Quantity = backDisplay };
+            }
+        }
     }
 
     private string? _currentFileHash;
@@ -1663,7 +1703,7 @@ public class BinderViewModel : INotifyPropertyChanged
                         if (cachedEntry.IsModalDoubleFaced && !string.IsNullOrEmpty(cachedEntry.FrontRaw) && !string.IsNullOrEmpty(cachedEntry.BackRaw))
                         {
                             var backDisplay = $"{cachedEntry.BackRaw} ({cachedEntry.FrontRaw})";
-                            var backEntry = new CardEntry(backDisplay, cachedEntry.Number, cachedEntry.Set, false, true, cachedEntry.FrontRaw, cachedEntry.BackRaw);
+                            var backEntry = new CardEntry(backDisplay, cachedEntry.Number, cachedEntry.Set, true, true, cachedEntry.FrontRaw, cachedEntry.BackRaw);
                             _mfcBacks[ f.specIndex ] = backEntry; // idempotent write acceptable
                         }
                         return; // skip network
@@ -1675,7 +1715,7 @@ public class BinderViewModel : INotifyPropertyChanged
                         if (ce.IsModalDoubleFaced && !string.IsNullOrEmpty(ce.FrontRaw) && !string.IsNullOrEmpty(ce.BackRaw))
                         {
                             var backDisplay = $"{ce.BackRaw} ({ce.FrontRaw})";
-                            var backEntry = new CardEntry(backDisplay, ce.Number, ce.Set, false, true, ce.FrontRaw, ce.BackRaw);
+                            var backEntry = new CardEntry(backDisplay, ce.Number, ce.Set, true, true, ce.FrontRaw, ce.BackRaw);
                             _mfcBacks[f.specIndex] = backEntry; // idempotent concurrent write acceptable
                         }
                         PersistCardToCache(ce);
