@@ -20,7 +20,8 @@
         <DataTemplate x:Key="CardTemplate">
         <Border x:Name="RootBorder" Style="{StaticResource CardSlotStyle}"
             Background="{Binding Background}"
-            ToolTip="{Binding Tooltip}">
+            ToolTip="{Binding Tooltip}"
+            MouseLeftButtonUp="CardSlot_MouseLeftButtonUp">
                 <Grid>
                     <Grid.Resources>
                         <Style TargetType="Border" x:Key="QtyBadgeStyle">
