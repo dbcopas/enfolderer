@@ -1502,6 +1502,12 @@ public class BinderViewModel : INotifyPropertyChanged
                     }
                     catch { }
                 }
+                // Not found -> treat as zero (may have decreased since last refresh)
+                if (c.Quantity != 0)
+                {
+                    _cards[i] = c with { Quantity = 0 };
+                    updated++;
+                }
                 continue;
             }
             if (qty >= 0 && c.Quantity != qty)
