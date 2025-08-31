@@ -249,7 +249,7 @@ public sealed class CardCollectionData
     }
 
     // Case-insensitive tuple comparer for (set, collector) keys
-    private sealed class StringTupleComparer : IEqualityComparer<(string a,string b)>
+    public sealed class StringTupleComparer : IEqualityComparer<(string a,string b)>
     {
         public static readonly StringTupleComparer OrdinalIgnoreCase = new();
         public bool Equals((string a,string b) x, (string a,string b) y) => 
