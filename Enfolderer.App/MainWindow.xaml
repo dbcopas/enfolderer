@@ -46,7 +46,7 @@
                         </Image.Source>
                     </Image>
                     <!-- Quantity badge overlay (top-left) -->
-                    <Border Style="{StaticResource QtyBadgeStyle}" Grid.Row="0">
+                    <Border Style="{StaticResource QtyBadgeStyle}" Grid.Row="0" x:Name="QtyBadge">
                         <TextBlock Text="{Binding QuantityDisplay}" FontSize="11" Foreground="White" FontWeight="Bold" />
                     </Border>
                     <StackPanel Grid.Row="1" Margin="2">
@@ -58,10 +58,33 @@
                 </Grid>
             </Border>
             <DataTemplate.Triggers>
-                <DataTrigger Binding="{Binding Quantity}" Value="0">
+                <!-- Back face placeholder: no quantity badge, no red outline, full opacity, not clickable -->
+                <DataTrigger Binding="{Binding IsBackFace}" Value="True">
+                    <Setter TargetName="RootBorder" Property="Border.BorderBrush" Value="#444" />
+                    <Setter TargetName="RootBorder" Property="Border.BorderThickness" Value="1" />
+                    <Setter TargetName="CardImage" Property="UIElement.Opacity" Value="1" />
+                    <Setter TargetName="RootBorder" Property="UIElement.IsHitTestVisible" Value="False" />
+                    <Setter TargetName="QtyBadge" Property="UIElement.Visibility" Value="Collapsed" />
+                </DataTrigger>
+                <!-- Fallback detection for legacy backface placeholders by Set code -->
+                <DataTrigger Binding="{Binding Set}" Value="__BACK__">
+                    <Setter TargetName="RootBorder" Property="Border.BorderBrush" Value="#444" />
+                    <Setter TargetName="RootBorder" Property="Border.BorderThickness" Value="1" />
+                    <Setter TargetName="CardImage" Property="UIElement.Opacity" Value="1" />
+                    <Setter TargetName="RootBorder" Property="UIElement.IsHitTestVisible" Value="False" />
+                    <Setter TargetName="QtyBadge" Property="UIElement.Visibility" Value="Collapsed" />
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding Quantity}" Value="0" />
+                        <Condition Binding="{Binding IsBackFace}" Value="False" />
+                    </MultiDataTrigger.Conditions>
                     <Setter TargetName="CardImage" Property="UIElement.Opacity" Value="0.50" />
                     <Setter TargetName="RootBorder" Property="Border.BorderBrush" Value="#FFDD4444" />
                     <Setter TargetName="RootBorder" Property="Border.BorderThickness" Value="2" />
+                </MultiDataTrigger>
+                <DataTrigger Binding="{Binding QuantityDisplay}" Value="">
+                    <Setter TargetName="QtyBadge" Property="UIElement.Visibility" Value="Collapsed" />
                 </DataTrigger>
             </DataTemplate.Triggers>
         </DataTemplate>
