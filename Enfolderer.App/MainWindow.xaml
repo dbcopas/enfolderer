@@ -58,8 +58,8 @@
                 </Grid>
             </Border>
             <DataTemplate.Triggers>
-                <!-- Back face placeholder: no quantity badge, no red outline, full opacity, not clickable -->
-                <DataTrigger Binding="{Binding IsBackFace}" Value="True">
+        <!-- Placeholder back image (not a real MFC back): suppress qty/outline/click -->
+        <DataTrigger Binding="{Binding IsPlaceholderBack}" Value="True">
                     <Setter TargetName="RootBorder" Property="Border.BorderBrush" Value="#444" />
                     <Setter TargetName="RootBorder" Property="Border.BorderThickness" Value="1" />
                     <Setter TargetName="CardImage" Property="UIElement.Opacity" Value="1" />
@@ -77,7 +77,7 @@
                 <MultiDataTrigger>
                     <MultiDataTrigger.Conditions>
                         <Condition Binding="{Binding Quantity}" Value="0" />
-                        <Condition Binding="{Binding IsBackFace}" Value="False" />
+            <Condition Binding="{Binding IsPlaceholderBack}" Value="False" />
                     </MultiDataTrigger.Conditions>
                     <Setter TargetName="CardImage" Property="UIElement.Opacity" Value="0.50" />
                     <Setter TargetName="RootBorder" Property="Border.BorderBrush" Value="#FFDD4444" />
