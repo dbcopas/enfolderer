@@ -101,9 +101,26 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        InitializeComponent();
+        ManualLoadComponent();
         _vm = new BinderViewModel();
         DataContext = _vm;
+    }
+
+    private bool _manualLoaded;
+    private void ManualLoadComponent()
+    {
+        if (_manualLoaded) return;
+        _manualLoaded = true;
+        try
+        {
+            var resourceLocater = new Uri("/Enfolderer.App;component/MainWindow.xaml", UriKind.Relative);
+            Application.LoadComponent(this, resourceLocater);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WPF] ManualLoadComponent failed: {ex.Message}");
+            throw;
+        }
     }
 
     private async void OpenCollection_Click(object sender, RoutedEventArgs e)
@@ -117,7 +134,16 @@ public partial class MainWindow : Window
         {
             try
             {
-                await _vm.LoadFromFileAsync(dlg.FileName);
+                if (_vm != null)
+                {
+                    // Always clear quantities before loading to ensure fresh data from DB
+                    var collectionField = _vm.GetType().GetField("_collection", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    var collection = collectionField?.GetValue(_vm);
+                    var quantitiesProp = collection?.GetType().GetProperty("Quantities");
+                    var quantitiesDict = quantitiesProp?.GetValue(collection) as System.Collections.IDictionary;
+                    quantitiesDict?.Clear();
+                    await _vm.LoadFromFileAsync(dlg.FileName);
+                }
             }
             catch (Exception ex)
             {
@@ -163,6 +189,28 @@ public partial class MainWindow : Window
         {
             base.OnPreviewMouseWheel(e);
         }
+    }
+
+    private void RefreshQuantities_Click(object sender, RoutedEventArgs e)
+    {
+        // Delegate to view-model if it exposes a refresh method; else perform inline minimal refresh if collection already loaded.
+        var refreshMethod = _vm.GetType().GetMethod("RefreshQuantities", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        if (refreshMethod != null)
+        {
+            refreshMethod.Invoke(_vm, null);
+            return;
+        }
+        // Fallback: try to re-run enrichment if collection state exists.
+        var collectionField = _vm.GetType().GetField("_collection", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var collection = collectionField?.GetValue(_vm);
+        var loadedFolderField = collection?.GetType().GetField("_loadedFolder", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        loadedFolderField?.SetValue(collection, null); // force reload
+        var loadMethod = collection?.GetType().GetMethod("Load", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        var currentDirField = _vm.GetType().GetField("_currentCollectionDir", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var dir = currentDirField?.GetValue(_vm) as string;
+        loadMethod?.Invoke(collection, new object?[]{ dir ?? string.Empty });
+        var enrich = this.GetType().GetMethod("EnrichQuantitiesFromCollection", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        enrich?.Invoke(this, null);
     }
 }
 
@@ -576,6 +624,39 @@ public class BinderViewModel : INotifyPropertyChanged
     private readonly ConcurrentDictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
     private readonly List<PageView> _views = new(); // sequence of display views across all binders
     private readonly CardCollectionData _collection = new(); // collection DB data
+    // Manual refresh of collection DB quantities (via menu)
+    public void RefreshQuantities_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(_currentCollectionDir)) { Status = "No collection file loaded."; return; }
+            // Reset loaded folder so CardCollectionData.Load executes again even if same directory
+            var loadedFolderField = typeof(CardCollectionData).GetField("_loadedFolder", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            loadedFolderField?.SetValue(_collection, null);
+            // Clear existing quantity maps
+            _collection.Quantities.Clear();
+            var variantField = typeof(CardCollectionData).GetProperty("VariantQuantities");
+            if (variantField?.GetValue(_collection) is System.Collections.IDictionary variantDict) variantDict.Clear();
+            _collection.Load(_currentCollectionDir);
+            if (_collection.IsLoaded)
+            {
+                EnrichQuantitiesFromCollection();
+                BuildOrderedFaces();
+                RebuildViews();
+                Refresh();
+                Status = "Quantities refreshed.";
+            }
+            else
+            {
+                Status = "Collection DBs not found.";
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Collection] Refresh failed: {ex.Message}");
+            MessageBox.Show(ex.Message, "Refresh Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
     // Explicit pair keys (e.g. base number + language variant) -> enforced pair placement regardless of name differences
     private readonly Dictionary<CardEntry,string> _explicitPairKeys = new();
     // Pending variant pairs captured during parse before resolution (set, baseNumber, variantNumber)
