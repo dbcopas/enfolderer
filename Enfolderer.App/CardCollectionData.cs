@@ -136,15 +136,7 @@ public sealed class CardCollectionData
                 if (!_cardRows.ContainsKey(cardId))
                 {
                     _cardRows[cardId] = (set.ToLowerInvariant(), baseKey, modifier); // store baseKey (normalized) + raw modifier
-                }
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1" && string.Equals(set, "WAR", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(modifier))
-                {
-                    System.Diagnostics.Debug.WriteLine($"[Collection][ROW] WAR card row cardId={cardId} baseKey={baseKey} modifier={modifier}");
-                }
-                if (cardId == 71099)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[Collection][DEBUG] CardId 71099 set={set} baseKey={baseKey} modifier={modifier} keepModifier={keepModifier} insertedKeys: {collectorPrimary}{(trimmed!=baseKey?", "+collectorTrimIfDifferent(baseKey, trimmed, keepModifier, modifier):string.Empty)}");
-                }
+                }                
             }
         }
         catch (Exception ex)
@@ -206,10 +198,6 @@ public sealed class CardCollectionData
                                 if (!Quantities.ContainsKey((setLower, numericPart)))
                                 {
                                     Quantities[(setLower, numericPart)] = qty.Value;
-                                    if (cardId == 71099)
-                                    {
-                                        System.Diagnostics.Debug.WriteLine($"[Collection][DEBUG] Alias added cardId=71099 {setLower}:{numericPart} -> qty={qty}");
-                                    }
                                 }
                             }
                         }
@@ -227,10 +215,6 @@ public sealed class CardCollectionData
                                 if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1" && rSet == "war")
                                     System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT-ADD] WAR variant collector={rCollector} modifier={modLower} qty={qty.Value}");
                             }
-                        }
-                        if (cardId == 71099)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[Collection][DEBUG] Qty map cardId=71099 key={key.set}:{key.collector} qty={qty}");
                         }
                     }
                 }
