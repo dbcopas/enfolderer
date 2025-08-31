@@ -589,11 +589,12 @@ public class CardSlot : INotifyPropertyChanged
     public string Set { get; }
     public string Tooltip { get; }
     public Brush Background { get; }
+    public bool IsBackFace { get; }
     private ImageSource? _imageSource;
     public ImageSource? ImageSource { get => _imageSource; private set { _imageSource = value; OnPropertyChanged(); } }
     private int _quantity;
     public int Quantity { get => _quantity; set { if (_quantity != value) { _quantity = value; OnPropertyChanged(); OnPropertyChanged(nameof(QuantityDisplay)); } } }
-    public string QuantityDisplay => _quantity >= 0 ? _quantity.ToString() : "0";
+    public string QuantityDisplay => (IsBackFace || _quantity < 0) ? string.Empty : _quantity.ToString();
     public CardSlot(CardEntry entry, int index)
     {
     Name = entry.Name;
@@ -601,7 +602,16 @@ public class CardSlot : INotifyPropertyChanged
         Set = entry.Set ?? string.Empty;
     Tooltip = entry.Display + (string.IsNullOrEmpty(Set) ? string.Empty : $" ({Set})");
     Background = Brushes.Black;
-    _quantity = entry.Quantity < 0 ? 0 : entry.Quantity; // treat unknown as 0 for unified zero visual state
+    IsBackFace = entry.IsBackFace;
+    // Back faces never show quantity nor participate in quantity logic; use -1 sentinel
+    if (IsBackFace)
+    {
+        _quantity = -1;
+    }
+    else
+    {
+        _quantity = entry.Quantity < 0 ? 0 : entry.Quantity; // treat unknown as 0 for unified zero visual state
+    }
     }
     public CardSlot(string placeholder, int index)
     {
@@ -821,6 +831,7 @@ public class BinderViewModel : INotifyPropertyChanged
     public void ToggleCardQuantity(CardSlot slot)
     {
         if (slot == null) return;
+    if (slot.IsBackFace) { Status = "Back face placeholder"; return; }
         if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { Status = "No set/number"; return; }
         if (string.IsNullOrEmpty(_currentCollectionDir)) { Status = "No collection loaded"; return; }
         EnsureCollectionLoaded();
@@ -1574,7 +1585,7 @@ public class BinderViewModel : INotifyPropertyChanged
                     {
                         var spec = new CardSpec("__BACK__", "BACK", overrideName: null, explicitEntry: true);
                         _specs.Add(spec);
-                        var entry = new CardEntry("Backface", "BACK", "__BACK__", false, false, null, null, string.Empty);
+                        var entry = new CardEntry("Backface", "BACK", "__BACK__", false, true, null, null, string.Empty);
                         // Map image URL (front & back same) to local file if present, else fallback to remote standard back.
                         var frontUrl = hasLocal ? _localBackImagePath! : "https://c1.scryfall.com/file/scryfall-card-backs/en.png";
                         CardImageUrlStore.Set("__BACK__", "BACK", frontUrl, frontUrl);
@@ -1975,6 +1986,7 @@ public class BinderViewModel : INotifyPropertyChanged
         for (int i = 0; i < _cards.Count; i++)
         {
             var c = _cards[i];
+            if (c.IsBackFace) continue; // never assign quantities to back faces
             if (string.IsNullOrEmpty(c.Set) || string.IsNullOrEmpty(c.Number)) continue;
             // Authoritative variant path: WAR star-number (Japanese alternate planeswalkers)
             if (string.Equals(c.Set, "WAR", StringComparison.OrdinalIgnoreCase) && c.Number.Contains('★'))
