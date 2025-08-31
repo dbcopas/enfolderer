@@ -590,11 +590,12 @@ public class CardSlot : INotifyPropertyChanged
     public string Tooltip { get; }
     public Brush Background { get; }
     public bool IsBackFace { get; }
+    public bool IsPlaceholderBack { get; }
     private ImageSource? _imageSource;
     public ImageSource? ImageSource { get => _imageSource; private set { _imageSource = value; OnPropertyChanged(); } }
     private int _quantity;
     public int Quantity { get => _quantity; set { if (_quantity != value) { _quantity = value; OnPropertyChanged(); OnPropertyChanged(nameof(QuantityDisplay)); } } }
-    public string QuantityDisplay => (IsBackFace || _quantity < 0) ? string.Empty : _quantity.ToString();
+    public string QuantityDisplay => (IsPlaceholderBack || _quantity < 0) ? string.Empty : _quantity.ToString();
     public CardSlot(CardEntry entry, int index)
     {
     Name = entry.Name;
@@ -603,8 +604,9 @@ public class CardSlot : INotifyPropertyChanged
     Tooltip = entry.Display + (string.IsNullOrEmpty(Set) ? string.Empty : $" ({Set})");
     Background = Brushes.Black;
     IsBackFace = entry.IsBackFace;
+    IsPlaceholderBack = string.Equals(Set, "__BACK__", StringComparison.OrdinalIgnoreCase) && string.Equals(Name, "Backface", StringComparison.OrdinalIgnoreCase);
     // Back faces never show quantity nor participate in quantity logic; use -1 sentinel
-    if (IsBackFace)
+    if (IsPlaceholderBack)
     {
         _quantity = -1;
     }
@@ -831,7 +833,7 @@ public class BinderViewModel : INotifyPropertyChanged
     public void ToggleCardQuantity(CardSlot slot)
     {
         if (slot == null) return;
-    if (slot.IsBackFace) { Status = "Back face placeholder"; return; }
+    if (slot.IsPlaceholderBack) { Status = "Back face placeholder"; return; }
         if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { Status = "No set/number"; return; }
         if (string.IsNullOrEmpty(_currentCollectionDir)) { Status = "No collection loaded"; return; }
         EnsureCollectionLoaded();
@@ -1986,7 +1988,7 @@ public class BinderViewModel : INotifyPropertyChanged
         for (int i = 0; i < _cards.Count; i++)
         {
             var c = _cards[i];
-            if (c.IsBackFace) continue; // never assign quantities to back faces
+            if (c.IsBackFace && string.Equals(c.Set, "__BACK__", StringComparison.OrdinalIgnoreCase)) continue; // skip only placeholder backs
             if (string.IsNullOrEmpty(c.Set) || string.IsNullOrEmpty(c.Number)) continue;
             // Authoritative variant path: WAR star-number (Japanese alternate planeswalkers)
             if (string.Equals(c.Set, "WAR", StringComparison.OrdinalIgnoreCase) && c.Number.Contains('★'))
@@ -2084,7 +2086,7 @@ public class BinderViewModel : INotifyPropertyChanged
         for (int i = 0; i < _cards.Count; i++)
         {
             var front = _cards[i];
-            if (!front.IsModalDoubleFaced || front.IsBackFace) continue; // only process front faces
+            if (!front.IsModalDoubleFaced || front.IsBackFace) continue; // only process front faces (real MFC logic retained)
             int q = front.Quantity;
             if (q < 0) continue; // not yet populated
             int frontDisplay, backDisplay;
