@@ -674,7 +674,14 @@ public class BinderViewModel : INotifyPropertyChanged
         }
 
         // Derive canonical keys exactly like EnrichQuantitiesFromCollection
-        string baseNumRaw = slot.Number.Split('/')[0];
+        // Support alt-art composite numbers like "123(123a)" or "123(456)" by using only the leading portion before '(' for lookup
+        string numToken = slot.Number.Split('/')[0];
+        int parenIndexToggle = numToken.IndexOf('(');
+        if (parenIndexToggle > 0)
+        {
+            numToken = numToken.Substring(0, parenIndexToggle);
+        }
+        string baseNumRaw = numToken;
         string baseNum = baseNumRaw; // already number value field formatting expected
         string trimmed = baseNum.TrimStart('0'); if (trimmed.Length == 0) trimmed = "0";
         string setLower = slot.Set.ToLowerInvariant();
@@ -835,17 +842,46 @@ public class BinderViewModel : INotifyPropertyChanged
             string? editionCol = cols.Contains("edition") ? "edition" : (cols.Contains("set") ? "set" : null);
             string? numberValueCol = cols.Contains("collectorNumberValue") ? "collectorNumberValue" : (cols.Contains("numberValue") ? "numberValue" : null);
             if (idCol == null || editionCol == null || numberValueCol == null) return null;
-            // Candidate numbers list
+            // Normalize composite numbers like n(m) to use only leading n for DB lookups
+            int parenIndex = baseNum.IndexOf('(');
+            if (parenIndex > 0) baseNum = baseNum.Substring(0, parenIndex);
+
+            // Candidate numbers list (original, trimmed, progressive stripping)
             var candidates = new List<string>();
-            candidates.Add(baseNum);
-            if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal)) candidates.Add(trimmed);
+            void AddCand(string c)
+            {
+                if (string.IsNullOrWhiteSpace(c)) return;
+                if (!candidates.Contains(c, StringComparer.OrdinalIgnoreCase)) candidates.Add(c);
+            }
+            AddCand(baseNum);
+            if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal)) AddCand(trimmed);
             // Progressive strip trailing non-digits
             string prog = baseNum;
             while (prog.Length > 0 && !char.IsDigit(prog[^1]))
             {
                 prog = prog[..^1];
                 if (prog.Length == 0) break;
-                if (!candidates.Contains(prog, StringComparer.OrdinalIgnoreCase)) candidates.Add(prog);
+                AddCand(prog);
+            }
+
+            // Padding variants: 0n, 00n etc (up to two leading zeros) for both baseNum and trimmed forms
+            List<string> baseForPad = new();
+            if (int.TryParse(baseNum, out _)) baseForPad.Add(baseNum);
+            if (int.TryParse(trimmed, out _)) baseForPad.Add(trimmed);
+            foreach (var b in baseForPad.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (b.Length < 3) // only pad reasonably small numbers to avoid explosion
+                {
+                    if (b.Length == 1)
+                    {
+                        AddCand("0" + b);
+                        AddCand("00" + b);
+                    }
+                    else if (b.Length == 2)
+                    {
+                        AddCand("0" + b);
+                    }
+                }
             }
             // Edition candidates (original, upper, lower) to handle case mismatches
             var editionCandidates = new List<string>();
@@ -1816,7 +1852,14 @@ public class BinderViewModel : INotifyPropertyChanged
                 }
                 continue; // skip base fallback entirely for star variants
             }
-            string baseNum = c.Number.Split('/')[0];
+            // For display numbers like n(m) we only lookup n (first segment before '(')
+            string numTokenCard = c.Number.Split('/')[0];
+            int parenIndex = numTokenCard.IndexOf('(');
+            if (parenIndex > 0)
+            {
+                numTokenCard = numTokenCard.Substring(0, parenIndex);
+            }
+            string baseNum = numTokenCard;
             string trimmed = baseNum.TrimStart('0');
             if (trimmed.Length == 0) trimmed = "0";
             var setLower = c.Set.ToLowerInvariant();
