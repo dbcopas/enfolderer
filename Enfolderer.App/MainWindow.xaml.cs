@@ -191,6 +191,21 @@ public partial class MainWindow : Window
     {
     _vm?.RefreshQuantities();
     }
+
+    private void CardSlot_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        try
+        {
+            if (_vm == null) return;
+            if (sender is not Border b) return;
+            if (b.DataContext is not CardSlot slot) return;
+            _vm.ToggleCardQuantity(slot);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[UI] Click handler error: {ex.Message}");
+        }
+    }
 }
 
 public record CardEntry(string Name, string Number, string? Set, bool IsModalDoubleFaced, bool IsBackFace = false, string? FrontRaw = null, string? BackRaw = null, string? DisplayNumber = null, int Quantity = -1)
@@ -629,6 +644,224 @@ public class BinderViewModel : INotifyPropertyChanged
             Debug.WriteLine($"[Collection] Refresh failed: {ex.Message}");
             Status = "Refresh failed.";
         }
+    }
+
+    public void ToggleCardQuantity(CardSlot slot)
+    {
+        if (slot == null) return;
+        if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { Status = "No set/number"; return; }
+        if (string.IsNullOrEmpty(_currentCollectionDir)) { Status = "No collection loaded"; return; }
+        EnsureCollectionLoaded();
+        if (!_collection.IsLoaded)
+        {
+            Status = "Collection not loaded";
+            return;
+        }
+
+        // Derive canonical keys exactly like EnrichQuantitiesFromCollection
+        string baseNumRaw = slot.Number.Split('/')[0];
+        string baseNum = baseNumRaw; // already number value field formatting expected
+        string trimmed = baseNum.TrimStart('0'); if (trimmed.Length == 0) trimmed = "0";
+        string setLower = slot.Set.ToLowerInvariant();
+        (int cardId, int? gatherer) foundEntry = default;
+        bool indexFound = false;
+        if (_collection.MainIndex.TryGetValue((setLower, baseNum), out foundEntry)) indexFound = true; else if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal) && _collection.MainIndex.TryGetValue((setLower, trimmed), out foundEntry)) indexFound = true; else {
+            // Progressive strip trailing non-digits (mirrors quantity enrichment fallback)
+            string candidate = baseNum;
+            while (candidate.Length > 0 && !indexFound && !char.IsDigit(candidate[^1]))
+            {
+                candidate = candidate.Substring(0, candidate.Length -1);
+                if (candidate.Length == 0) break;
+                if (_collection.MainIndex.TryGetValue((setLower, candidate), out foundEntry)) { indexFound = true; break; }
+            }
+        }
+        if (!indexFound)
+        {
+            // Fallback: directly resolve cardId from mainDb.db using same flexible number logic
+            int? directId = ResolveCardIdFromDb(slot.Set, baseNum, trimmed);
+            if (directId == null)
+            {
+                Status = "Card not found";
+                return;
+            }
+            foundEntry = (directId.Value, null);
+        }
+        int cardId = foundEntry.cardId;
+
+        // Determine logical collection quantity (pre-display transform) by reversing MFC display rule if needed
+        int logicalQty = slot.Quantity; // for non-MFC or display==logical
+        bool isMfcFront = false;
+        // Find underlying CardEntry to assess MFC status
+        CardEntry? entry = _cards.FirstOrDefault(c => c.Set != null && string.Equals(c.Set, slot.Set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number.Split('/')[0], baseNum.Split('/')[0], StringComparison.OrdinalIgnoreCase) && c.Name == slot.Name);
+        if (entry != null && entry.IsModalDoubleFaced && !entry.IsBackFace)
+        {
+            isMfcFront = true;
+            // Display mapping: 0->0, 1->1, 2->2 (cap) so logical cannot be inferred uniquely when display==2; assume logical>=2 already
+            logicalQty = slot.Quantity; // identical mapping for our transition logic
+        }
+
+        int newLogicalQty;
+        if (!isMfcFront)
+        {
+            // Non-MFC toggle: 0 ->1, >=1 ->0
+            newLogicalQty = logicalQty == 0 ? 1 : 0;
+        }
+        else
+        {
+            // MFC state machine per spec:
+            // 0 -> 1, 1 -> 2, 2 -> 0 (treat 2 as >=2) providing cycling 0,1,2
+            if (logicalQty <= 0) newLogicalQty = 1; else if (logicalQty == 1) newLogicalQty = 2; else newLogicalQty = 0;
+        }
+
+        // Persist to mtgstudio.collection (upsert)
+        string collectionPath = System.IO.Path.Combine(_currentCollectionDir, "mtgstudio.collection");
+        if (!File.Exists(collectionPath)) { Status = "Collection file missing"; return; }
+        try
+        {
+            using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={collectionPath}");
+            con.Open();
+            using (var cmd = con.CreateCommand())
+            {
+                cmd.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
+                cmd.Parameters.AddWithValue("@q", newLogicalQty);
+                cmd.Parameters.AddWithValue("@id", cardId);
+                int rows = cmd.ExecuteNonQuery();
+                if (rows == 0)
+                {
+                    using var ins = con.CreateCommand();
+                    ins.CommandText = "INSERT INTO CollectionCards (CardId, Qty) VALUES (@id, @q)";
+                    ins.Parameters.AddWithValue("@id", cardId);
+                    ins.Parameters.AddWithValue("@q", newLogicalQty);
+                    try { ins.ExecuteNonQuery(); } catch { }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Collection] Toggle write failed: {ex.Message}");
+            Status = "Write failed"; return;
+        }
+
+        // Update in-memory collection dictionaries
+        if (newLogicalQty > 0) _collection.Quantities[(setLower, baseNum)] = newLogicalQty; else _collection.Quantities.Remove((setLower, baseNum));
+        if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal))
+        {
+            if (newLogicalQty > 0) _collection.Quantities[(setLower, trimmed)] = newLogicalQty; else _collection.Quantities.Remove((setLower, trimmed));
+        }
+
+        // Update CardEntry list quantities for all faces with this set+number (base) then re-apply MFC display rule for those
+        for (int i = 0; i < _cards.Count; i++)
+        {
+            var c = _cards[i];
+            if (c.Set != null && string.Equals(c.Set, slot.Set, StringComparison.OrdinalIgnoreCase))
+            {
+                string cBase = c.Number.Split('/')[0];
+                if (string.Equals(cBase, baseNum, StringComparison.OrdinalIgnoreCase) || string.Equals(cBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase))
+                {
+                    _cards[i] = c with { Quantity = newLogicalQty };
+                }
+            }
+        }
+        // Apply MFC display adjustments (mutates _cards quantities for display)
+        AdjustMfcQuantities();
+        // Sync updated quantities into existing _orderedFaces so we don't need a full rebuild
+        for (int i = 0; i < _orderedFaces.Count; i++)
+        {
+            var o = _orderedFaces[i];
+            if (o.Set != null && string.Equals(o.Set, slot.Set, StringComparison.OrdinalIgnoreCase))
+            {
+                string oBase = o.Number.Split('/')[0];
+                if (string.Equals(oBase, baseNum, StringComparison.OrdinalIgnoreCase) || string.Equals(oBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Find matching updated card entry (front/back distinction preserved by IsBackFace flag)
+                    var updated = _cards.FirstOrDefault(c => c.Set != null && c.Set.Equals(o.Set, StringComparison.OrdinalIgnoreCase) && c.Number == o.Number && c.IsBackFace == o.IsBackFace);
+                    if (updated != null)
+                        _orderedFaces[i] = updated;
+                }
+            }
+        }
+        Refresh();
+        Status = $"Set {slot.Set} #{slot.Number} => {newLogicalQty}";
+    }
+
+    private void EnsureCollectionLoaded()
+    {
+        try
+        {
+            if (!_collection.IsLoaded && !string.IsNullOrEmpty(_currentCollectionDir))
+            {
+                _collection.Load(_currentCollectionDir);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Collection] Ensure load failed: {ex.Message}");
+        }
+    }
+
+    private int? ResolveCardIdFromDb(string setOriginal, string baseNum, string trimmed)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(_currentCollectionDir)) return null;
+            string mainDb = System.IO.Path.Combine(_currentCollectionDir, "mainDb.db");
+            if (!File.Exists(mainDb)) return null;
+            using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={mainDb};Mode=ReadOnly");
+            con.Open();
+            // Discover columns
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pragma = con.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA table_info(Cards)";
+                using var r = pragma.ExecuteReader();
+                while (r.Read()) { try { cols.Add(r.GetString(1)); } catch { } }
+            }
+            string? idCol = cols.Contains("id") ? "id" : (cols.Contains("cardId") ? "cardId" : null);
+            string? editionCol = cols.Contains("edition") ? "edition" : (cols.Contains("set") ? "set" : null);
+            string? numberValueCol = cols.Contains("collectorNumberValue") ? "collectorNumberValue" : (cols.Contains("numberValue") ? "numberValue" : null);
+            if (idCol == null || editionCol == null || numberValueCol == null) return null;
+            // Candidate numbers list
+            var candidates = new List<string>();
+            candidates.Add(baseNum);
+            if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal)) candidates.Add(trimmed);
+            // Progressive strip trailing non-digits
+            string prog = baseNum;
+            while (prog.Length > 0 && !char.IsDigit(prog[^1]))
+            {
+                prog = prog[..^1];
+                if (prog.Length == 0) break;
+                if (!candidates.Contains(prog, StringComparer.OrdinalIgnoreCase)) candidates.Add(prog);
+            }
+            // Edition candidates (original, upper, lower) to handle case mismatches
+            var editionCandidates = new List<string>();
+            if (!string.IsNullOrEmpty(setOriginal)) editionCandidates.Add(setOriginal);
+            var upper = setOriginal?.ToUpperInvariant();
+            var lower = setOriginal?.ToLowerInvariant();
+            if (!string.IsNullOrEmpty(upper) && !editionCandidates.Contains(upper)) editionCandidates.Add(upper);
+            if (!string.IsNullOrEmpty(lower) && !editionCandidates.Contains(lower)) editionCandidates.Add(lower);
+
+            foreach (var editionCandidate in editionCandidates)
+            {
+                foreach (var cand in candidates)
+                {
+                    using var cmd = con.CreateCommand();
+                    // Use COLLATE NOCASE as an extra safety; still supply candidate edition.
+                    cmd.CommandText = $"SELECT {idCol} FROM Cards WHERE {editionCol}=@set COLLATE NOCASE AND {numberValueCol}=@num LIMIT 1";
+                    cmd.Parameters.AddWithValue("@set", editionCandidate);
+                    cmd.Parameters.AddWithValue("@num", cand);
+                    var val = cmd.ExecuteScalar();
+                    if (val != null && val != DBNull.Value)
+                    {
+                        if (int.TryParse(val.ToString(), out int idVal)) return idVal;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Collection] Direct cardId resolve failed: {ex.Message}");
+        }
+        return null;
     }
     // Explicit pair keys (e.g. base number + language variant) -> enforced pair placement regardless of name differences
     private readonly Dictionary<CardEntry,string> _explicitPairKeys = new();
