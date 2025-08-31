@@ -128,6 +128,7 @@
                     <Button Style="{StaticResource NavButtonStyle}" Content="⏪ Binder Prev" Command="{Binding PrevBinderCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="⏮ First" Command="{Binding FirstCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="◀ Prev" Command="{Binding PrevCommand}" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Set ◀" Command="{Binding PrevSetCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Open Collection..." Click="OpenCollection_Click" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Refresh Quantities" Click="RefreshQuantities_Click" />
                 </StackPanel>
@@ -140,6 +141,7 @@
                     <Button Style="{StaticResource NavButtonStyle}" Content="Next ▶" Command="{Binding NextCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Last ⏭" Command="{Binding LastCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Binder Next ⏩" Command="{Binding NextBinderCommand}" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Set ▶" Command="{Binding NextSetCommand}" />
                 </StackPanel>
                 <!-- Jump controls at far right -->
                 <StackPanel Orientation="Horizontal" Grid.Column="6" VerticalAlignment="Center" Margin="10,0,0,0">
