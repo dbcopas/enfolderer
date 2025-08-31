@@ -68,9 +68,7 @@
     <DockPanel>
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
-                <MenuItem Header="_Open Collection..." Click="OpenCollection_Click" />
                 <MenuItem Header="Update mainDb from CSV..." Click="UpdateMainDbFromCsv_Click" />
-                <MenuItem Header="_Refresh Quantities" Click="RefreshQuantities_Click" />
                 <Separator />
                 <MenuItem Header="E_xit" Click="Exit_Click" />
             </MenuItem>
@@ -129,6 +127,8 @@
                     <Button Style="{StaticResource NavButtonStyle}" Content="⏪ Binder Prev" Command="{Binding PrevBinderCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="⏮ First" Command="{Binding FirstCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="◀ Prev" Command="{Binding PrevCommand}" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Open Collection..." Click="OpenCollection_Click" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Refresh Quantities" Click="RefreshQuantities_Click" />
                 </StackPanel>
                 <!-- Center fixed-width page display -->
                 <Border Grid.Column="2" HorizontalAlignment="Center" VerticalAlignment="Center">
