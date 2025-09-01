@@ -13,4 +13,30 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.5" />
   </ItemGroup>
 
+  <!-- Ship mainDb.db with builds/publish -->
+  <ItemGroup>
+    <Content Include="..\mainDb.db">
+      <Link>mainDb.db</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- Ensure mtgstudio.collection exists in output (copy real one if present at solution root, else create empty placeholder) -->
+  <Target Name="CopyOrCreateCollectionDb" AfterTargets="Build">
+    <!-- If source file exists at solution root, copy it -->
+    <ItemGroup Condition="Exists('..\mtgstudio.collection')">
+      <_CollectionSource Include="..\mtgstudio.collection" />
+    </ItemGroup>
+    <Copy Condition="@( _CollectionSource ) != ''" SourceFiles="@(_CollectionSource)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+    <!-- Create empty placeholder if not copied -->
+    <Exec Condition="!Exists('$(TargetDir)mtgstudio.collection')" Command="type NUL > &quot;$(TargetDir)mtgstudio.collection&quot;" />
+  </Target>
+
+  <!-- Also include in publish (post publish copy) -->
+  <Target Name="PublishCollectionDb" AfterTargets="Publish">
+    <Copy Condition="Exists('$(TargetDir)mtgstudio.collection')" SourceFiles="$(TargetDir)mtgstudio.collection" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('..\mtgstudio.collection')" SourceFiles="..\mtgstudio.collection" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>
