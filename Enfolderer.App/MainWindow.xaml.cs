@@ -715,7 +715,7 @@ public partial class MainWindow : Window
     {
         // Instead of letting user pick arbitrary folder for DBs, always use executable directory for DB lookup.
         // Still allow selecting a binder text file (layout/spec list) but DB paths are fixed.
-        var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Open Binder Text File", Filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*" };
+        var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Open Binder Text File", Filter = "All Files (*.*)|*.*" };
         if (dlg.ShowDialog(this) != true) return;
         try
         {
