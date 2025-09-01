@@ -29,6 +29,8 @@
 
   <Target Name="WarnIfCollectionMissing" BeforeTargets="Build">
     <Message Importance="High" Text="mtgstudio.collection not found at repo root; skipping copy." Condition="!Exists('..\\mtgstudio.collection')" />
+    <Message Importance="High" Text="mainDb.db not found at repo root; skipping copy." Condition="!Exists('..\\mainDb.db')" />
   </Target>
+  <!-- NOTE: Explicit AfterPublish copy target removed; CopyToPublishDirectory metadata already handles inclusion when files exist. -->
 
 </Project>
