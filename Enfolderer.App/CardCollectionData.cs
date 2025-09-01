@@ -23,6 +23,8 @@ public sealed class CardCollectionData
     public Dictionary<(string set,string collector,string modifier), int> VariantQuantities { get; } = new(StringVariantTupleComparer.OrdinalIgnoreCase);
     // Custom cards (not present in mtgstudio.collection) tracked in mainDb via Qty column when MtgsId is NULL
     public HashSet<int> CustomCards { get; } = new();
+    // Snapshot of custom (MtgsId NULL) quantities (setLower, baseNumber) -> qty
+    public Dictionary<(string set,string collector), int> CustomQuantities { get; } = new(StringTupleComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string,string[]> ModifierSynonyms = new(StringComparer.OrdinalIgnoreCase)
     {
         { "JP", new[]{ "jp","jpn","ja","japanese" } },
@@ -48,14 +50,16 @@ public sealed class CardCollectionData
         if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return;
         if (string.Equals(_loadedFolder, folder, StringComparison.OrdinalIgnoreCase)) return; // already loaded
 
-        string mainDbPath = Path.Combine(folder, "mainDb.db");
-        string collectionPath = Path.Combine(folder, "mtgstudio.collection");
-        if (!File.Exists(mainDbPath) || !File.Exists(collectionPath)) return; // silently ignore if either missing
+    string mainDbPath = Path.Combine(folder, "mainDb.db");
+    string collectionPath = Path.Combine(folder, "mtgstudio.collection");
+    // Require mainDb (needed for index + custom quantities). Collection file is optional (regular quantities).
+    if (!File.Exists(mainDbPath)) return; // silently ignore if mainDb missing
 
     MainIndex.Clear();
     Quantities.Clear();
     VariantQuantities.Clear();
     CustomCards.Clear();
+    CustomQuantities.Clear();
     _cardRows.Clear();
 
         // 1. Load main card index
@@ -88,7 +92,7 @@ public sealed class CardCollectionData
             // Prefer 'id' per provided schema; include legacy/cardId variants.
             string? cardIdCol = FirstExisting(columns, "id", "ID", "cardId", "CardId", "card_id");
             string? editionCol = FirstExisting(columns, "edition", "Edition", "set", "Set", "setCode", "SetCode", "set_code");    
-            string? numberValueCol = FirstExisting(columns, "collectorNumberValue", "CollectorNumberValue", "collector_number_value", "numberValue", "NumberValue"); // base numeric value for matching
+            string? numberValueCol = FirstExisting(columns, "collectorNumberValue", "CollectorNumberValue", "collector_number_value", "numberValue", "NumberValue", "collectorNumber", "CollectorNumber", "collector_number"); // base numeric value for matching
             string? modifierCol = FirstExisting(columns, "modifier", "Modifier", "mod", "Mod", "variant", "Variant", "variation"); // optional
             
 
@@ -120,44 +124,44 @@ public sealed class CardCollectionData
             int ordQty = r.GetOrdinal("qty");
             while (r.Read())
             {
-                int cardId = SafeGetInt(r, ordCardId) ?? -1;
-                if (cardId < 0) continue;
+                int rawId = SafeGetInt(r, ordCardId) ?? -1; // internal primary key
+                if (rawId < 0) continue;
                 string set = (SafeGetString(r, ordEdition) ?? string.Empty).Trim();
-                string numberValue = (SafeGetString(r, ordNumberValue) ?? string.Empty).Trim(); // base numeric value
+                string numberValue = (SafeGetString(r, ordNumberValue) ?? string.Empty).Trim(); // base numeric value (may be empty)
                 string modifier = (SafeGetString(r, ordModifier) ?? string.Empty).Trim();
-                int? mtgsId = SafeGetInt(r, ordMtgsId);
+                int? mtgsId = SafeGetInt(r, ordMtgsId); // authoritative external id mapping to CollectionCards.CardId
                 int? qtyMain = SafeGetInt(r, ordQty);
                 if (string.IsNullOrEmpty(set)) continue;
-                // Determine base key: prefer numberValue, fallback to pre-split number
-                string baseKey =  numberValue;
-                baseKey = baseKey.Trim();
-                // Only keep modifier in key if it's a token; otherwise drop it to unify variants.
+                string baseKey = numberValue.Trim();
+                if (string.IsNullOrEmpty(baseKey)) baseKey = ""; // allow empty, enrichment will ignore
                 bool keepModifier = IsTokenModifier(modifier);
                 string collectorPrimary = (!keepModifier || string.IsNullOrEmpty(modifier)) ? baseKey : baseKey + modifier;
-                // Add primary key
-                AddIndexEntry(set, collectorPrimary, cardId, reverse);
-                // If baseKey has leading zeros, also add trimmed variant to maximize match robustness
+
+                // Decide which id to use for cross-db linkage: prefer MtgsId when present (canonical cards), else internal raw id (custom/imported)
+                int linkId = (mtgsId.HasValue && mtgsId.Value > 0) ? mtgsId.Value : rawId;
+
+                AddIndexEntry(set, collectorPrimary, linkId, reverse);
                 string trimmed = baseKey.TrimStart('0');
-                if (trimmed.Length == 0) trimmed = "0"; // handle all-zero
+                if (trimmed.Length == 0 && baseKey.Length > 0) trimmed = "0"; // handle all-zero; preserve empty if originally empty
                 if (!string.Equals(trimmed, baseKey, StringComparison.Ordinal))
                 {
                     string collectorTrim = (!keepModifier || string.IsNullOrEmpty(modifier)) ? trimmed : trimmed + modifier;
-                    AddIndexEntry(set, collectorTrim, cardId, reverse, allowOverwrite:false);
+                    AddIndexEntry(set, collectorTrim, linkId, reverse, allowOverwrite:false);
                 }
-                // Record full row including non-token modifier for later variant quantity lookup
-                if (!_cardRows.ContainsKey(cardId))
+                if (!_cardRows.ContainsKey(linkId))
                 {
-                    _cardRows[cardId] = (set.ToLowerInvariant(), baseKey, modifier); // store baseKey (normalized) + raw modifier
+                    _cardRows[linkId] = (set.ToLowerInvariant(), baseKey, modifier);
                 }
-                // Track custom card & its quantity if MtgsId is null
-                if (mtgsId == null || mtgsId <= 0)
+                if (!(mtgsId.HasValue && mtgsId.Value > 0))
                 {
-                    CustomCards.Add(cardId);
-                    if (qtyMain is int q && q > 0)
+                    CustomCards.Add(linkId);
+                    if (qtyMain is int qCust && qCust > 0 && !string.IsNullOrEmpty(baseKey))
                     {
-                        // For custom cards, add their quantity (positive only) so enrichment picks it up implicitly
-                        var qKey = (set.ToLowerInvariant(), baseKey);
-                        Quantities[qKey] = q;
+                        var ck = (set.ToLowerInvariant(), baseKey);
+                        // Store in dedicated snapshot (used during initial enrichment w/o extra DB queries)
+                        CustomQuantities[ck] = qCust;
+                        // Also place into unified Quantities so existing enrichment path picks it up
+                        Quantities[ck] = qCust;
                     }
                 }
             }
@@ -168,11 +172,13 @@ public sealed class CardCollectionData
             return; // abort silently so UI continues
         }
 
-        // 2. Load quantities and map through reverse index
+        // 2. Load collection quantities (optional if file absent) and map through reverse index
         try
         {
-            using var con = new SqliteConnection($"Data Source={collectionPath};Mode=ReadOnly");
-            con.Open();
+            if (File.Exists(collectionPath))
+            {
+                using var con = new SqliteConnection($"Data Source={collectionPath};Mode=ReadOnly");
+                con.Open();
             // Discover schema for CollectionCards
             var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             using (var pragma = con.CreateCommand())
@@ -242,13 +248,13 @@ public sealed class CardCollectionData
                     }
                 }
             }
+            }
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[Collection] Quantity DB load failed: {ex.Message}");
             // leave already built MainIndex; quantities may remain empty
         }
-
         _loadedFolder = folder;
         System.Diagnostics.Debug.WriteLine($"[Collection] Loaded: MainIndex={MainIndex.Count} Quantities={Quantities.Count}");
     }

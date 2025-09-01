@@ -721,9 +721,9 @@ public partial class MainWindow : Window
         {
             if (_vm != null)
             {
-                // Load binder file but override its perceived collection dir to exe directory
-                await _vm.LoadFromFileAsync(dlg.FileName);
+                // Ensure override is in place BEFORE loading so initial quantity enrichment succeeds
                 _vm.OverrideCollectionDir(AppContext.BaseDirectory);
+                await _vm.LoadFromFileAsync(dlg.FileName);
                 _vm.SetStatus("Binder loaded. Using application directory for databases.");
             }
         }
@@ -1972,11 +1972,25 @@ public class BinderViewModel : INotifyPropertyChanged
     if (IsCacheComplete(fileHash) && TryLoadMetadataCache(fileHash))
     {
         Status = "Loaded metadata from cache.";
+        // Ensure quantities (including custom mainDb-only) are applied even on cache fast path.
+        if (!string.IsNullOrEmpty(_currentCollectionDir))
+        {
+            try
+            {
+                _collection.Load(_currentCollectionDir);
+                if (_collection.IsLoaded)
+                {
+                    try { EnrichQuantitiesFromCollection(); AdjustMfcQuantities(); } catch { }
+                }
+            }
+            catch { }
+        }
         BuildOrderedFaces();
         _currentViewIndex = 0;
         RebuildViews();
         Refresh();
-        // Fire off background image warm for first two pages (slots) if desired later
+        // Optionally trigger a full refresh pass (lightweight if already loaded) to harmonize any late adjustments
+        try { if (_collection.IsLoaded) AdjustMfcQuantities(); } catch { }
         return;
     }
     _cards.Clear();
@@ -2366,28 +2380,16 @@ public class BinderViewModel : INotifyPropertyChanged
         await ResolveSpecsAsync(fetchList, initialSpecIndexes);
         RebuildCardListFromSpecs();
         // Attempt to load local collection DBs (same folder as binder file)
-        var dir = System.IO.Path.GetDirectoryName(path);
+        // Load DBs from enforced executable directory (override set externally)
+        var dir = _currentCollectionDir;
         if (!string.IsNullOrEmpty(dir))
         {
-            try
+            try { _collection.Load(dir); } catch (Exception ex) { Debug.WriteLine($"[Collection] Load failed (db): {ex.Message}"); }
+            if (_collection.IsLoaded)
             {
-                _collection.Load(dir);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[Collection] Load failed (db): {ex.Message}");
-            }
-            if (_collection.IsLoaded && _collection.Quantities.Count > 0)
-            {
-                try
-                {
-                    EnrichQuantitiesFromCollection();
-                    AdjustMfcQuantities();
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}");
-                }
+                try { EnrichQuantitiesFromCollection(); AdjustMfcQuantities(); } catch (Exception ex) { Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}"); }
+                // Run full refresh path to ensure any custom mainDb-only quantities incorporated early
+                try { RefreshQuantities(); } catch { }
             }
         }
         Status = $"Initial load {_cards.Count} faces (placeholders included).";
@@ -2395,6 +2397,8 @@ public class BinderViewModel : INotifyPropertyChanged
         _currentViewIndex = 0;
         RebuildViews();
         Refresh();
+    // Auto-apply final quantity mapping pass (ensures custom quantities visible without manual Refresh)
+    try { RefreshQuantities(); } catch { }
         // Background fetch remaining
         _ = Task.Run(async () =>
         {
@@ -2405,11 +2409,17 @@ public class BinderViewModel : INotifyPropertyChanged
             Application.Current.Dispatcher.Invoke(() =>
             {
                 RebuildCardListFromSpecs();
-                if (_collection.IsLoaded) EnrichQuantitiesFromCollection();
-                if (_collection.IsLoaded) AdjustMfcQuantities();
-                BuildOrderedFaces();
-                RebuildViews();
-                Refresh();
+                if (_collection.IsLoaded)
+                {
+                    // Use full refresh path so custom (mainDb-only) quantities are applied without manual button click
+                    RefreshQuantities();
+                }
+                else
+                {
+                    BuildOrderedFaces();
+                    RebuildViews();
+                    Refresh();
+                }
                 Status = $"All metadata loaded ({_cards.Count} faces).";
                 PersistMetadataCache(_currentFileHash);
                 MarkCacheComplete(_currentFileHash);
@@ -2419,7 +2429,8 @@ public class BinderViewModel : INotifyPropertyChanged
 
     private void EnrichQuantitiesFromCollection()
     {
-        if (_collection.Quantities.Count == 0) return;
+        // Even if collection Quantities map is empty we still want to reflect custom card quantities
+        // (they may have been loaded from mainDb as CustomCards with Quantities entries). Proceed regardless.
         int updated = 0;
         for (int i = 0; i < _cards.Count; i++)
         {
@@ -2495,12 +2506,19 @@ public class BinderViewModel : INotifyPropertyChanged
                     }
                     catch { }
                 }
-                // Not found -> treat as zero (may have decreased since last refresh)
-                if (c.Quantity != 0)
+                // Fast path: check custom snapshot (no DB round trip)
+                if (_collection.CustomQuantities.TryGetValue((setLower, baseNum), out var qCust) ||
+                    (!string.Equals(trimmed, baseNum, StringComparison.Ordinal) && _collection.CustomQuantities.TryGetValue((setLower, trimmed), out qCust)))
                 {
-                    _cards[i] = c with { Quantity = 0 };
-                    updated++;
+                    if (c.Quantity != qCust)
+                    {
+                        _cards[i] = c with { Quantity = qCust };
+                        updated++;
+                    }
+                    continue;
                 }
+                // Default to zero
+                if (c.Quantity != 0) { _cards[i] = c with { Quantity = 0 }; updated++; }
                 continue;
             }
             if (qty >= 0 && c.Quantity != qty)
