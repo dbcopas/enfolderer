@@ -142,19 +142,28 @@
                 </Grid.ColumnDefinitions>
                 <Grid.Resources>
                     <Style x:Key="NavButtonStyle" TargetType="Button">
-                        <Setter Property="Width" Value="120" />
+                        <Setter Property="Width" Value="60" />
                         <Setter Property="Margin" Value="4,0" />
-                        <Setter Property="Padding" Value="6,6" />
+                        <Setter Property="Padding" Value="4,4" />
+                        <Setter Property="FontSize" Value="10" />
+                        <Setter Property="ContentTemplate">
+                            <Setter.Value>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" FontSize="10" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" HorizontalAlignment="Center" />
+                                </DataTemplate>
+                            </Setter.Value>
+                        </Setter>
                     </Style>
                 </Grid.Resources>
                 <!-- Left group -->
                 <StackPanel Orientation="Horizontal" Grid.Column="0" VerticalAlignment="Center">
-                    <Button Style="{StaticResource NavButtonStyle}" Content="⏪ Binder Prev" Command="{Binding PrevBinderCommand}" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="⏪ Prev" Command="{Binding PrevBinderCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="⏮ First" Command="{Binding FirstCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="◀ Prev" Command="{Binding PrevCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Set ◀" Command="{Binding PrevSetCommand}" />
-                    <Button Style="{StaticResource NavButtonStyle}" Content="Open Collection..." Click="OpenCollection_Click" />
-                    <Button Style="{StaticResource NavButtonStyle}" Content="Refresh Quantities" Click="RefreshQuantities_Click" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Open" Click="OpenCollection_Click" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Refresh" Click="RefreshQuantities_Click" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Auto mprt" Click="AutoImportMissingSets_Click" ToolTip="Import any binder set codes missing from mainDb via Scryfall" />
                 </StackPanel>
                 <!-- Center fixed-width page display -->
                 <Border Grid.Column="2" HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -164,7 +173,7 @@
                 <StackPanel Orientation="Horizontal" Grid.Column="4" VerticalAlignment="Center">
                     <Button Style="{StaticResource NavButtonStyle}" Content="Next ▶" Command="{Binding NextCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Last ⏭" Command="{Binding LastCommand}" />
-                    <Button Style="{StaticResource NavButtonStyle}" Content="Binder Next ⏩" Command="{Binding NextBinderCommand}" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Binder ⏩" Command="{Binding NextBinderCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Set ▶" Command="{Binding NextSetCommand}" />
                 </StackPanel>
                 <!-- Jump controls at far right -->
