@@ -285,10 +285,8 @@ public partial class MainWindow : Window
         {
             var input = Microsoft.VisualBasic.Interaction.InputBox("Enter Scryfall set code (e.g., mom)", "Import Set", "");
             if (string.IsNullOrWhiteSpace(input)) return;
-            var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Locate mainDb.db (any file in folder)", Filter = "Any (*.*)|*.*" };
-            if (dlg.ShowDialog(this) != true) return;
-            string dir = System.IO.Path.GetDirectoryName(dlg.FileName)!;
-            string dbPath = System.IO.Path.Combine(dir, "mainDb.db");
+            if (_vm == null || string.IsNullOrEmpty(_vm.CurrentCollectionDir)) { MessageBox.Show(this, "Open a collection file first so the mainDb location is known."); return; }
+            string dbPath = System.IO.Path.Combine(_vm.CurrentCollectionDir!, "mainDb.db");
             if (!File.Exists(dbPath)) { MessageBox.Show(this, "mainDb.db not found."); return; }
             using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
             con.Open();
@@ -464,12 +462,9 @@ public partial class MainWindow : Window
     {
         try
         {
-            // Choose a mainDb.db (folder root) once
-            var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Locate mainDb.db (any file in folder)", Filter = "Any (*.*)|*.*" };
-            if (dlg.ShowDialog(this) != true) return;
-            string dir = System.IO.Path.GetDirectoryName(dlg.FileName)!;
-            string dbPath = System.IO.Path.Combine(dir, "mainDb.db");
-            if (!File.Exists(dbPath)) { MessageBox.Show(this, "mainDb.db not found."); return; }
+            if (_vm == null || string.IsNullOrEmpty(_vm.CurrentCollectionDir)) { _vm?.SetStatus("Open a collection first."); return; }
+            string dbPath = System.IO.Path.Combine(_vm.CurrentCollectionDir!, "mainDb.db");
+            if (!File.Exists(dbPath)) { _vm.SetStatus("mainDb.db not found in collection folder."); return; }
 
             // Gather distinct set codes currently in binder (from ordered faces / specs via VM reflection-friendly access)
             var binderSets = _vm?.GetCurrentSetCodes() ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1169,6 +1164,9 @@ public class CardSlot : INotifyPropertyChanged
 
 public class BinderViewModel : INotifyPropertyChanged
 {
+    // Directory of currently loaded collection (binder) text file
+    private string? _currentCollectionDir;
+    public string? CurrentCollectionDir => _currentCollectionDir;
     // ==== Restored state fields (previously lost during file corruption) ====
     private static BinderViewModel? _singleton;
     private static readonly object _singletonLock = new();
@@ -1515,7 +1513,6 @@ public class BinderViewModel : INotifyPropertyChanged
     // Pending variant pairs captured during parse before resolution (set, baseNumber, variantNumber)
     private readonly List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs = new();
     private int _currentViewIndex = 0;
-    private string? _currentCollectionDir; // directory of currently loaded collection file
     private string? _localBackImagePath; // cached resolved local back image path (or null if not found)
     private static readonly HttpClient Http = CreateClient();
     private class HttpLoggingHandler : DelegatingHandler
