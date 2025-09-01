@@ -278,57 +278,6 @@ public partial class MainWindow : Window
             }
         }
 
-    private void MigrateMainDbSchema_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            var dlg = new Microsoft.Win32.OpenFileDialog
-            {
-                Title = "Locate mainDb.db (any file in folder)",
-                Filter = "Database or Any (*.*)|*.*"
-            };
-            if (dlg.ShowDialog(this) != true) return;
-            string dir = System.IO.Path.GetDirectoryName(dlg.FileName)!;
-            string dbPath = System.IO.Path.Combine(dir, "mainDb.db");
-            if (!File.Exists(dbPath)) { MessageBox.Show(this, "mainDb.db not found."); return; }
-            using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
-            con.Open();
-            // Check existing columns
-            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            using (var pragma = con.CreateCommand())
-            {
-                pragma.CommandText = "PRAGMA table_info(Cards)";
-                using var r = pragma.ExecuteReader();
-                while (r.Read()) { try { cols.Add(r.GetString(1)); } catch { } }
-            }
-            bool added = false;
-            if (!cols.Contains("MtgsId"))
-            {
-                using var alter = con.CreateCommand();
-                alter.CommandText = "ALTER TABLE Cards ADD COLUMN MtgsId INTEGER";
-                alter.ExecuteNonQuery();
-                added = true;
-            }
-            if (!cols.Contains("Qty"))
-            {
-                using var alter2 = con.CreateCommand();
-                alter2.CommandText = "ALTER TABLE Cards ADD COLUMN Qty INTEGER";
-                alter2.ExecuteNonQuery();
-                added = true;
-            }
-            // Populate MtgsId with existing id values where null
-            using (var upd = con.CreateCommand())
-            {
-                upd.CommandText = "UPDATE Cards SET MtgsId = id WHERE MtgsId IS NULL OR MtgsId = ''";
-                upd.ExecuteNonQuery();
-            }
-            MessageBox.Show(this, $"Migration complete. Columns added: {added}", "Schema Migration");
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, ex.Message, "Migration Error");
-        }
-    }
 
     private async void ImportScryfallSet_Click(object sender, RoutedEventArgs e)
     {
