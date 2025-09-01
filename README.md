@@ -40,6 +40,64 @@ Physical pagination is emulated:
 * Robust zero‑padding preservation for ranges (e.g. `001-010` renders `001..010`)
 * Single-file self‑contained publish option (Win x64)
 * MIT licensed
+* Scryfall Set Import into local mainDb (with Shift key force reimport)
+* Custom card rows (id >= 1,000,000 with NULL MtgsId) + direct quantity field
+* Consolidated HTTP logging to a single rolling file `http-log.txt`
+
+## Inventory & Quantities
+Two sources of truth are merged on display:
+1. mtgstudio.collection (CollectionCards table) for rows having a MtgsId value.
+2. mainDb.Cards.Qty for custom / imported rows whose MtgsId IS NULL.
+
+Click a card face to cycle quantities:
+* Standard cards: 0 → 1 → 2 → 0 (fronts of multi-face pairs update as expected)
+* Placeholder backs: disabled (no quantity overlay; opacity full; not clickable)
+* Custom cards (no MtgsId): stored in `Cards.Qty`.
+
+Refreshing quantities ("Refresh Quantities" button) reloads both sources and rebinds counts.
+
+## Custom Cards
+When importing or manually inserting new cards that do not correspond to mtgstudio.collection entries, they are assigned monotonically increasing IDs >= 1,000,000 and `MtgsId` remains NULL.
+
+Rules:
+* Qty changes persist to `Cards.Qty`.
+* Import never overwrites existing custom quantities.
+* You can still later reconcile by populating MtgsId if a mapping becomes known (future tooling).
+
+## Scryfall Set Import (mainDb)
+Menu: File → "Import Scryfall Set Into mainDb".
+
+Workflow:
+1. Enter a set code (case-insensitive).
+2. App validates `https://api.scryfall.com/sets/{code}`.
+3. Follows the set's `search_uri` (or fallback query) paging through all cards (`has_more` + `next_page`).
+4. Each page is parsed; rows are inserted if collector number + edition not already present.
+5. Sparse updates: Existing rows missing name, rarity, or gathererId are updated (other fields left untouched).
+
+Force Reimport:
+Hold Shift while clicking the menu item to delete existing rows for that set before import (status bar shows rows removed).
+
+Status Bar Summary Example:
+`Import neo: inserted 275, updated 5, skipped 10. Total fetched 290/290.`
+
+ID Assignment:
+New rows get sequential IDs starting at the first free >= 1,000,000 (ensures no collision with legacy IDs).
+
+Error Handling:
+* HTTP & parse errors surface to status bar and abort the current import gracefully.
+* Partial pages already processed remain inserted; rerun (Shift for clean slate if desired).
+
+## HTTP Logging
+All HTTP activity (metadata & image fetches, imports) is logged to `%LocalAppData%/Enfolderer/cache/http-log.txt`.
+
+Format:
+`[UTC_ISO] REQ URL`
+`[UTC_ISO] RESP <status> <elapsed>ms URL`
+
+The status bar also flashes the latest request (truncated) while in flight counts update internal metrics.
+
+Disable Logging:
+Currently always on; future directive (`** ... nohttplog`) may toggle via configuration. You can manually clear the file; it will be recreated.
 
 ## Input File Format (Declarative)
 
