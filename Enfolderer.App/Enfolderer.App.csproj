@@ -15,16 +15,20 @@
 
   <!-- Ship databases from repo root -->
   <ItemGroup>
-    <Content Include="..\mainDb.db">
+    <Content Include="..\mainDb.db" Condition="Exists('..\\mainDb.db')">
       <Link>mainDb.db</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
     </Content>
-    <Content Include="..\mtgstudio.collection">
+    <Content Include="..\mtgstudio.collection" Condition="Exists('..\\mtgstudio.collection')">
       <Link>mtgstudio.collection</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
+
+  <Target Name="WarnIfCollectionMissing" BeforeTargets="Build">
+    <Message Importance="High" Text="mtgstudio.collection not found at repo root; skipping copy." Condition="!Exists('..\\mtgstudio.collection')" />
+  </Target>
 
 </Project>
