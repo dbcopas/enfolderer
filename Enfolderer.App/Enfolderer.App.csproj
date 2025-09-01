@@ -19,11 +19,13 @@
       <Link>mainDb.db</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+  <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
     <Content Include="..\mtgstudio.collection" Condition="Exists('..\\mtgstudio.collection')">
       <Link>mtgstudio.collection</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+  <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
   </ItemGroup>
 
@@ -32,5 +34,14 @@
     <Message Importance="High" Text="mainDb.db not found at repo root; skipping copy." Condition="!Exists('..\\mainDb.db')" />
   </Target>
   <!-- NOTE: Explicit AfterPublish copy target removed; CopyToPublishDirectory metadata already handles inclusion when files exist. -->
+  <!-- Re-introduce explicit copy to handle SingleFile publish which may omit external content -->
+  <Target Name="EnsureDbFilesInPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_DbToCopy Include="..\mainDb.db" Condition="Exists('..\\mainDb.db')" />
+      <_DbToCopy Include="..\mtgstudio.collection" Condition="Exists('..\\mtgstudio.collection')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_DbToCopy)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="@(_DbToCopy) != ''" />
+    <Message Importance="High" Text="EnsureDbFilesInPublish: copied @(_DbToCopy) to $(PublishDir)" Condition="@(_DbToCopy) != ''" />
+  </Target>
 
 </Project>
