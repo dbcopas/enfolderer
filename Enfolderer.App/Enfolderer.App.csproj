@@ -15,7 +15,12 @@
 
   <!-- Ship seed mainDb.db with the application -->
   <ItemGroup>
-    <None Include="..\mainDb.db" Link="mainDb.db">
+    <None Include="..\\MTGSDB\\mainDb.db" Link="mainDb.db" Condition="Exists('..\\MTGSDB\\mainDb.db')">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </None>
+    <None Include="..\\MTGSDB\\mtgstudio.collection" Link="mtgstudio.collection">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
       <ExcludeFromSingleFile>true</ExcludeFromSingleFile>

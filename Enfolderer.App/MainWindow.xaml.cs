@@ -285,9 +285,8 @@ public partial class MainWindow : Window
         {
             var input = Microsoft.VisualBasic.Interaction.InputBox("Enter Scryfall set code (e.g., mom)", "Import Set", "");
             if (string.IsNullOrWhiteSpace(input)) return;
-            var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Locate mainDb.db (any file in folder)", Filter = "Any (*.*)|*.*" };
-            if (dlg.ShowDialog(this) != true) return;
-            string dir = System.IO.Path.GetDirectoryName(dlg.FileName)!;
+            string? dir = _vm?.GetCollectionDir();
+            if (string.IsNullOrEmpty(dir)) { MessageBox.Show(this, "No collection loaded (binder file not opened).", "Import", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
             string dbPath = System.IO.Path.Combine(dir, "mainDb.db");
             if (!File.Exists(dbPath)) { MessageBox.Show(this, "mainDb.db not found."); return; }
             using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
@@ -309,11 +308,11 @@ public partial class MainWindow : Window
                 del.CommandText = $"DELETE FROM Cards WHERE {editionCol}=@e COLLATE NOCASE";
                 del.Parameters.AddWithValue("@e", input.Trim());
                 int deleted = del.ExecuteNonQuery();
-                _vm.SetStatus($"Removed {deleted} existing rows for set {input.Trim()} (forced reimport).");
+                _vm?.SetStatus($"Removed {deleted} existing rows for set {input.Trim()} (forced reimport).");
             }
             using var http = BinderViewModelHttpFactory.Create();
             string setCode = input.Trim();
-            _vm.SetStatus($"Validating set '{setCode}'...");
+            _vm?.SetStatus($"Validating set '{setCode}'...");
             var validateUrl = $"https://api.scryfall.com/sets/{setCode}";
             var swValidate = Stopwatch.StartNew();
             LogHttpExternal("REQ", validateUrl);
@@ -326,7 +325,7 @@ public partial class MainWindow : Window
                 {
                     string body = string.Empty; try { body = await setResp.Content.ReadAsStringAsync(); } catch { }
                     Debug.WriteLine($"[ImportSet] Set lookup failed {setCode} {(int)setResp.StatusCode} Body: {body}");
-                    _vm.SetStatus($"Set '{setCode}' not found ({(int)setResp.StatusCode}).");
+                    _vm?.SetStatus($"Set '{setCode}' not found ({(int)setResp.StatusCode}).");
                     return;
                 }
                 try { var bytes = await setResp.Content.ReadAsByteArrayAsync(); using var doc = JsonDocument.Parse(bytes); setJson = doc.RootElement.Clone(); }
@@ -352,7 +351,7 @@ public partial class MainWindow : Window
                 if (!resp.IsSuccessStatusCode)
                 {
                     string body = string.Empty; try { body = await resp.Content.ReadAsStringAsync(); } catch { }
-                    _vm.SetStatus($"Import error {(int)resp.StatusCode}: {body}");
+                    _vm?.SetStatus($"Import error {(int)resp.StatusCode}: {body}");
                     return;
                 }
                 using var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync());
@@ -367,7 +366,7 @@ public partial class MainWindow : Window
                 {
                     if (root.TryGetProperty("next_page", out var np) && np.ValueKind == JsonValueKind.String) page = np.GetString();
                     var progress = declaredCount.HasValue ? $" {all.Count}/{declaredCount}" : $" {all.Count}";
-                    _vm.SetStatus($"Fetched{progress} so far...");
+                    _vm?.SetStatus($"Fetched{progress} so far...");
                 }
             }
             int inserted = 0, skipped = 0, updatedExisting = 0;
@@ -451,7 +450,7 @@ public partial class MainWindow : Window
             }
             if (declaredCount.HasValue && all.Count != declaredCount.Value)
                 Debug.WriteLine($"[ImportSet] Fetched {all.Count} cards but set declared {declaredCount.Value}.");
-            _vm.SetStatus($"Import {setCode}: inserted {inserted}, updated {updatedExisting}, skipped {skipped}. Total fetched {all.Count}{(declaredCount.HasValue?"/"+declaredCount.Value:"")}.");
+            _vm?.SetStatus($"Import {setCode}: inserted {inserted}, updated {updatedExisting}, skipped {skipped}. Total fetched {all.Count}{(declaredCount.HasValue?"/"+declaredCount.Value:"")}.");
         }
         catch (Exception ex)
         {
@@ -464,10 +463,8 @@ public partial class MainWindow : Window
     {
         try
         {
-            // Choose a mainDb.db (folder root) once
-            var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Locate mainDb.db (any file in folder)", Filter = "Any (*.*)|*.*" };
-            if (dlg.ShowDialog(this) != true) return;
-            string dir = System.IO.Path.GetDirectoryName(dlg.FileName)!;
+            string? dir = _vm?.GetCollectionDir();
+            if (string.IsNullOrEmpty(dir)) { _vm?.SetStatus("No collection loaded."); return; }
             string dbPath = System.IO.Path.Combine(dir, "mainDb.db");
             if (!File.Exists(dbPath)) { MessageBox.Show(this, "mainDb.db not found."); return; }
 
@@ -716,25 +713,23 @@ public partial class MainWindow : Window
 
     private async void OpenCollection_Click(object sender, RoutedEventArgs e)
     {
-        var dlg = new Microsoft.Win32.OpenFileDialog
+        // Instead of letting user pick arbitrary folder for DBs, always use executable directory for DB lookup.
+        // Still allow selecting a binder text file (layout/spec list) but DB paths are fixed.
+        var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Open Binder Text File", Filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*" };
+        if (dlg.ShowDialog(this) != true) return;
+        try
         {
-            Title = "Open Collection Text File",
-            Filter = "All Files (*.*)|*.*"
-        };
-        if (dlg.ShowDialog(this) == true)
+            if (_vm != null)
+            {
+                // Load binder file but override its perceived collection dir to exe directory
+                await _vm.LoadFromFileAsync(dlg.FileName);
+                _vm.OverrideCollectionDir(AppContext.BaseDirectory);
+                _vm.SetStatus("Binder loaded. Using application directory for databases.");
+            }
+        }
+        catch (Exception ex)
         {
-            try
-            {
-                if (_vm != null)
-                {
-                    // Force reload logic now handled internally by LoadFromFileAsync (it calls Reload)
-                    await _vm.LoadFromFileAsync(dlg.FileName);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, ex.Message, "Load Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+            MessageBox.Show(this, ex.Message, "Load Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -1236,6 +1231,18 @@ public class BinderViewModel : INotifyPropertyChanged
     private readonly ConcurrentDictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
     private readonly List<PageView> _views = new(); // sequence of display views across all binders
     private readonly CardCollectionData _collection = new(); // collection DB data
+    public string? GetCollectionDir() => _currentCollectionDir;
+    // Force collection directory override (exe folder). Also triggers a reload if already loaded.
+    public void OverrideCollectionDir(string? dir)
+    {
+        if (string.IsNullOrWhiteSpace(dir)) return;
+        bool changed = !string.Equals(_currentCollectionDir, dir, StringComparison.OrdinalIgnoreCase);
+        _currentCollectionDir = dir;
+        if (changed && Directory.Exists(dir))
+        {
+            try { _collection.Reload(dir); } catch { }
+        }
+    }
     // Expose distinct set codes present in current binder specs/cards
     public HashSet<string> GetCurrentSetCodes()
     {
@@ -1669,6 +1676,8 @@ public class BinderViewModel : INotifyPropertyChanged
     public BinderViewModel()
     {
     RegisterInstance(this);
+    // Initialize collection directory to executable location so DBs are always looked up there.
+    try { _currentCollectionDir = AppContext.BaseDirectory; } catch { }
     if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
     NextCommand = new RelayCommand(_ => { _currentViewIndex++; Refresh(); }, _ => _currentViewIndex < _views.Count - 1);
     PrevCommand = new RelayCommand(_ => { _currentViewIndex--; Refresh(); }, _ => _currentViewIndex > 0);
@@ -1920,7 +1929,8 @@ public class BinderViewModel : INotifyPropertyChanged
     {
     // Recompute slot theme (seeded by file path + last write ticks for variability when file changes)
     try { var fi = new FileInfo(path); CardSlotTheme.Recalculate(path + fi.LastWriteTimeUtc.Ticks); } catch { CardSlotTheme.Recalculate(path); }
-    _currentCollectionDir = System.IO.Path.GetDirectoryName(path);
+    // Do NOT change _currentCollectionDir here; DBs are always resolved relative to the executable directory now.
+    // _currentCollectionDir = System.IO.Path.GetDirectoryName(path);
     _localBackImagePath = null; // reset; will lazily resolve when first placeholder encountered
     var lines = await File.ReadAllLinesAsync(path);
     // Directive: first non-comment line starting with ** can specify colors/layout/pages
