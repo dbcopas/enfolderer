@@ -93,6 +93,8 @@
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
                 <MenuItem Header="Update mainDb from CSV..." Click="UpdateMainDbFromCsv_Click" />
+                <MenuItem Header="Add MtgsId/Qty Columns" Click="MigrateMainDbSchema_Click" />
+                <MenuItem Header="Import Scryfall Set Into mainDb" Click="ImportScryfallSet_Click" />
                 <Separator />
                 <MenuItem Header="E_xit" Click="Exit_Click" />
             </MenuItem>

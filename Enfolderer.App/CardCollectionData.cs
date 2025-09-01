@@ -21,6 +21,8 @@ public sealed class CardCollectionData
     public Dictionary<(string set,string collector), int> Quantities { get; } = new(StringTupleComparer.OrdinalIgnoreCase);
     // Variant quantities keyed by (set, baseCollectorNumber, modifier) retaining non-token modifiers
     public Dictionary<(string set,string collector,string modifier), int> VariantQuantities { get; } = new(StringVariantTupleComparer.OrdinalIgnoreCase);
+    // Custom cards (not present in mtgstudio.collection) tracked in mainDb via Qty column when MtgsId is NULL
+    public HashSet<int> CustomCards { get; } = new();
     private static readonly Dictionary<string,string[]> ModifierSynonyms = new(StringComparer.OrdinalIgnoreCase)
     {
         { "JP", new[]{ "jp","jpn","ja","japanese" } },
@@ -53,6 +55,7 @@ public sealed class CardCollectionData
     MainIndex.Clear();
     Quantities.Clear();
     VariantQuantities.Clear();
+    CustomCards.Clear();
     _cardRows.Clear();
 
         // 1. Load main card index
@@ -96,9 +99,14 @@ public sealed class CardCollectionData
             }
 
             // Build SELECT with aliases so downstream code is stable
+            // Optional custom quantity support
+            string? mtgsIdCol = FirstExisting(columns, "MtgsId", "mtgsid", "mtgs_id");
+            string? qtyCol = FirstExisting(columns, "Qty", "qty", "quantity");
             string select = $"SELECT {cardIdCol} AS cardId, {editionCol} AS edition, " +
                              (modifierCol != null ? $"{modifierCol} AS modifier, " : "NULL AS modifier, ") +
-                             (numberValueCol != null ? $"{numberValueCol} AS numberValue " : "NULL AS numberValue ") +
+                             (numberValueCol != null ? $"{numberValueCol} AS numberValue, " : "NULL AS numberValue, ") +
+                             (mtgsIdCol != null ? $"{mtgsIdCol} AS mtgsId, " : "NULL AS mtgsId, ") +
+                             (qtyCol != null ? $"{qtyCol} AS qty " : "NULL AS qty ") +
                              "FROM Cards";
 
             using var cmd = con.CreateCommand();
@@ -108,6 +116,8 @@ public sealed class CardCollectionData
             int ordEdition = r.GetOrdinal("edition");
             int ordModifier = r.GetOrdinal("modifier");
             int ordNumberValue = r.GetOrdinal("numberValue");
+            int ordMtgsId = r.GetOrdinal("mtgsId");
+            int ordQty = r.GetOrdinal("qty");
             while (r.Read())
             {
                 int cardId = SafeGetInt(r, ordCardId) ?? -1;
@@ -115,6 +125,8 @@ public sealed class CardCollectionData
                 string set = (SafeGetString(r, ordEdition) ?? string.Empty).Trim();
                 string numberValue = (SafeGetString(r, ordNumberValue) ?? string.Empty).Trim(); // base numeric value
                 string modifier = (SafeGetString(r, ordModifier) ?? string.Empty).Trim();
+                int? mtgsId = SafeGetInt(r, ordMtgsId);
+                int? qtyMain = SafeGetInt(r, ordQty);
                 if (string.IsNullOrEmpty(set)) continue;
                 // Determine base key: prefer numberValue, fallback to pre-split number
                 string baseKey =  numberValue;
@@ -136,7 +148,18 @@ public sealed class CardCollectionData
                 if (!_cardRows.ContainsKey(cardId))
                 {
                     _cardRows[cardId] = (set.ToLowerInvariant(), baseKey, modifier); // store baseKey (normalized) + raw modifier
-                }                
+                }
+                // Track custom card & its quantity if MtgsId is null
+                if (mtgsId == null || mtgsId <= 0)
+                {
+                    CustomCards.Add(cardId);
+                    if (qtyMain is int q && q > 0)
+                    {
+                        // For custom cards, add their quantity (positive only) so enrichment picks it up implicitly
+                        var qKey = (set.ToLowerInvariant(), baseKey);
+                        Quantities[qKey] = q;
+                    }
+                }
             }
         }
         catch (Exception ex)

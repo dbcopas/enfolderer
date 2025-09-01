@@ -28,6 +28,28 @@ namespace Enfolderer.App;
 public partial class MainWindow : Window
 {
     private readonly BinderViewModel _vm;
+    // Factory wrapper to access BinderViewModel's internal HTTP client creator for external routines
+    private static class BinderViewModelHttpFactory
+    {
+        public static HttpClient Create()
+        {
+            // Reuse the internal static method via reflection (keeps single definition). If it fails, fallback to basic client.
+            try
+            {
+                var mi = typeof(BinderViewModel).GetMethod("CreateClient", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                if (mi != null)
+                {
+                    var obj = mi.Invoke(null, null) as HttpClient;
+                    if (obj != null) return obj;
+                }
+            }
+            catch { }
+            var c = new HttpClient();
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("Enfolderer/0.1 (+https://github.com/yourrepo)");
+            c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+            return c;
+        }
+    }
 
     private void UpdateMainDbFromCsv_Click(object sender, RoutedEventArgs e)
         {
@@ -255,6 +277,258 @@ public partial class MainWindow : Window
                 MessageBox.Show(this, ex.Message, "CSV Utility Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
+
+    private void MigrateMainDbSchema_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Locate mainDb.db (any file in folder)",
+                Filter = "Database or Any (*.*)|*.*"
+            };
+            if (dlg.ShowDialog(this) != true) return;
+            string dir = System.IO.Path.GetDirectoryName(dlg.FileName)!;
+            string dbPath = System.IO.Path.Combine(dir, "mainDb.db");
+            if (!File.Exists(dbPath)) { MessageBox.Show(this, "mainDb.db not found."); return; }
+            using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+            con.Open();
+            // Check existing columns
+            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pragma = con.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA table_info(Cards)";
+                using var r = pragma.ExecuteReader();
+                while (r.Read()) { try { cols.Add(r.GetString(1)); } catch { } }
+            }
+            bool added = false;
+            if (!cols.Contains("MtgsId"))
+            {
+                using var alter = con.CreateCommand();
+                alter.CommandText = "ALTER TABLE Cards ADD COLUMN MtgsId INTEGER";
+                alter.ExecuteNonQuery();
+                added = true;
+            }
+            if (!cols.Contains("Qty"))
+            {
+                using var alter2 = con.CreateCommand();
+                alter2.CommandText = "ALTER TABLE Cards ADD COLUMN Qty INTEGER";
+                alter2.ExecuteNonQuery();
+                added = true;
+            }
+            // Populate MtgsId with existing id values where null
+            using (var upd = con.CreateCommand())
+            {
+                upd.CommandText = "UPDATE Cards SET MtgsId = id WHERE MtgsId IS NULL OR MtgsId = ''";
+                upd.ExecuteNonQuery();
+            }
+            MessageBox.Show(this, $"Migration complete. Columns added: {added}", "Schema Migration");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Migration Error");
+        }
+    }
+
+    private async void ImportScryfallSet_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var input = Microsoft.VisualBasic.Interaction.InputBox("Enter Scryfall set code (e.g., mom)", "Import Set", "");
+            if (string.IsNullOrWhiteSpace(input)) return;
+            var dlg = new Microsoft.Win32.OpenFileDialog { Title = "Locate mainDb.db (any file in folder)", Filter = "Any (*.*)|*.*" };
+            if (dlg.ShowDialog(this) != true) return;
+            string dir = System.IO.Path.GetDirectoryName(dlg.FileName)!;
+            string dbPath = System.IO.Path.Combine(dir, "mainDb.db");
+            if (!File.Exists(dbPath)) { MessageBox.Show(this, "mainDb.db not found."); return; }
+            using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
+            con.Open();
+            long maxId = 0;
+            using (var cmd = con.CreateCommand()) { cmd.CommandText = "SELECT IFNULL(MAX(id),0) FROM Cards"; var o = cmd.ExecuteScalar(); if (o != null && long.TryParse(o.ToString(), out var v)) maxId = v; }
+            long nextId = Math.Max(1000000, maxId + 1);
+            var cardCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pragma = con.CreateCommand()) { pragma.CommandText = "PRAGMA table_info(Cards)"; using var pr = pragma.ExecuteReader(); while (pr.Read()) { try { cardCols.Add(pr.GetString(1)); } catch { } } }
+            string editionCol = cardCols.Contains("edition") ? "edition" : (cardCols.Contains("set") ? "set" : "edition");
+            string collectorCol = cardCols.Contains("collectorNumberValue") ? "collectorNumberValue" : (cardCols.Contains("collectorNumber") ? "collectorNumber" : "collectorNumberValue");
+            string? rarityCol = cardCols.Contains("rarity") ? "rarity" : null;
+            string? gathererCol = cardCols.Contains("gathererId") ? "gathererId" : (cardCols.Contains("gatherer_id") ? "gatherer_id" : null);
+            string? nameCol = cardCols.Contains("name") ? "name" : null;
+            bool forceReimport = (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift));
+            if (forceReimport)
+            {
+                using var del = con.CreateCommand();
+                del.CommandText = $"DELETE FROM Cards WHERE {editionCol}=@e COLLATE NOCASE";
+                del.Parameters.AddWithValue("@e", input.Trim());
+                int deleted = del.ExecuteNonQuery();
+                _vm.SetStatus($"Removed {deleted} existing rows for set {input.Trim()} (forced reimport).");
+            }
+            using var http = BinderViewModelHttpFactory.Create();
+            string setCode = input.Trim();
+            _vm.SetStatus($"Validating set '{setCode}'...");
+            var validateUrl = $"https://api.scryfall.com/sets/{setCode}";
+            var swValidate = Stopwatch.StartNew();
+            LogHttpExternal("REQ", validateUrl);
+            JsonElement? setJson = null;
+            using (var setResp = await http.GetAsync(validateUrl))
+            {
+                swValidate.Stop();
+                LogHttpExternal("RESP", validateUrl, (int)setResp.StatusCode, swValidate.ElapsedMilliseconds);
+                if (!setResp.IsSuccessStatusCode)
+                {
+                    string body = string.Empty; try { body = await setResp.Content.ReadAsStringAsync(); } catch { }
+                    Debug.WriteLine($"[ImportSet] Set lookup failed {setCode} {(int)setResp.StatusCode} Body: {body}");
+                    _vm.SetStatus($"Set '{setCode}' not found ({(int)setResp.StatusCode}).");
+                    return;
+                }
+                try { var bytes = await setResp.Content.ReadAsByteArrayAsync(); using var doc = JsonDocument.Parse(bytes); setJson = doc.RootElement.Clone(); }
+                catch (Exception exParse) { Debug.WriteLine($"[ImportSet] Failed to parse set JSON: {exParse.Message}"); }
+            }
+            string api = $"https://api.scryfall.com/cards/search?order=set&q=e:{Uri.EscapeDataString(setCode)}&unique=prints";
+            int? declaredCount = null;
+            if (setJson.HasValue)
+            {
+                var root = setJson.Value;
+                if (root.TryGetProperty("search_uri", out var su) && su.ValueKind == JsonValueKind.String) { var val = su.GetString(); if (!string.IsNullOrWhiteSpace(val)) api = val!; }
+                if (root.TryGetProperty("card_count", out var cc) && cc.ValueKind == JsonValueKind.Number && cc.TryGetInt32(out var countVal)) declaredCount = countVal;
+            }
+            var all = new List<JsonElement>();
+            string? page = api;
+            while (page != null)
+            {
+                var swPage = Stopwatch.StartNew();
+                LogHttpExternal("REQ", page);
+                var resp = await http.GetAsync(page);
+                swPage.Stop();
+                LogHttpExternal("RESP", page, (int)resp.StatusCode, swPage.ElapsedMilliseconds);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    string body = string.Empty; try { body = await resp.Content.ReadAsStringAsync(); } catch { }
+                    _vm.SetStatus($"Import error {(int)resp.StatusCode}: {body}");
+                    return;
+                }
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync());
+                var root = doc.RootElement;
+                if (root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+                {
+                    // Clone each element so it survives after disposing the JsonDocument
+                    foreach (var c in data.EnumerateArray()) all.Add(c.Clone());
+                }
+                page = null;
+                if (root.TryGetProperty("has_more", out var hm) && hm.ValueKind == JsonValueKind.True)
+                {
+                    if (root.TryGetProperty("next_page", out var np) && np.ValueKind == JsonValueKind.String) page = np.GetString();
+                    var progress = declaredCount.HasValue ? $" {all.Count}/{declaredCount}" : $" {all.Count}";
+                    _vm.SetStatus($"Fetched{progress} so far...");
+                }
+            }
+            int inserted = 0, skipped = 0, updatedExisting = 0;
+            foreach (var card in all)
+            {
+                try
+                {
+                    string name = card.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? string.Empty : string.Empty;
+                    string rarity = card.TryGetProperty("rarity", out var rEl) ? rEl.GetString() ?? string.Empty : string.Empty;
+                    string cardSetCode = card.TryGetProperty("set", out var sEl) ? sEl.GetString() ?? setCode : setCode;
+                    string collector = card.TryGetProperty("collector_number", out var cEl) ? cEl.GetString() ?? string.Empty : string.Empty;
+                    int? gatherer = null;
+                    if (card.TryGetProperty("multiverse_ids", out var mIds) && mIds.ValueKind == JsonValueKind.Array)
+                        foreach (var mv in mIds.EnumerateArray()) if (mv.ValueKind == JsonValueKind.Number && mv.TryGetInt32(out var mvId)) { gatherer = mvId; break; }
+                    bool existsRow = false;
+                    using (var exists = con.CreateCommand())
+                    {
+                        exists.CommandText = $"SELECT {nameCol ?? "1"} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE AND {collectorCol}=@n LIMIT 1";
+                        exists.Parameters.AddWithValue("@e", cardSetCode);
+                        exists.Parameters.AddWithValue("@n", collector);
+                        using var er = exists.ExecuteReader();
+                        if (er.Read())
+                        {
+                            existsRow = true;
+                            bool needsUpdate = false;
+                            if (nameCol != null)
+                            {
+                                try { if (!er.IsDBNull(0) && string.IsNullOrWhiteSpace(er.GetString(0)) && !string.IsNullOrWhiteSpace(name)) needsUpdate = true; } catch { }
+                            }
+                            if (!needsUpdate && (rarityCol != null || gathererCol != null))
+                            {
+                                using var chk = con.CreateCommand();
+                                chk.CommandText = $"SELECT {(rarityCol ?? "NULL")},{(gathererCol ?? "NULL")} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE AND {collectorCol}=@n LIMIT 1";
+                                chk.Parameters.AddWithValue("@e", cardSetCode);
+                                chk.Parameters.AddWithValue("@n", collector);
+                                using var cr = chk.ExecuteReader();
+                                if (cr.Read())
+                                {
+                                    if (rarityCol != null) { try { if (cr.IsDBNull(0) && !string.IsNullOrWhiteSpace(rarity)) needsUpdate = true; } catch { } }
+                                    if (gathererCol != null && gatherer.HasValue) { int idx = rarityCol != null ? 1 : 0; try { if (cr.IsDBNull(idx)) needsUpdate = true; } catch { } }
+                                }
+                            }
+                            if (needsUpdate)
+                            {
+                                using var upd = con.CreateCommand();
+                                var parts = new List<string>();
+                                if (nameCol != null && !string.IsNullOrWhiteSpace(name)) { parts.Add(nameCol + "=@name"); upd.Parameters.AddWithValue("@name", name); }
+                                if (rarityCol != null && !string.IsNullOrWhiteSpace(rarity)) { parts.Add(rarityCol + "=@rarity"); upd.Parameters.AddWithValue("@rarity", rarity); }
+                                if (gathererCol != null && gatherer.HasValue) { parts.Add(gathererCol + "=@gath"); upd.Parameters.AddWithValue("@gath", gatherer.Value); }
+                                if (parts.Count > 0)
+                                {
+                                    upd.CommandText = $"UPDATE Cards SET {string.Join(",", parts)} WHERE {editionCol}=@e COLLATE NOCASE AND {collectorCol}=@n";
+                                    upd.Parameters.AddWithValue("@e", cardSetCode);
+                                    upd.Parameters.AddWithValue("@n", collector);
+                                    try { if (upd.ExecuteNonQuery() > 0) updatedExisting++; } catch { }
+                                }
+                            }
+                        }
+                    }
+                    if (existsRow)
+                    {
+                        skipped++;
+                        continue;
+                    }
+                    using var ins = con.CreateCommand();
+                    ins.CommandText = "INSERT INTO Cards (id, name, edition, collectorNumberValue, rarity, gathererId, MtgsId) VALUES (@id,@name,@ed,@num,@rar,@gath,NULL)";
+                    ins.Parameters.AddWithValue("@id", nextId++);
+                    ins.Parameters.AddWithValue("@name", name);
+                    ins.Parameters.AddWithValue("@ed", cardSetCode);
+                    ins.Parameters.AddWithValue("@num", collector);
+                    ins.Parameters.AddWithValue("@rar", rarity);
+                    if (gatherer.HasValue) ins.Parameters.AddWithValue("@gath", gatherer.Value); else ins.Parameters.AddWithValue("@gath", DBNull.Value);
+                    ins.ExecuteNonQuery();
+                    inserted++;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[ImportSet] exception {ex.Message}.");
+                    skipped++;
+                }
+            }
+            if (declaredCount.HasValue && all.Count != declaredCount.Value)
+                Debug.WriteLine($"[ImportSet] Fetched {all.Count} cards but set declared {declaredCount.Value}.");
+            _vm.SetStatus($"Import {setCode}: inserted {inserted}, updated {updatedExisting}, skipped {skipped}. Total fetched {all.Count}{(declaredCount.HasValue?"/"+declaredCount.Value:"")}.");
+        }
+        catch (Exception ex)
+        {
+            _vm.SetStatus("Import error: " + ex.Message);
+        }
+    }
+
+    // --- External HTTP log helper (outside BinderViewModel HTTP handler pipeline) ---
+    private static readonly object _extHttpLogLock = new();
+    private static void LogHttpExternal(string phase, string url, int? status = null, long? ms = null)
+    {
+        try
+        {
+            var path = System.IO.Path.Combine(ImageCacheStore.CacheRoot, "http-log.txt");
+            Directory.CreateDirectory(ImageCacheStore.CacheRoot);
+            var ts = DateTime.UtcNow.ToString("O");
+            string line = status.HasValue
+                ? $"[{ts}] {phase} {(status.Value)} {(ms ?? 0)}ms {url}"
+                : $"[{ts}] {phase} {url}";
+            lock (_extHttpLogLock)
+            {
+                File.AppendAllText(path, line + Environment.NewLine);
+            }
+        }
+        catch { }
+    }
 
     public MainWindow()
     {
@@ -748,8 +1022,9 @@ public class BinderViewModel : INotifyPropertyChanged
 
     private string _status = string.Empty;
     public string Status { get => _status; private set { if (_status!=value) { _status = value; OnPropertyChanged(); } } }
+    public void SetStatus(string message) => Status = message;
 
-    private static bool _debugHttpLogging = false;
+    private static bool _debugHttpLogging = true;
     private static readonly object _httpLogLock = new();
     private static int _httpInFlight = 0; private static int _http404 = 0; private static int _http500 = 0;
     private static readonly ConcurrentDictionary<string,string> _imageUrlNameMap = new(StringComparer.OrdinalIgnoreCase);
@@ -807,141 +1082,127 @@ public class BinderViewModel : INotifyPropertyChanged
     {
         try
         {
-            if (string.IsNullOrEmpty(_currentCollectionDir)) { Status = "No collection file loaded."; return; }
+            if (string.IsNullOrEmpty(_currentCollectionDir)) { SetStatus("No collection loaded."); return; }
             _collection.Reload(_currentCollectionDir);
-            if (_collection.IsLoaded)
-            {
-                EnrichQuantitiesFromCollection();
-                AdjustMfcQuantities();
-                BuildOrderedFaces();
-                RebuildViews();
-                Refresh();
-                Status = "Quantities refreshed.";
-            }
-            else
-            {
-                Status = "Collection DBs not found.";
-            }
+            if (!_collection.IsLoaded) { SetStatus("Collection DBs not found."); return; }
+            EnrichQuantitiesFromCollection();
+            AdjustMfcQuantities();
+            BuildOrderedFaces();
+            RebuildViews();
+            Refresh();
+            SetStatus("Quantities refreshed.");
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[Collection] Refresh failed: {ex.Message}");
-            Status = "Refresh failed.";
+            SetStatus("Refresh failed.");
         }
     }
 
     public void ToggleCardQuantity(CardSlot slot)
     {
         if (slot == null) return;
-    if (slot.IsPlaceholderBack) { Status = "Back face placeholder"; return; }
-        if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { Status = "No set/number"; return; }
-        if (string.IsNullOrEmpty(_currentCollectionDir)) { Status = "No collection loaded"; return; }
+        if (slot.IsPlaceholderBack) { SetStatus("Back face placeholder"); return; }
+        if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { SetStatus("No set/number"); return; }
+        if (string.IsNullOrEmpty(_currentCollectionDir)) { SetStatus("No collection loaded"); return; }
         EnsureCollectionLoaded();
-        if (!_collection.IsLoaded)
-        {
-            Status = "Collection not loaded";
-            return;
-        }
+        if (!_collection.IsLoaded) { SetStatus("Collection not loaded"); return; }
 
-        // Derive canonical keys exactly like EnrichQuantitiesFromCollection
-        // Support alt-art composite numbers like "123(123a)" or "123(456)" by using only the leading portion before '(' for lookup
+        // Derive base number key (strip variant portion inside parentheses and any trailing non-digits progressively)
         string numToken = slot.Number.Split('/')[0];
-        int parenIndexToggle = numToken.IndexOf('(');
-        if (parenIndexToggle > 0)
-        {
-            numToken = numToken.Substring(0, parenIndexToggle);
-        }
-        string baseNumRaw = numToken;
-        string baseNum = baseNumRaw; // already number value field formatting expected
+        int parenIdx = numToken.IndexOf('(');
+        if (parenIdx > 0) numToken = numToken.Substring(0, parenIdx);
+        string baseNum = numToken;
         string trimmed = baseNum.TrimStart('0'); if (trimmed.Length == 0) trimmed = "0";
         string setLower = slot.Set.ToLowerInvariant();
         (int cardId, int? gatherer) foundEntry = default;
         bool indexFound = false;
-        if (_collection.MainIndex.TryGetValue((setLower, baseNum), out foundEntry)) indexFound = true; else if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal) && _collection.MainIndex.TryGetValue((setLower, trimmed), out foundEntry)) indexFound = true; else {
-            // Progressive strip trailing non-digits (mirrors quantity enrichment fallback)
+        if (_collection.MainIndex.TryGetValue((setLower, baseNum), out foundEntry)) indexFound = true;
+        else if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal) && _collection.MainIndex.TryGetValue((setLower, trimmed), out foundEntry)) indexFound = true;
+        else
+        {
             string candidate = baseNum;
             while (candidate.Length > 0 && !indexFound && !char.IsDigit(candidate[^1]))
             {
-                candidate = candidate.Substring(0, candidate.Length -1);
-                if (candidate.Length == 0) break;
+                candidate = candidate.Substring(0, candidate.Length - 1);
                 if (_collection.MainIndex.TryGetValue((setLower, candidate), out foundEntry)) { indexFound = true; break; }
             }
         }
         if (!indexFound)
         {
-            // Fallback: directly resolve cardId from mainDb.db using same flexible number logic
             int? directId = ResolveCardIdFromDb(slot.Set, baseNum, trimmed);
-            if (directId == null)
-            {
-                Status = "Card not found";
-                return;
-            }
+            if (directId == null) { SetStatus("Card not found"); return; }
             foundEntry = (directId.Value, null);
         }
         int cardId = foundEntry.cardId;
 
-        // Determine logical collection quantity (pre-display transform) by reversing MFC display rule if needed
-        int logicalQty = slot.Quantity; // for non-MFC or display==logical
+        int logicalQty = slot.Quantity;
         bool isMfcFront = false;
-        // Find underlying CardEntry to assess MFC status
-        CardEntry? entry = _cards.FirstOrDefault(c => c.Set != null && string.Equals(c.Set, slot.Set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number.Split('/')[0], baseNum.Split('/')[0], StringComparison.OrdinalIgnoreCase) && c.Name == slot.Name);
+        var entry = _cards.FirstOrDefault(c => c.Set != null && string.Equals(c.Set, slot.Set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number.Split('/')[0], baseNum.Split('/')[0], StringComparison.OrdinalIgnoreCase) && c.Name == slot.Name);
         if (entry != null && entry.IsModalDoubleFaced && !entry.IsBackFace)
         {
             isMfcFront = true;
-            // Display mapping: 0->0, 1->1, 2->2 (cap) so logical cannot be inferred uniquely when display==2; assume logical>=2 already
-            logicalQty = slot.Quantity; // identical mapping for our transition logic
+            logicalQty = slot.Quantity; // display already mapped
         }
+        int newLogicalQty = !isMfcFront ? (logicalQty == 0 ? 1 : 0) : (logicalQty == 0 ? 1 : (logicalQty == 1 ? 2 : 0));
 
-        int newLogicalQty;
-        if (!isMfcFront)
+        bool isCustom = _collection.CustomCards.Contains(cardId);
+        if (isCustom)
         {
-            // Non-MFC toggle: 0 ->1, >=1 ->0
-            newLogicalQty = logicalQty == 0 ? 1 : 0;
+            string mainDbPath = System.IO.Path.Combine(_currentCollectionDir, "mainDb.db");
+            if (!File.Exists(mainDbPath)) { SetStatus("mainDb missing"); return; }
+            try
+            {
+                using var conMain = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={mainDbPath}");
+                conMain.Open();
+                using var cmd = conMain.CreateCommand();
+                cmd.CommandText = "UPDATE Cards SET Qty=@q WHERE id=@id";
+                cmd.Parameters.AddWithValue("@q", newLogicalQty);
+                cmd.Parameters.AddWithValue("@id", cardId);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[CustomQty] mainDb write failed: {ex.Message}");
+                SetStatus("Write failed"); return;
+            }
         }
         else
         {
-            // MFC state machine per spec:
-            // 0 -> 1, 1 -> 2, 2 -> 0 (treat 2 as >=2) providing cycling 0,1,2
-            if (logicalQty <= 0) newLogicalQty = 1; else if (logicalQty == 1) newLogicalQty = 2; else newLogicalQty = 0;
-        }
-
-        // Persist to mtgstudio.collection (upsert)
-        string collectionPath = System.IO.Path.Combine(_currentCollectionDir, "mtgstudio.collection");
-        if (!File.Exists(collectionPath)) { Status = "Collection file missing"; return; }
-        try
-        {
-            using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={collectionPath}");
-            con.Open();
-            using (var cmd = con.CreateCommand())
+            string collectionPath = System.IO.Path.Combine(_currentCollectionDir, "mtgstudio.collection");
+            if (!File.Exists(collectionPath)) { SetStatus("Collection file missing"); return; }
+            try
             {
-                cmd.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
-                cmd.Parameters.AddWithValue("@q", newLogicalQty);
-                cmd.Parameters.AddWithValue("@id", cardId);
-                int rows = cmd.ExecuteNonQuery();
-                if (rows == 0)
+                using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={collectionPath}");
+                con.Open();
+                using (var cmd = con.CreateCommand())
                 {
-                    using var ins = con.CreateCommand();
-                    ins.CommandText = "INSERT INTO CollectionCards (CardId, Qty) VALUES (@id, @q)";
-                    ins.Parameters.AddWithValue("@id", cardId);
-                    ins.Parameters.AddWithValue("@q", newLogicalQty);
-                    try { ins.ExecuteNonQuery(); } catch { }
+                    cmd.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
+                    cmd.Parameters.AddWithValue("@q", newLogicalQty);
+                    cmd.Parameters.AddWithValue("@id", cardId);
+                    int rows = cmd.ExecuteNonQuery();
+                    if (rows == 0)
+                    {
+                        using var ins = con.CreateCommand();
+                        ins.CommandText = "INSERT INTO CollectionCards (CardId, Qty) VALUES (@id, @q)";
+                        ins.Parameters.AddWithValue("@id", cardId);
+                        ins.Parameters.AddWithValue("@q", newLogicalQty);
+                        try { ins.ExecuteNonQuery(); } catch { }
+                    }
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[Collection] Toggle write failed: {ex.Message}");
-            Status = "Write failed"; return;
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Collection] Toggle write failed: {ex.Message}");
+                SetStatus("Write failed"); return;
+            }
         }
 
-        // Update in-memory collection dictionaries
         if (newLogicalQty > 0) _collection.Quantities[(setLower, baseNum)] = newLogicalQty; else _collection.Quantities.Remove((setLower, baseNum));
         if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal))
         {
             if (newLogicalQty > 0) _collection.Quantities[(setLower, trimmed)] = newLogicalQty; else _collection.Quantities.Remove((setLower, trimmed));
         }
-
-        // Update CardEntry list quantities for all faces with this set+number (base) then re-apply MFC display rule for those
         for (int i = 0; i < _cards.Count; i++)
         {
             var c = _cards[i];
@@ -949,14 +1210,10 @@ public class BinderViewModel : INotifyPropertyChanged
             {
                 string cBase = c.Number.Split('/')[0];
                 if (string.Equals(cBase, baseNum, StringComparison.OrdinalIgnoreCase) || string.Equals(cBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase))
-                {
                     _cards[i] = c with { Quantity = newLogicalQty };
-                }
             }
         }
-        // Apply MFC display adjustments (mutates _cards quantities for display)
         AdjustMfcQuantities();
-        // Sync updated quantities into existing _orderedFaces so we don't need a full rebuild
         for (int i = 0; i < _orderedFaces.Count; i++)
         {
             var o = _orderedFaces[i];
@@ -965,15 +1222,13 @@ public class BinderViewModel : INotifyPropertyChanged
                 string oBase = o.Number.Split('/')[0];
                 if (string.Equals(oBase, baseNum, StringComparison.OrdinalIgnoreCase) || string.Equals(oBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase))
                 {
-                    // Find matching updated card entry (front/back distinction preserved by IsBackFace flag)
                     var updated = _cards.FirstOrDefault(c => c.Set != null && c.Set.Equals(o.Set, StringComparison.OrdinalIgnoreCase) && c.Number == o.Number && c.IsBackFace == o.IsBackFace);
-                    if (updated != null)
-                        _orderedFaces[i] = updated;
+                    if (updated != null) _orderedFaces[i] = updated;
                 }
             }
         }
         Refresh();
-        Status = $"Set {slot.Set} #{slot.Number} => {newLogicalQty}";
+        SetStatus($"Set {slot.Set} #{slot.Number} => {newLogicalQty}");
     }
 
     private void EnsureCollectionLoaded()
