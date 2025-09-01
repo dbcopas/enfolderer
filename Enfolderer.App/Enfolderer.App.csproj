@@ -13,4 +13,13 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.5" />
   </ItemGroup>
 
+  <!-- Ship seed mainDb.db with the application -->
+  <ItemGroup>
+    <None Include="..\mainDb.db" Link="mainDb.db">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </None>
+  </ItemGroup>
+
 </Project>
