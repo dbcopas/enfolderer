@@ -504,6 +504,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly NavigationService _nav = new(); // centralized navigation
     private IReadOnlyList<NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly CardCollectionData _collection = new(); // collection DB data
+    private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
     // Expose distinct set codes present in current binder specs/cards
     public HashSet<string> GetCurrentSetCodes()
     {
@@ -1036,7 +1037,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     // Compute hash of input file contents for metadata/image cache lookup
     string fileHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", lines))));
     _currentFileHash = fileHash;
-    if (IsCacheComplete(fileHash) && TryLoadMetadataCache(fileHash))
+    if (IsCacheComplete(fileHash) && _metadataResolver.TryLoadMetadataCache(fileHash, _cards))
     {
         Status = "Loaded metadata from cache.";
         BuildOrderedFaces();
@@ -1430,7 +1431,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         int neededFaces = SlotsPerPage * 2; // 24
         var initialSpecIndexes = new HashSet<int>();
         for (int i = 0; i < _specs.Count && initialSpecIndexes.Count < neededFaces; i++) initialSpecIndexes.Add(i);
-        await ResolveSpecsAsync(fetchList, initialSpecIndexes);
+    await ResolveSpecsWithServiceAsync(fetchList, initialSpecIndexes);
         RebuildCardListFromSpecs();
         // Attempt to load local collection DBs (same folder as binder file)
         var dir = System.IO.Path.GetDirectoryName(path);
@@ -1468,7 +1469,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             var remaining = new HashSet<int>();
             for (int i = 0; i < _specs.Count; i++) if (!initialSpecIndexes.Contains(i)) remaining.Add(i);
             if (remaining.Count == 0) return;
-            await ResolveSpecsAsync(fetchList, remaining, updateInterval:15);
+            await ResolveSpecsWithServiceAsync(fetchList, remaining, updateInterval:15);
+    await ResolveSpecsWithServiceAsync(fetchList, remaining, updateInterval:15);
             Application.Current.Dispatcher.Invoke(() =>
             {
                 RebuildCardListFromSpecs();
@@ -1478,8 +1480,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                 RebuildViews();
                 Refresh();
                 Status = $"All metadata loaded ({_cards.Count} faces).";
-                PersistMetadataCache(_currentFileHash);
-                MarkCacheComplete(_currentFileHash);
+        _metadataResolver.PersistMetadataCache(_currentFileHash, _cards);
+        _metadataResolver.MarkCacheComplete(_currentFileHash);
             });
         });
     }
@@ -1632,174 +1634,42 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
         "split","aftermath","adventure","meld","flip","leveler","saga","class","plane","planar","scheme","vanguard","token","emblem","art_series"
     };
-    private record CachedFace(string Name, string Number, string? Set, bool IsMfc, bool IsBack, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion);
     private string MetaCacheDir => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "meta");
-    private string MetaCachePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".json");
     private string MetaCacheDonePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".done");
     private bool IsCacheComplete(string hash) => File.Exists(MetaCacheDonePath(hash));
-    // Per-card cache (reused across different file hashes). One JSON file per set+number.
-    private string CardCacheDir => System.IO.Path.Combine(MetaCacheDir, "cards");
-    private string CardCachePath(string setCode, string number)
-    {
-        var safeSet = (setCode ?? string.Empty).ToLowerInvariant();
-        var safeNum = number.Replace('/', '_').Replace('\\', '_').Replace(':','_');
-        return System.IO.Path.Combine(CardCacheDir, safeSet + "-" + safeNum + ".json");
-    }
-    private record CardCacheEntry(string Set, string Number, string Name, bool IsMfc, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion, DateTime FetchedUtc);
-    private bool TryLoadCardFromCache(string setCode, string number, out CardEntry? entry)
-    {
-        entry = null;
-        try
-        {
-            var path = CardCachePath(setCode, number);
-            if (!File.Exists(path)) return false;
-            var json = File.ReadAllText(path);
-            var data = JsonSerializer.Deserialize<CardCacheEntry>(json);
-            if (data == null) return false;
-            if (string.IsNullOrEmpty(data.Layout)) return false; // layout required to classify
-            bool physTwoSided = data.Layout != null && PhysicallyTwoSidedLayouts.Contains(data.Layout);
-            bool effectiveMfc = data.IsMfc && physTwoSided;
-            var ce = new CardEntry(data.Name, data.Number, data.Set, effectiveMfc, false, data.FrontRaw, data.BackRaw, null);
-            entry = ce;
-            CardImageUrlStore.Set(data.Set, data.Number, data.FrontImageUrl, data.BackImageUrl);
-            CardLayoutStore.Set(data.Set, data.Number, data.Layout);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[PerCardCache] Failed to load {setCode} {number}: {ex.Message}");
-            return false;
-        }
-    }
-    private void PersistCardToCache(CardEntry ce)
-    {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(ce.Set) || string.IsNullOrWhiteSpace(ce.Number)) return;
-            Directory.CreateDirectory(CardCacheDir);
-            var (frontImg, backImg) = CardImageUrlStore.Get(ce.Set, ce.Number);
-            var layout = CardLayoutStore.Get(ce.Set!, ce.Number);
-            var data = new CardCacheEntry(ce.Set!, ce.Number, ce.Name, ce.IsModalDoubleFaced && !ce.IsBackFace, ce.FrontRaw, ce.BackRaw, frontImg, backImg, layout, CacheSchemaVersion, DateTime.UtcNow);
-            var path = CardCachePath(ce.Set!, ce.Number);
-            if (!File.Exists(path)) // do not overwrite (keep earliest)
-            {
-                File.WriteAllText(path, JsonSerializer.Serialize(data));
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[PerCardCache] Persist failed {ce.Set} {ce.Number}: {ex.Message}");
-        }
-    }
-    private bool TryLoadMetadataCache(string hash)
-    {
-        try
-        {
-            var path = MetaCachePath(hash);
-            if (!File.Exists(path)) return false;
-            var json = File.ReadAllText(path);
-            var faces = JsonSerializer.Deserialize<List<CachedFace>>(json);
-            if (faces == null || faces.Count == 0) return false;
-            // If any face has older schema, invalidate whole file cache
-            if (faces.Exists(f => string.IsNullOrEmpty(f.Layout))) return false; // accept older schema versions as long as layout present
-            _cards.Clear();
-            foreach (var f in faces)
-            {
-                bool physTwoSided = f.Layout != null && PhysicallyTwoSidedLayouts.Contains(f.Layout);
-                bool effectiveMfc = f.IsMfc && physTwoSided && !f.IsBack;
-                var ce = new CardEntry(f.Name, f.Number, f.Set, effectiveMfc, f.IsBack, f.FrontRaw, f.BackRaw, null);
-                _cards.Add(ce);
-                if (!f.IsBack)
-                    CardImageUrlStore.Set(f.Set ?? string.Empty, f.Number, f.FrontImageUrl, f.BackImageUrl);
-                if (!string.IsNullOrEmpty(f.Layout) && f.Set != null)
-                    CardLayoutStore.Set(f.Set, f.Number, f.Layout);
-            }
-            return true;
-        }
-        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to load metadata cache: {ex.Message}"); return false; }
-    }
-    private void PersistMetadataCache(string? hash)
-    {
-        if (string.IsNullOrEmpty(hash)) return;
-        try
-        {
-            Directory.CreateDirectory(MetaCacheDir);
-            var list = new List<CachedFace>();
-            foreach (var c in _cards)
-            {
-                var (frontImg, backImg) = CardImageUrlStore.Get(c.Set ?? string.Empty, c.Number);
-                var layout = c.Set != null ? CardLayoutStore.Get(c.Set, c.Number) : null;
-                list.Add(new CachedFace(c.Name, c.Number, c.Set, c.IsModalDoubleFaced, c.IsBackFace, c.FrontRaw, c.BackRaw, frontImg, backImg, layout, CacheSchemaVersion));
-            }
-            var json = JsonSerializer.Serialize(list);
-            File.WriteAllText(MetaCachePath(hash), json);
-            Debug.WriteLine($"[Cache] Wrote metadata cache {hash} faces={list.Count}");
-        }
-        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to write metadata cache: {ex.Message}"); }
-    }
 
-    private void MarkCacheComplete(string? hash)
-    {
-        if (string.IsNullOrEmpty(hash)) return;
-        try
-        {
-            File.WriteAllText(MetaCacheDonePath(hash), DateTime.UtcNow.ToString("O"));
-        }
-        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to mark cache complete: {ex.Message}"); }
-    }
-
-    private async Task ResolveSpecsAsync(List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList, HashSet<int> targetIndexes, int updateInterval = 5)
+    private async Task ResolveSpecsWithServiceAsync(List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList, HashSet<int> targetIndexes, int updateInterval = 5)
     {
         int total = targetIndexes.Count;
-        int done = 0;
-        var concurrency = new SemaphoreSlim(6);
-        var tasks = new List<Task>();
-        foreach (var f in fetchList)
-        {
-            if (!targetIndexes.Contains(f.specIndex)) continue;
-            await concurrency.WaitAsync();
-            tasks.Add(Task.Run(async () =>
+        await _metadataResolver.ResolveSpecsAsync(
+            fetchList,
+            targetIndexes,
+            done =>
             {
-                try
+                if (done % updateInterval == 0 || done == total)
                 {
-                    // Attempt per-card cache first (avoid API call) if not already resolved
-                    if (_specs[f.specIndex].Resolved == null && TryLoadCardFromCache(f.setCode, f.number, out var cachedEntry) && cachedEntry != null)
+                    Status = $"Resolving metadata {done}/{total} ({(int)(done*100.0/Math.Max(1,total))}%)";
+                }
+                return done;
+            },
+            (specIndex, resolved) =>
+            {
+                if (specIndex < 0 || specIndex >= _specs.Count) return (null,false);
+                if (resolved != null)
+                {
+                    if (resolved.IsBackFace)
                     {
-                        _specs[f.specIndex] = _specs[f.specIndex] with { Resolved = cachedEntry };
-                        if (cachedEntry.IsModalDoubleFaced && !string.IsNullOrEmpty(cachedEntry.FrontRaw) && !string.IsNullOrEmpty(cachedEntry.BackRaw))
-                        {
-                            var backDisplay = $"{cachedEntry.BackRaw} ({cachedEntry.FrontRaw})";
-                            var backEntry = new CardEntry(backDisplay, cachedEntry.Number, cachedEntry.Set, true, true, cachedEntry.FrontRaw, cachedEntry.BackRaw);
-                            _mfcBacks[ f.specIndex ] = backEntry; // idempotent write acceptable
-                        }
-                        return; // skip network
+                        _mfcBacks[specIndex] = resolved;
                     }
-                    var ce = await FetchCardMetadataAsync(f.setCode, f.number, f.nameOverride);
-                    if (ce != null)
+                    else
                     {
-                        _specs[f.specIndex] = _specs[f.specIndex] with { Resolved = ce };
-                        if (ce.IsModalDoubleFaced && !string.IsNullOrEmpty(ce.FrontRaw) && !string.IsNullOrEmpty(ce.BackRaw))
-                        {
-                            var backDisplay = $"{ce.BackRaw} ({ce.FrontRaw})";
-                            var backEntry = new CardEntry(backDisplay, ce.Number, ce.Set, true, true, ce.FrontRaw, ce.BackRaw);
-                            _mfcBacks[f.specIndex] = backEntry; // idempotent concurrent write acceptable
-                        }
-                        PersistCardToCache(ce);
-                        if (_mfcBacks.TryGetValue(f.specIndex, out var backFace)) PersistCardToCache(backFace);
+                        _specs[specIndex] = _specs[specIndex] with { Resolved = resolved };
                     }
                 }
-                finally
-                {
-                    Interlocked.Increment(ref done);
-                    if (done % updateInterval == 0 || done == total)
-                    {
-                        Status = $"Resolving metadata {done}/{total} ({(int)(done*100.0/Math.Max(1,total))}%)";
-                    }
-                    concurrency.Release();
-                }
-            }));
-        }
-        await Task.WhenAll(tasks);
+                return (null,false);
+            },
+            async (set, num, nameOverride) => await FetchCardMetadataAsync(set, num, nameOverride)
+        );
     }
 
     private void RebuildCardListFromSpecs()
@@ -2078,7 +1948,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         }
         _ = Task.Run(async () =>
         {
-            await ResolveSpecsAsync(quickList, neededSpecs, updateInterval: 3);
+            await ResolveSpecsWithServiceAsync(quickList, neededSpecs, updateInterval: 3);
+    await ResolveSpecsWithServiceAsync(quickList, neededSpecs, updateInterval: 3);
             Application.Current.Dispatcher.Invoke(() =>
             {
                 RebuildCardListFromSpecs();
