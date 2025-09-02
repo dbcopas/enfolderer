@@ -557,6 +557,22 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         string setLower = slot.Set.ToLowerInvariant();
         (int cardId, int? gatherer) foundEntry = default;
         bool indexFound = false;
+        // Handle special variant symbols (e.g. Japanese alt-art WAR planeswalkers using a star character)
+        if (baseNum.IndexOf('★') >= 0)
+        {
+            var starStripped = baseNum.Replace("★", string.Empty);
+            if (starStripped.Length == 0) starStripped = "0"; // safety
+            // Try direct lookups with star stripped before falling back to progressive stripping logic below
+            if (!indexFound && _collection.MainIndex.TryGetValue((setLower, starStripped), out foundEntry)) indexFound = true;
+            var starTrimmed = starStripped.TrimStart('0'); if (starTrimmed.Length == 0) starTrimmed = "0";
+            if (!indexFound && !string.Equals(starTrimmed, starStripped, StringComparison.Ordinal) && _collection.MainIndex.TryGetValue((setLower, starTrimmed), out foundEntry)) indexFound = true;
+            // If we found a match using stripped form, treat that as the canonical baseNum for downstream matching
+            if (indexFound)
+            {
+                baseNum = starStripped;
+                trimmed = starTrimmed;
+            }
+        }
         if (_collection.MainIndex.TryGetValue((setLower, baseNum), out foundEntry)) indexFound = true;
         else if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal) && _collection.MainIndex.TryGetValue((setLower, trimmed), out foundEntry)) indexFound = true;
         else
@@ -570,9 +586,27 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         }
         if (!indexFound)
         {
-            int? directId = ResolveCardIdFromDb(slot.Set, baseNum, trimmed);
-            if (directId == null) { SetStatus("Card not found"); return; }
-            foundEntry = (directId.Value, null);
+            // Special handling: WAR Japanese alt art star variants (e.g., 1★) should map to base number + Art JP modifier
+            if (slot.Set.Equals("WAR", StringComparison.OrdinalIgnoreCase) && slot.Number.IndexOf('★') >= 0)
+            {
+                var baseStar = slot.Number.Replace("★", string.Empty);
+                var baseStarTrim = baseStar.TrimStart('0'); if (baseStarTrim.Length == 0) baseStarTrim = "0";
+                int variantId;
+                if (_collection.TryGetVariantCardIdFlexible(slot.Set, baseStar, "Art JP", out variantId) ||
+                    _collection.TryGetVariantCardIdFlexible(slot.Set, baseStarTrim, "Art JP", out variantId) ||
+                    _collection.TryGetVariantCardIdFlexible(slot.Set, baseStar, "JP", out variantId) ||
+                    _collection.TryGetVariantCardIdFlexible(slot.Set, baseStarTrim, "JP", out variantId))
+                {
+                    foundEntry = (variantId, null);
+                    indexFound = true;
+                }
+            }
+            if (!indexFound)
+            {
+                int? directId = ResolveCardIdFromDb(slot.Set, baseNum, trimmed);
+                if (directId == null) { SetStatus("Card not found"); return; }
+                foundEntry = (directId.Value, null);
+            }
         }
         int cardId = foundEntry.cardId;
 
@@ -720,6 +754,17 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             }
             AddCand(baseNum);
             if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal)) AddCand(trimmed);
+            // Star / special symbol normalization (e.g., WAR Japanese alt art: 1★)
+            if (baseNum.IndexOf('★') >= 0)
+            {
+                var stripped = baseNum.Replace("★", string.Empty);
+                if (!string.IsNullOrWhiteSpace(stripped))
+                {
+                    AddCand(stripped);
+                    var strippedTrim = stripped.TrimStart('0'); if (strippedTrim.Length == 0) strippedTrim = "0";
+                    if (!string.Equals(strippedTrim, stripped, StringComparison.Ordinal)) AddCand(strippedTrim);
+                }
+            }
             // Progressive strip trailing non-digits
             string prog = baseNum;
             while (prog.Length > 0 && !char.IsDigit(prog[^1]))

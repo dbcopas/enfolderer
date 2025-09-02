@@ -21,6 +21,8 @@ public sealed class CardCollectionData
     public Dictionary<(string set,string collector), int> Quantities { get; } = new(StringTupleComparer.OrdinalIgnoreCase);
     // Variant quantities keyed by (set, baseCollectorNumber, modifier) retaining non-token modifiers
     public Dictionary<(string set,string collector,string modifier), int> VariantQuantities { get; } = new(StringVariantTupleComparer.OrdinalIgnoreCase);
+    // Variant cardIds keyed similarly so UI can update quantity for specific variant (e.g., WAR 1 Art JP)
+    public Dictionary<(string set,string collector,string modifier), int> VariantCardIds { get; } = new(StringVariantTupleComparer.OrdinalIgnoreCase);
     // Custom cards (not present in mtgstudio.collection) tracked in mainDb via Qty column when MtgsId is NULL
     public HashSet<int> CustomCards { get; } = new();
     private static readonly Dictionary<string,string[]> ModifierSynonyms = new(StringComparer.OrdinalIgnoreCase)
@@ -55,6 +57,7 @@ public sealed class CardCollectionData
     MainIndex.Clear();
     Quantities.Clear();
     VariantQuantities.Clear();
+    VariantCardIds.Clear();
     CustomCards.Clear();
     _cardRows.Clear();
 
@@ -231,12 +234,16 @@ public sealed class CardCollectionData
                             {
                                 var modLower = rModifier.ToLowerInvariant();
                                 VariantQuantities[(rSet, rCollector, modLower)] = qty.Value; // include zero
+                                VariantCardIds[(rSet, rCollector, modLower)] = cardId.Value;
                                 var trimmedCollector = rCollector.TrimStart('0');
                                 if (trimmedCollector.Length == 0) trimmedCollector = "0";
                                 if (!string.Equals(trimmedCollector, rCollector, StringComparison.Ordinal))
+                                {
                                     VariantQuantities[(rSet, trimmedCollector, modLower)] = qty.Value;
+                                    VariantCardIds[(rSet, trimmedCollector, modLower)] = cardId.Value;
+                                }
                                 if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1" && rSet == "war")
-                                    System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT-ADD] WAR variant collector={rCollector} modifier={modLower} qty={qty.Value}");
+                                    System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT-ADD] WAR variant collector={rCollector} modifier={modLower} qty={qty.Value} cardId={cardId.Value}");
                             }
                         }
                     }
@@ -341,6 +348,29 @@ public sealed class CardCollectionData
                 foreach (var alt in kvp.Value.Append(kvp.Key).Distinct(StringComparer.OrdinalIgnoreCase))
                 {
                     if (TryGetVariantQuantity(set, collector, alt, out qty)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public bool TryGetVariantCardId(string set, string collector, string modifier, out int cardId)
+    {
+        cardId = 0;
+        if (string.IsNullOrWhiteSpace(set) || string.IsNullOrWhiteSpace(collector) || string.IsNullOrWhiteSpace(modifier)) return false;
+        return VariantCardIds.TryGetValue((set.ToLowerInvariant(), collector, modifier.ToLowerInvariant()), out cardId);
+    }
+
+    public bool TryGetVariantCardIdFlexible(string set, string collector, string modifier, out int cardId)
+    {
+        if (TryGetVariantCardId(set, collector, modifier, out cardId)) return true;
+        foreach (var kvp in ModifierSynonyms)
+        {
+            if (kvp.Value.Any(v => string.Equals(v, modifier, StringComparison.OrdinalIgnoreCase)) || string.Equals(kvp.Key, modifier, StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var alt in kvp.Value.Append(kvp.Key).Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (TryGetVariantCardId(set, collector, alt, out cardId)) return true;
                 }
             }
         }
