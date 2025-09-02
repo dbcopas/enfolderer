@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 
 namespace Enfolderer.App;
@@ -14,8 +15,35 @@ public sealed class CardQuantityService
 {
     public void EnrichQuantities(CardCollectionData collection, List<CardEntry> cards)
     {
-        if (collection.Quantities.Count == 0) return;
+        bool qtyDebug = Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1";
+        if (collection.Quantities.Count == 0)
+        {
+            if (qtyDebug)
+            {
+                string reason = collection.IsLoaded ? "loaded-but-empty (no >0 Qty values?)" : "collection-not-loaded";
+                var firstFive = string.Join(", ", cards.Take(5).Select(c => c.Set+":"+c.Number));
+                Debug.WriteLine($"[QtyEnrich] Skip: Quantities empty - {reason}. Sample cards: {firstFive}");
+                Console.WriteLine($"[QtyEnrich] Skip: Quantities empty - {reason}. Sample cards: {firstFive}");
+            }
+            return;
+        }
         int updated = 0;
+    int unmatchedCount = 0;
+    List<string> unmatchedSamples = new();
+        if (qtyDebug)
+        {
+            Debug.WriteLine($"[QtyEnrich] Start: quantityKeys={collection.Quantities.Count} cards={cards.Count}");
+            Console.WriteLine($"[QtyEnrich] Start: quantityKeys={collection.Quantities.Count} cards={cards.Count}");
+            try
+            {
+                var firstSets = collection.Quantities.Keys
+                    .GroupBy(k => k.Item1)
+                    .Take(5)
+                    .Select(g => g.Key + ":" + string.Join("|", g.Take(8).Select(t => t.Item2)));
+                Debug.WriteLine("[QtyEnrich][KeysSample] " + string.Join(" || ", firstSets));
+            }
+            catch { }
+        }
         for (int i = 0; i < cards.Count; i++)
         {
             var c = cards[i];
@@ -51,6 +79,10 @@ public sealed class CardQuantityService
             string baseNum = numTokenCard;
             string trimmed = baseNum.TrimStart('0'); if (trimmed.Length == 0) trimmed = "0";
             var setLower = c.Set.ToLowerInvariant();
+            if (qtyDebug && i < 50)
+            {
+                Debug.WriteLine($"[QtyEnrich][Trace] Card[{i}] set={c.Set} rawNum={c.Number} base={baseNum} trimmed={trimmed}");
+            }
             int qty; bool found = collection.Quantities.TryGetValue((setLower, baseNum), out qty);
             if (!found && !string.Equals(trimmed, baseNum, StringComparison.Ordinal))
                 found = collection.Quantities.TryGetValue((setLower, trimmed), out qty);
@@ -66,12 +98,18 @@ public sealed class CardQuantityService
             }
             if (!found)
             {
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+        if (qtyDebug)
                 {
                     try
                     {
                         var sampleKeys = string.Join(", ", collection.Quantities.Keys.Where(k => k.Item1 == setLower).Take(25).Select(k => k.Item1+":"+k.Item2));
-                        System.Diagnostics.Debug.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found. Sample keys for set: {sampleKeys}");
+            Debug.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found. Sample keys for set: {sampleKeys}");
+            Console.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found.");
+                        if (unmatchedSamples.Count < 15)
+                        {
+                            unmatchedSamples.Add($"{c.Set}:{baseNum} trim={trimmed} raw='{c.Number}'");
+                        }
+                        unmatchedCount++;
                     }
                     catch { }
                 }
@@ -81,7 +119,19 @@ public sealed class CardQuantityService
             if (qty >= 0 && c.Quantity != qty) { cards[i] = c with { Quantity = qty }; updated++; }
         }
         if (updated > 0)
-            System.Diagnostics.Debug.WriteLine($"[Collection] Quantities applied to {updated} faces");
+        {
+            Debug.WriteLine($"[Collection] Quantities applied to {updated} faces");
+            if (qtyDebug) Console.WriteLine($"[Collection] Quantities applied to {updated} faces");
+        }
+        else if (qtyDebug)
+        {
+            Console.WriteLine("[Collection] No quantities applied (possible mismatch of keys).");
+        }
+        if (qtyDebug && unmatchedCount > 0)
+        {
+            Debug.WriteLine($"[Collection][MISS-SUMMARY] unmatched={unmatchedCount} firstSamples={string.Join(" | ", unmatchedSamples)}");
+            Console.WriteLine($"[Collection][MISS-SUMMARY] unmatched={unmatchedCount} (see Debug output for samples)");
+        }
     }
 
     public void AdjustMfcQuantities(List<CardEntry> cards)

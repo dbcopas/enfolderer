@@ -18,6 +18,20 @@
             "stopAtEntry": false
         },
         {
+            "name": ".NET Core Launch (console, qty debug)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/Enfolderer.App/bin/Debug/net8.0-windows/Enfolderer.App.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/Enfolderer.App",
+            "console": "internalConsole",
+            "stopAtEntry": false,
+            "env": {
+                "ENFOLDERER_QTY_DEBUG": "1"
+            }
+        },
+        {
             "name": ".NET Core Attach",
             "type": "coreclr",
             "request": "attach"

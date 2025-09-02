@@ -44,14 +44,15 @@ public class MetadataLoadOrchestrator
             pendingSpecs.Add(new CardSpec(ps.SetCode, ps.Number, ps.OverrideName, ps.ExplicitEntry, ps.NumberDisplayOverride){ Resolved = ps.Resolved });
 
     await _specResolution.ResolveAsync(load.InitialFetchList, load.InitialSpecIndexes, 5, specs as List<CardSpec> ?? new List<CardSpec>(specs), mfcBacks, setStatus);
-        rebuildCardList();
+        // Load collection BEFORE first card list build so automatic initial enrichment (custom/mainDb-only quantities) can occur immediately.
         if (!string.IsNullOrEmpty(collectionDir))
         {
             try { collection.Load(collectionDir); } catch (Exception ex) { Debug.WriteLine($"[Collection] Load failed (db): {ex.Message}"); }
-            if (collection.IsLoaded && collection.Quantities.Count > 0)
-            {
-                try { _quantityService.EnrichQuantities(collection, cards); _quantityService.AdjustMfcQuantities(cards); } catch (Exception ex) { Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}"); }
-            }
+        }
+        rebuildCardList();
+        if (collection.IsLoaded)
+        {
+            try { _quantityService.EnrichQuantities(collection, cards); _quantityService.AdjustMfcQuantities(cards); } catch (Exception ex) { Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}"); }
         }
         setStatus($"Initial load {cards.Count} faces (placeholders included).");
         buildOrderedFaces(); rebuildViews(); refresh();

@@ -17,6 +17,13 @@ public partial class App : Application
 			MessageBox.Show(e.Exception.ToString(), "Unhandled UI Exception");
 			e.Handled = true; // prevent silent crash
 		};
+			AppDomain.CurrentDomain.FirstChanceException += (s, args) =>
+			{
+				if (args.Exception is ArgumentException && Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+				{
+					System.Diagnostics.Debug.WriteLine("[FirstChance][ArgumentException] " + args.Exception.Message + "\n" + args.Exception.StackTrace);
+				}
+			};
 		AppDomain.CurrentDomain.UnhandledException += (s, e) =>
 		{
 			var ex = e.ExceptionObject as Exception;

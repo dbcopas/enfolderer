@@ -238,6 +238,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly StatusFlashService _statusFlash = new();
     private string _apiStatus = string.Empty;
     public string ApiStatus { get => _apiStatus; private set { if (_apiStatus!=value) { _apiStatus = value; OnPropertyChanged(); } } }
+    private string _httpPanel = string.Empty; // aggregated HTTP status / counters
+    public string HttpPanel { get => _httpPanel; private set { if (_httpPanel!=value) { _httpPanel = value; OnPropertyChanged(); } } }
 
     private string _status = string.Empty;
     public string Status { get => _status; private set { if (_status!=value) { _status = value; OnPropertyChanged(); } } }
@@ -277,6 +279,21 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         BuildOrderedFaces();
         RebuildViews();
         Refresh();
+        
+        // Fallback: if collection loaded and we have quantity keys but no card face got a positive quantity, attempt enrichment again (late specs scenario)
+        try
+        {
+            if (_collection.IsLoaded && _collection.Quantities.Count > 0 && !_cards.Any(c => c.Quantity > 0))
+            {
+                _quantityService.EnrichQuantities(_collection, _cards);
+                _quantityService.AdjustMfcQuantities(_cards);
+                BuildOrderedFaces();
+                RebuildViews();
+                Refresh();
+                Debug.WriteLine("[Collection][Fallback] Post-build enrichment executed (initial pass yielded zero positives).");
+            }
+        }
+        catch (Exception ex) { Debug.WriteLine($"[Collection][Fallback] Enrichment error: {ex.Message}"); }
     }
     private readonly BinderSession _session = new();
     private List<CardEntry> _cards => _session.Cards;
@@ -345,6 +362,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     // Local back image resolution moved to CardBackImageService
     public void FlashImageFetch(string cardName) => _statusFlash.FlashImageFetch(cardName, s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
     public void FlashMetaUrl(string url) => _statusFlash.FlashMetaUrl(url, s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
+    public void UpdateHttpPanel(string line)
+    {
+        // Keep last 1 line for now; could extend to rolling log.
+        HttpPanel = line;
+    }
     private void RefreshSummaryIfIdle() { }
 
     public ICommand NextCommand { get; }
@@ -416,6 +438,18 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public async Task LoadFromFileAsync(string path)
     {
         var load = await _binderLoadService.LoadAsync(path, SlotsPerPage);
+    Debug.WriteLine($"[Binder] LoadFromFileAsync start path={path}");
+    // Auto-load collection databases early (before initial spec build) so enrichment has quantity keys ready
+    try
+    {
+        if (!string.IsNullOrEmpty(load.CollectionDir))
+        {
+            _collection.Load(load.CollectionDir);
+            if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                Debug.WriteLine($"[Binder] Collection auto-load invoked: loaded={_collection.IsLoaded} qtyKeys={_collection.Quantities.Count}");
+        }
+    }
+    catch (Exception ex) { Debug.WriteLine($"[Binder] Collection auto-load failed: {ex.Message}"); }
     _session.CurrentFileHash = load.FileHash;
         _currentCollectionDir = load.CollectionDir;
         if (load.PagesPerBinderOverride.HasValue) PagesPerBinder = load.PagesPerBinderOverride.Value;
@@ -449,6 +483,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             () => _metadataResolver.PersistMetadataCache(_session.CurrentFileHash!, _cards),
             () => _metadataResolver.MarkCacheComplete(_session.CurrentFileHash!)
         );
+    Debug.WriteLine("[Binder] LoadFromFileAsync complete");
     }
 
     private const int CacheSchemaVersion = 5; // bump: refined two-sided classification & invalidating prior misclassification cache
@@ -469,8 +504,31 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     var (cards, pairMap) = builder.Build(_specs, _mfcBacks, _pendingExplicitVariantPairs);
         _cards.Clear(); _cards.AddRange(cards);
     _explicitVariantPairKeys.Clear(); foreach (var kv in pairMap) _explicitVariantPairKeys[kv.Key] = kv.Value;
+        // Always enrich right after rebuild if collection loaded so UI reflects quantities immediately.
+        if (_collection.IsLoaded)
+        {
+            try
+            {
+                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                    Debug.WriteLine($"[Binder][Rebuild] Before enrichment: cards={_cards.Count} qtyKeys={_collection.Quantities.Count} anyPositive={_cards.Any(c=>c.Quantity>0)}");
+                _quantityService.EnrichQuantities(_collection, _cards);
+                _quantityService.AdjustMfcQuantities(_cards);
+                // IMPORTANT: _orderedFaces holds references to the pre-enrichment CardEntry record instances.
+                // Enrichment replaces entries in _cards with new record instances (records are immutable),
+                // so the existing _orderedFaces list continues to reference stale instances with Quantity=-1.
+                // Rebuild ordered faces after enrichment so page slots pick up updated quantities.
+                BuildOrderedFaces();
+                // Force an immediate visual refresh so newly enriched quantities appear without user action.
+                Refresh();
+                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                    Debug.WriteLine($"[Binder][Rebuild] After enrichment: positives={_cards.Count(c=>c.Quantity>0)} updatedZeroes={_cards.Count(c=>c.Quantity==0)} negatives={_cards.Count(c=>c.Quantity<0)}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Collection] Auto enrichment failed: {ex.Message}");
+            }
+        }
     }
-
     private readonly FaceOrderingService _faceOrdering = new();
     private void BuildOrderedFaces()
     {
@@ -482,6 +540,30 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private void Refresh()
     {
+        // Fallback: if any card still has unset quantity (-1) but collection is loaded, attempt enrichment again before presenting.
+        if (_collection.IsLoaded)
+        {
+            bool needs = false;
+            for (int i=0;i<_cards.Count;i++) { if (_cards[i].Quantity < 0) { needs = true; break; } }
+            if (needs)
+            {
+                try
+                {
+                    if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                        Debug.WriteLine($"[Binder][Refresh] Fallback enrichment triggered: cards={_cards.Count} qtyKeys={_collection.Quantities.Count} positivesPre={_cards.Count(c=>c.Quantity>0)}");
+                    _quantityService.EnrichQuantities(_collection, _cards);
+                    _quantityService.AdjustMfcQuantities(_cards);
+                    // Rebuild ordered faces so newly enriched quantities propagate to UI slots.
+                    BuildOrderedFaces();
+                    if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                        Debug.WriteLine($"[Binder][Refresh] After fallback enrichment: positives={_cards.Count(c=>c.Quantity>0)}");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[Collection] Fallback enrichment failed: {ex.Message}");
+                }
+            }
+        }
         var presenter = new PageViewPresenter();
         var result = presenter.Present(_nav, LeftSlots, RightSlots, _orderedFaces, SlotsPerPage, PagesPerBinder, Http, _binderTheme);
         PageDisplay = result.PageDisplay; OnPropertyChanged(nameof(PageDisplay));
