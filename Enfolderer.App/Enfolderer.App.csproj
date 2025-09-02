@@ -29,10 +29,14 @@
     </Content>
   </ItemGroup>
 
-  <Target Name="WarnIfCollectionMissing" BeforeTargets="Build">
-    <Message Importance="High" Text="mtgstudio.collection not found at repo root; skipping copy." Condition="!Exists('..\\mtgstudio.collection')" />
-    <Message Importance="High" Text="mainDb.db not found at repo root; skipping copy." Condition="!Exists('..\\mainDb.db')" />
-  </Target>
+    <!-- Enforce DB presence: fail build if either required DB file is missing at repo root -->
+    <Target Name="CheckDbFiles" BeforeTargets="PrepareForBuild">
+      <Message Importance="High" Text="[DB CHECK] Verifying required database files at $(MSBuildProjectDirectory)\\.." />
+      <Error Text="mainDb.db missing (expected at repo root)." Condition="!Exists('$(MSBuildProjectDirectory)\\..\\mainDb.db')" />
+      <Error Text="mtgstudio.collection missing (expected at repo root)." Condition="!Exists('$(MSBuildProjectDirectory)\\..\\mtgstudio.collection')" />
+      <Message Importance="High" Text="[DB PRESENT] mainDb.db" Condition="Exists('$(MSBuildProjectDirectory)\\..\\mainDb.db')" />
+      <Message Importance="High" Text="[DB PRESENT] mtgstudio.collection" Condition="Exists('$(MSBuildProjectDirectory)\\..\\mtgstudio.collection')" />
+    </Target>
   <!-- NOTE: Explicit AfterPublish copy target removed; CopyToPublishDirectory metadata already handles inclusion when files exist. -->
   <!-- Re-introduce explicit copy to handle SingleFile publish which may omit external content -->
   <Target Name="EnsureDbFilesInPublish" AfterTargets="Publish">
