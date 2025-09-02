@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Enfolderer.App;
 
-internal sealed class CollectionRepository
+public sealed class CollectionRepository
 {
     private readonly CardCollectionData _data;
     public CollectionRepository(CardCollectionData data) => _data = data;

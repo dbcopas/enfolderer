@@ -27,4 +27,13 @@ public class StatusFlashService
             } catch (TaskCanceledException) { }
         });
     }
+
+    public void FlashImageFetch(string cardName, Action<string> setStatus) =>
+        Flash($"fetching image for {cardName}", TimeSpan.FromSeconds(2), setStatus);
+
+    public void FlashMetaUrl(string url, Action<string> setStatus)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return;
+        Flash(url, TimeSpan.FromSeconds(2), setStatus);
+    }
 }
