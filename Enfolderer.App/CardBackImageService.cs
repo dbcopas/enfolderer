@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace Enfolderer.App;
 
-internal sealed class CardBackImageService
+public sealed class CardBackImageService
 {
     private static readonly string[] CandidateNames =
     {

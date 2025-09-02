@@ -294,6 +294,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly CollectionRepository _collectionRepo; // phase 3 collection repo
     private readonly CardBackImageService _backImageService = new();
     private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
+    private readonly BinderLoadService _binderLoadService;
+    private readonly SpecResolutionService _specResolutionService;
     private TelemetryService? _telemetry; // extracted telemetry service
     // Expose distinct set codes present in current binder specs/cards
     public HashSet<string> GetCurrentSetCodes()
@@ -351,7 +353,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly VariantPairingService _variantPairing = new();
     // _currentViewIndex removed; NavigationService.CurrentIndex is authoritative
     private string? _localBackImagePath; // cached resolved local back image path (or null if not found)
-    private static readonly HttpClient Http = CreateClient();
+    internal static readonly HttpClient Http = CreateClient();
     private class HttpLoggingHandler : DelegatingHandler
     {
         public HttpLoggingHandler(HttpMessageHandler inner) : base(inner) { }
@@ -437,6 +439,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         _collectionRepo = new CollectionRepository(_collection);
         if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
     _telemetry = new TelemetryService(s => UpdatePanel(s), _debugHttpLogging);
+    _binderLoadService = new BinderLoadService(_binderTheme, _metadataResolver, _backImageService, IsCacheComplete);
+    _specResolutionService = new SpecResolutionService(_metadataResolver);
         _nav.ViewChanged += NavOnViewChanged;
         var commandFactory = new CommandFactory(_nav,
             () => PagesPerBinder,
@@ -485,43 +489,29 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     // numberStart-numberEnd  (inclusive range) optionally followed by ; prefix for name hints (ignored here)
     public async Task LoadFromFileAsync(string path)
     {
-        // Recompute slot theme seed
-        try { var fi = new FileInfo(path); CardSlotTheme.Recalculate(path + fi.LastWriteTimeUtc.Ticks); } catch { CardSlotTheme.Recalculate(path); }
-    var parser = new BinderFileParser(_binderTheme, _metadataResolver, log => _backImageService.Resolve(_currentCollectionDir, log), IsCacheComplete);
-        var parseResult = await parser.ParseAsync(path, SlotsPerPage);
-        _currentFileHash = parseResult.FileHash;
-        _currentCollectionDir = parseResult.CollectionDir;
-        if (parseResult.PagesPerBinderOverride.HasValue) PagesPerBinder = parseResult.PagesPerBinderOverride.Value;
-        if (!string.IsNullOrEmpty(parseResult.LayoutModeOverride)) LayoutMode = parseResult.LayoutModeOverride;
-        if (parseResult.HttpDebugEnabled) _debugHttpLogging = true;
-        _localBackImagePath = parseResult.LocalBackImagePath; // may be null
-        _cards.Clear();
-        _specs.Clear();
-        _mfcBacks.Clear();
-        _orderedFaces.Clear();
-        _pendingExplicitVariantPairs.Clear();
-        if (parseResult.CacheHit)
+        var load = await _binderLoadService.LoadAsync(path, SlotsPerPage);
+        _currentFileHash = load.FileHash;
+        _currentCollectionDir = load.CollectionDir;
+        if (load.PagesPerBinderOverride.HasValue) PagesPerBinder = load.PagesPerBinderOverride.Value;
+        if (!string.IsNullOrEmpty(load.LayoutModeOverride)) LayoutMode = load.LayoutModeOverride;
+        if (load.HttpDebugEnabled) _debugHttpLogging = true;
+        _localBackImagePath = load.LocalBackImagePath;
+        _cards.Clear(); _specs.Clear(); _mfcBacks.Clear(); _orderedFaces.Clear(); _pendingExplicitVariantPairs.Clear();
+        if (load.CacheHit)
         {
-            _cards.AddRange(parseResult.CachedCards);
+            _cards.AddRange(load.CachedCards);
             Status = "Loaded metadata from cache.";
-            BuildOrderedFaces();
-            _nav.ResetIndex();
-            RebuildViews();
-            Refresh();
+            BuildOrderedFaces(); _nav.ResetIndex(); RebuildViews(); Refresh();
             return;
         }
-        foreach (var ps in parseResult.Specs)
+        foreach (var ps in load.Specs)
         {
-            var cs = new CardSpec(ps.SetCode, ps.Number, ps.OverrideName, ps.ExplicitEntry, ps.NumberDisplayOverride)
-            {
-                Resolved = ps.Resolved
-            };
+            var cs = new CardSpec(ps.SetCode, ps.Number, ps.OverrideName, ps.ExplicitEntry, ps.NumberDisplayOverride) { Resolved = ps.Resolved };
             _specs.Add(cs);
         }
-        foreach (var p in parseResult.PendingVariantPairs) _pendingExplicitVariantPairs.Add(p);
-        await ResolveSpecsWithServiceAsync(parseResult.FetchList, parseResult.InitialSpecIndexes);
+        foreach (var p in load.PendingVariantPairs) _pendingExplicitVariantPairs.Add(p);
+        await _specResolutionService.ResolveAsync(load.InitialFetchList, load.InitialSpecIndexes, 5, _specs, _mfcBacks, s => Status = s);
         RebuildCardListFromSpecs();
-        // Load collection DBs
         if (!string.IsNullOrEmpty(_currentCollectionDir))
         {
             try { _collection.Load(_currentCollectionDir); } catch (Exception ex) { Debug.WriteLine($"[Collection] Load failed (db): {ex.Message}"); }
@@ -531,25 +521,19 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             }
         }
         Status = $"Initial load {_cards.Count} faces (placeholders included).";
-        BuildOrderedFaces();
-        _nav.ResetIndex();
-        RebuildViews();
-        Refresh();
-        // Background fetch of remaining specs
+        BuildOrderedFaces(); _nav.ResetIndex(); RebuildViews(); Refresh();
         _ = Task.Run(async () =>
         {
             var remaining = new HashSet<int>();
-            for (int i = 0; i < _specs.Count; i++) if (!parseResult.InitialSpecIndexes.Contains(i)) remaining.Add(i);
+            for (int i = 0; i < _specs.Count; i++) if (!load.InitialSpecIndexes.Contains(i)) remaining.Add(i);
             if (remaining.Count == 0) return;
-            await ResolveSpecsWithServiceAsync(parseResult.FetchList, remaining, updateInterval:15);
+            await _specResolutionService.ResolveAsync(load.InitialFetchList, remaining, 15, _specs, _mfcBacks, s => Status = s);
             Application.Current.Dispatcher.Invoke(() =>
             {
                 RebuildCardListFromSpecs();
                 if (_collection.IsLoaded) _quantityService.EnrichQuantities(_collection, _cards);
                 if (_collection.IsLoaded) _quantityService.AdjustMfcQuantities(_cards);
-                BuildOrderedFaces();
-                RebuildViews();
-                Refresh();
+                BuildOrderedFaces(); RebuildViews(); Refresh();
                 Status = $"All metadata loaded ({_cards.Count} faces).";
                 _metadataResolver.PersistMetadataCache(_currentFileHash, _cards);
                 _metadataResolver.MarkCacheComplete(_currentFileHash);
@@ -573,39 +557,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private string MetaCacheDonePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".done");
     private bool IsCacheComplete(string hash) => File.Exists(MetaCacheDonePath(hash));
 
-    private async Task ResolveSpecsWithServiceAsync(List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList, HashSet<int> targetIndexes, int updateInterval = 5)
-    {
-        int total = targetIndexes.Count;
-        await _metadataResolver.ResolveSpecsAsync(
-            fetchList,
-            targetIndexes,
-            done =>
-            {
-                if (done % updateInterval == 0 || done == total)
-                {
-                    Status = $"Resolving metadata {done}/{total} ({(int)(done*100.0/Math.Max(1,total))}%)";
-                }
-                return done;
-            },
-            (specIndex, resolved) =>
-            {
-                if (specIndex < 0 || specIndex >= _specs.Count) return (null,false);
-                if (resolved != null)
-                {
-                    if (resolved.IsBackFace)
-                    {
-                        _mfcBacks[specIndex] = resolved;
-                    }
-                    else
-                    {
-                        _specs[specIndex] = _specs[specIndex] with { Resolved = resolved };
-                    }
-                }
-                return (null,false);
-            },
-            async (set, num, nameOverride) => await FetchCardMetadataAsync(set, num, nameOverride)
-        );
-    }
+    // Spec resolution now handled by SpecResolutionService
 
     private void RebuildCardListFromSpecs()
     {
@@ -650,102 +602,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     // CardSpec record extracted to CardSpec.cs (Phase 1 refactor)
 
-    private async Task<CardEntry?> FetchCardMetadataAsync(string setCode, string number, string? overrideName)
-    {
-        try
-        {
-            await ApiRateLimiter.WaitAsync();
-            var url = ScryfallUrlHelper.BuildCardApiUrl(setCode, number);
-            var resp = await Http.GetAsync(url);
-            if (!resp.IsSuccessStatusCode) return null;
-            await using var stream = await resp.Content.ReadAsStreamAsync();
-            using var doc = await JsonDocument.ParseAsync(stream);
-            var root = doc.RootElement;
-            string? displayName = overrideName;
-            string? frontRaw = null; string? backRaw = null; bool isMfc = false;
-            string? frontImg = null; string? backImg = null;
-            // Distinguish true two-sided physical cards (transform/modal_dfc/battle/etc) vs split/aftermath/adventure where both halves are on one physical face.
-            bool hasRootImageUris = root.TryGetProperty("image_uris", out var rootImgs); // split & similar layouts usually have this
-            string? layout = null; if (root.TryGetProperty("layout", out var layoutProp) && layoutProp.ValueKind == JsonValueKind.String) layout = layoutProp.GetString();
-            bool isPhysicallyTwoSidedLayout = layout != null && PhysicallyTwoSidedLayouts.Contains(layout);
-            bool forcedSingleByLayout = layout != null && SingleFaceMultiLayouts.Contains(layout);
-            if (root.TryGetProperty("card_faces", out var faces) && faces.ValueKind == JsonValueKind.Array && faces.GetArrayLength() >= 2)
-            {
-                var f0 = faces[0]; var f1 = faces[1];
-                int faceCount = faces.GetArrayLength();
-                bool facesHaveDistinctArt = false;
-                try
-                {
-                    if (f0.TryGetProperty("illustration_id", out var ill0) && f1.TryGetProperty("illustration_id", out var ill1) && ill0.ValueKind==JsonValueKind.String && ill1.ValueKind==JsonValueKind.String && ill0.GetString()!=ill1.GetString())
-                        facesHaveDistinctArt = true;
-                } catch { }
-                bool forceAllTwoSided = Environment.GetEnvironmentVariable("ENFOLDERER_FORCE_TWO_SIDED_ALL_FACES") == "1";
-                // Heuristic: treat as two-sided if explicit two-sided layout OR (not a forced-single layout AND (no root image OR distinct art))
-                // Fallback: if layout missing/null AND not forced single & exactly 2 faces.
-                bool heuristicTwoSided = !forcedSingleByLayout && (isPhysicallyTwoSidedLayout || (!hasRootImageUris) || facesHaveDistinctArt || (layout == null && faceCount == 2));
-                bool treatAsTwoSided = isPhysicallyTwoSidedLayout || forceAllTwoSided || heuristicTwoSided;
-                if (!treatAsTwoSided && !forcedSingleByLayout)
-                {
-                    Debug.WriteLine($"[MFC Heuristic] Unexpected single-face classification for {setCode} {number} layout={layout} faces={faceCount} hasRootImgs={hasRootImageUris} distinctArt={facesHaveDistinctArt}");
-                }
-                if (treatAsTwoSided)
-                {
-                    frontRaw = f0.TryGetProperty("name", out var f0Name) && f0Name.ValueKind==JsonValueKind.String ? f0Name.GetString() : null;
-                    backRaw = f1.TryGetProperty("name", out var f1Name) && f1Name.ValueKind==JsonValueKind.String ? f1Name.GetString() : null;
-                    isMfc = true;
-                    if (displayName == null) displayName = $"{frontRaw} ({backRaw})";
-                    // Face-specific images preferred
-                    if (f0.TryGetProperty("image_uris", out var f0Imgs))
-                    {
-                        if (f0Imgs.TryGetProperty("normal", out var f0Norm) && f0Norm.ValueKind==JsonValueKind.String) frontImg = f0Norm.GetString();
-                        else if (f0Imgs.TryGetProperty("large", out var f0Large) && f0Large.ValueKind==JsonValueKind.String) frontImg = f0Large.GetString();
-                    }
-                    if (f1.TryGetProperty("image_uris", out var f1Imgs))
-                    {
-                        if (f1Imgs.TryGetProperty("normal", out var f1Norm) && f1Norm.ValueKind==JsonValueKind.String) backImg = f1Norm.GetString();
-                        else if (f1Imgs.TryGetProperty("large", out var f1Large) && f1Large.ValueKind==JsonValueKind.String) backImg = f1Large.GetString();
-                    }
-                    // Fallback to root image if front missing
-                    if (frontImg == null && hasRootImageUris)
-                    {
-                        if (rootImgs.TryGetProperty("normal", out var rootNorm) && rootNorm.ValueKind==JsonValueKind.String) frontImg = rootNorm.GetString();
-                        else if (rootImgs.TryGetProperty("large", out var rootLarge) && rootLarge.ValueKind==JsonValueKind.String) frontImg = rootLarge.GetString();
-                    }
-                    // Additional fallback: if back image missing but Scryfall supplied a single root image (some older layouts), reuse front image so slot isn't blank
-                    if (backImg == null && frontImg != null)
-                    {
-                        backImg = frontImg; // better to show duplicate art than empty slot
-                    }
-                }
-                else
-                {
-                    // Treat as single-slot multi-face (split/aftermath/etc)
-                    if (displayName == null && root.TryGetProperty("name", out var npropSplit) && npropSplit.ValueKind==JsonValueKind.String) displayName = npropSplit.GetString();
-                    if (hasRootImageUris)
-                    {
-                        if (rootImgs.TryGetProperty("normal", out var rootNorm2) && rootNorm2.ValueKind==JsonValueKind.String) frontImg = rootNorm2.GetString();
-                        else if (rootImgs.TryGetProperty("large", out var rootLarge2) && rootLarge2.ValueKind==JsonValueKind.String) frontImg = rootLarge2.GetString();
-                    }
-                    else if (f0.TryGetProperty("image_uris", out var f0Imgs2))
-                    {
-                        if (f0Imgs2.TryGetProperty("normal", out var f0Norm2) && f0Norm2.ValueKind==JsonValueKind.String) frontImg = f0Norm2.GetString();
-                        else if (f0Imgs2.TryGetProperty("large", out var f0Large2) && f0Large2.ValueKind==JsonValueKind.String) frontImg = f0Large2.GetString();
-                    }
-                }
-            }
-            else
-            {
-                if (displayName == null && root.TryGetProperty("name", out var nprop)) displayName = nprop.GetString();
-                if (root.TryGetProperty("image_uris", out var singleImgs) && singleImgs.TryGetProperty("normal", out var singleNorm)) frontImg = singleNorm.GetString();
-                else if (root.TryGetProperty("image_uris", out singleImgs) && singleImgs.TryGetProperty("large", out var singleLarge)) frontImg = singleLarge.GetString();
-            }
-            if (string.IsNullOrWhiteSpace(displayName)) displayName = $"{number}"; // fallback
-            CardImageUrlStore.Set(setCode, number, frontImg, backImg);
-            CardLayoutStore.Set(setCode, number, layout);
-            return new CardEntry(displayName!, number, setCode, isMfc, false, frontRaw, backRaw);
-        }
-        catch { return null; }
-    }
+    // FetchCardMetadataAsync moved into CardMetadataResolver / SpecResolutionService
 
     private void BuildOrderedFaces()
     {
@@ -871,8 +728,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         }
         _ = Task.Run(async () =>
         {
-            await ResolveSpecsWithServiceAsync(quickList, neededSpecs, updateInterval: 3);
-    await ResolveSpecsWithServiceAsync(quickList, neededSpecs, updateInterval: 3);
+            await _specResolutionService.ResolveAsync(quickList, neededSpecs, 3, _specs, _mfcBacks, s => Status = s);
             Application.Current.Dispatcher.Invoke(() =>
             {
                 RebuildCardListFromSpecs();
