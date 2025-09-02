@@ -30,7 +30,7 @@ public class HttpClientFactoryService : IHttpClientFactoryService
         };
         var c = new HttpClient(new HttpLoggingHandler(sockets, _telemetry));
         c.DefaultRequestHeaders.UserAgent.ParseAdd("Enfolderer/0.1");
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("(+https://github.com/yourrepo)");
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("(+https://github.com/dbcopas/enfolderer)");
         c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         return c;
     }

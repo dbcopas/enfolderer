@@ -83,6 +83,7 @@ public class CardSlot : INotifyPropertyChanged
 
     public async Task TryLoadImageAsync(HttpClient client, string setCode, string number, bool isBackFace)
     {
+    if (AppRuntimeFlags.DisableImageFetching) { return; }
         if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
         if (string.Equals(setCode, "TOKEN", StringComparison.OrdinalIgnoreCase) || string.Equals(number, "TOKEN", StringComparison.OrdinalIgnoreCase))
         {

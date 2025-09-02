@@ -23,7 +23,7 @@ internal static class BinderViewModelHttpFactory
         }
         catch { }
         var c = new HttpClient();
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("Enfolderer/0.1 (+https://github.com/yourrepo)");
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("Enfolderer/0.1 (+https://github.com/dbcopas/enfolderer)");
         c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         return c;
     }
@@ -89,4 +89,15 @@ internal static class HttpHelper
         }
         catch { }
     }
+}
+
+/// <summary>
+/// Runtime feature / diagnostic flags. Central so multiple classes can coordinate behavior without new dependencies.
+/// </summary>
+internal static class AppRuntimeFlags
+{
+    /// <summary>
+    /// When true, CardSlot image fetching is skipped (used by SELF_TESTS to avoid early HTTP calls at startup).
+    /// </summary>
+    public static volatile bool DisableImageFetching;
 }

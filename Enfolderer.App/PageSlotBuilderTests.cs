@@ -16,6 +16,8 @@ public static class PageSlotBuilderTests
         Check(slots[0].Name=="A" && slots[1].Name=="B");
         var display = builder.BuildPageDisplay(new NavigationService.PageView(1,2,0), 40);
         Check(display.Contains("Pages"));
+    // Ensure image fetching was suppressed during test run
+    Check(AppRuntimeFlags.DisableImageFetching == true);
         return failures;
     }
 }
