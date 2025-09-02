@@ -291,6 +291,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly NavigationService _nav = new(); // centralized navigation
     private IReadOnlyList<NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly CardCollectionData _collection = new(); // collection DB data
+    private readonly CardQuantityService _quantityService = new(); // phase 2 extracted quantity logic
     private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
     // Expose distinct set codes present in current binder specs/cards
     public HashSet<string> GetCurrentSetCodes()
@@ -312,8 +313,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             if (string.IsNullOrEmpty(_currentCollectionDir)) { SetStatus("No collection loaded."); return; }
             _collection.Reload(_currentCollectionDir);
             if (!_collection.IsLoaded) { SetStatus("Collection DBs not found."); return; }
-            EnrichQuantitiesFromCollection();
-            AdjustMfcQuantities();
+            _quantityService.EnrichQuantities(_collection, _cards);
+            _quantityService.AdjustMfcQuantities(_cards);
             BuildOrderedFaces();
             RebuildViews();
             Refresh();
@@ -335,161 +336,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         EnsureCollectionLoaded();
         if (!_collection.IsLoaded) { SetStatus("Collection not loaded"); return; }
 
-        // Derive base number key (strip variant portion inside parentheses and any trailing non-digits progressively)
-        string numToken = slot.Number.Split('/')[0];
-        int parenIdx = numToken.IndexOf('(');
-        if (parenIdx > 0) numToken = numToken.Substring(0, parenIdx);
-        string baseNum = numToken;
-        string trimmed = baseNum.TrimStart('0'); if (trimmed.Length == 0) trimmed = "0";
-        string setLower = slot.Set.ToLowerInvariant();
-        (int cardId, int? gatherer) foundEntry = default;
-        bool indexFound = false;
-        // Handle special variant symbols (e.g. Japanese alt-art WAR planeswalkers using a star character)
-        if (baseNum.IndexOf('★') >= 0)
-        {
-            var starStripped = baseNum.Replace("★", string.Empty);
-            if (starStripped.Length == 0) starStripped = "0"; // safety
-            // Try direct lookups with star stripped before falling back to progressive stripping logic below
-            if (!indexFound && _collection.MainIndex.TryGetValue((setLower, starStripped), out foundEntry)) indexFound = true;
-            var starTrimmed = starStripped.TrimStart('0'); if (starTrimmed.Length == 0) starTrimmed = "0";
-            if (!indexFound && !string.Equals(starTrimmed, starStripped, StringComparison.Ordinal) && _collection.MainIndex.TryGetValue((setLower, starTrimmed), out foundEntry)) indexFound = true;
-            // If we found a match using stripped form, treat that as the canonical baseNum for downstream matching
-            if (indexFound)
-            {
-                baseNum = starStripped;
-                trimmed = starTrimmed;
-            }
-        }
-        if (_collection.MainIndex.TryGetValue((setLower, baseNum), out foundEntry)) indexFound = true;
-        else if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal) && _collection.MainIndex.TryGetValue((setLower, trimmed), out foundEntry)) indexFound = true;
-        else
-        {
-            string candidate = baseNum;
-            while (candidate.Length > 0 && !indexFound && !char.IsDigit(candidate[^1]))
-            {
-                candidate = candidate.Substring(0, candidate.Length - 1);
-                if (_collection.MainIndex.TryGetValue((setLower, candidate), out foundEntry)) { indexFound = true; break; }
-            }
-        }
-        if (!indexFound)
-        {
-            // Special handling: WAR Japanese alt art star variants (e.g., 1★) should map to base number + Art JP modifier
-            if (slot.Set.Equals("WAR", StringComparison.OrdinalIgnoreCase) && slot.Number.IndexOf('★') >= 0)
-            {
-                var baseStar = slot.Number.Replace("★", string.Empty);
-                var baseStarTrim = baseStar.TrimStart('0'); if (baseStarTrim.Length == 0) baseStarTrim = "0";
-                int variantId;
-                if (_collection.TryGetVariantCardIdFlexible(slot.Set, baseStar, "Art JP", out variantId) ||
-                    _collection.TryGetVariantCardIdFlexible(slot.Set, baseStarTrim, "Art JP", out variantId) ||
-                    _collection.TryGetVariantCardIdFlexible(slot.Set, baseStar, "JP", out variantId) ||
-                    _collection.TryGetVariantCardIdFlexible(slot.Set, baseStarTrim, "JP", out variantId))
-                {
-                    foundEntry = (variantId, null);
-                    indexFound = true;
-                }
-            }
-            if (!indexFound)
-            {
-                int? directId = ResolveCardIdFromDb(slot.Set, baseNum, trimmed);
-                if (directId == null) { SetStatus("Card not found"); return; }
-                foundEntry = (directId.Value, null);
-            }
-        }
-        int cardId = foundEntry.cardId;
-
-        int logicalQty = slot.Quantity;
-        bool isMfcFront = false;
-        var entry = _cards.FirstOrDefault(c => c.Set != null && string.Equals(c.Set, slot.Set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number.Split('/')[0], baseNum.Split('/')[0], StringComparison.OrdinalIgnoreCase) && c.Name == slot.Name);
-        if (entry != null && entry.IsModalDoubleFaced && !entry.IsBackFace)
-        {
-            isMfcFront = true;
-            logicalQty = slot.Quantity; // display already mapped
-        }
-        int newLogicalQty = !isMfcFront ? (logicalQty == 0 ? 1 : 0) : (logicalQty == 0 ? 1 : (logicalQty == 1 ? 2 : 0));
-
-        bool isCustom = _collection.CustomCards.Contains(cardId);
-        if (isCustom)
-        {
-            string mainDbPath = System.IO.Path.Combine(_currentCollectionDir, "mainDb.db");
-            if (!File.Exists(mainDbPath)) { SetStatus("mainDb missing"); return; }
-            try
-            {
-                using var conMain = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={mainDbPath}");
-                conMain.Open();
-                using var cmd = conMain.CreateCommand();
-                cmd.CommandText = "UPDATE Cards SET Qty=@q WHERE id=@id";
-                cmd.Parameters.AddWithValue("@q", newLogicalQty);
-                cmd.Parameters.AddWithValue("@id", cardId);
-                cmd.ExecuteNonQuery();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[CustomQty] mainDb write failed: {ex.Message}");
-                SetStatus("Write failed"); return;
-            }
-        }
-        else
-        {
-            string collectionPath = System.IO.Path.Combine(_currentCollectionDir, "mtgstudio.collection");
-            if (!File.Exists(collectionPath)) { SetStatus("Collection file missing"); return; }
-            try
-            {
-                using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={collectionPath}");
-                con.Open();
-                using (var cmd = con.CreateCommand())
-                {
-                    cmd.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
-                    cmd.Parameters.AddWithValue("@q", newLogicalQty);
-                    cmd.Parameters.AddWithValue("@id", cardId);
-                    int rows = cmd.ExecuteNonQuery();
-                    if (rows == 0)
-                    {
-                        using var ins = con.CreateCommand();
-                        ins.CommandText = "INSERT INTO CollectionCards (CardId, Qty) VALUES (@id, @q)";
-                        ins.Parameters.AddWithValue("@id", cardId);
-                        ins.Parameters.AddWithValue("@q", newLogicalQty);
-                        try { ins.ExecuteNonQuery(); } catch { }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[Collection] Toggle write failed: {ex.Message}");
-                SetStatus("Write failed"); return;
-            }
-        }
-
-        if (newLogicalQty > 0) _collection.Quantities[(setLower, baseNum)] = newLogicalQty; else _collection.Quantities.Remove((setLower, baseNum));
-        if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal))
-        {
-            if (newLogicalQty > 0) _collection.Quantities[(setLower, trimmed)] = newLogicalQty; else _collection.Quantities.Remove((setLower, trimmed));
-        }
-        for (int i = 0; i < _cards.Count; i++)
-        {
-            var c = _cards[i];
-            if (c.Set != null && string.Equals(c.Set, slot.Set, StringComparison.OrdinalIgnoreCase))
-            {
-                string cBase = c.Number.Split('/')[0];
-                if (string.Equals(cBase, baseNum, StringComparison.OrdinalIgnoreCase) || string.Equals(cBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase))
-                    _cards[i] = c with { Quantity = newLogicalQty };
-            }
-        }
-        AdjustMfcQuantities();
-        for (int i = 0; i < _orderedFaces.Count; i++)
-        {
-            var o = _orderedFaces[i];
-            if (o.Set != null && string.Equals(o.Set, slot.Set, StringComparison.OrdinalIgnoreCase))
-            {
-                string oBase = o.Number.Split('/')[0];
-                if (string.Equals(oBase, baseNum, StringComparison.OrdinalIgnoreCase) || string.Equals(oBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase))
-                {
-                    var updated = _cards.FirstOrDefault(c => c.Set != null && c.Set.Equals(o.Set, StringComparison.OrdinalIgnoreCase) && c.Number == o.Number && c.IsBackFace == o.IsBackFace);
-                    if (updated != null) _orderedFaces[i] = updated;
-                }
-            }
-        }
-        Refresh();
-        SetStatus($"Set {slot.Set} #{slot.Number} => {newLogicalQty}");
+    _quantityService.ToggleQuantity(slot, _currentCollectionDir, _collection, _cards, _orderedFaces, ResolveCardIdFromDb, SetStatus);
+    Refresh();
     }
 
     private void EnsureCollectionLoaded()
@@ -854,7 +702,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             try { _collection.Load(_currentCollectionDir); } catch (Exception ex) { Debug.WriteLine($"[Collection] Load failed (db): {ex.Message}"); }
             if (_collection.IsLoaded && _collection.Quantities.Count > 0)
             {
-                try { EnrichQuantitiesFromCollection(); AdjustMfcQuantities(); } catch (Exception ex) { Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}"); }
+                try { _quantityService.EnrichQuantities(_collection, _cards); _quantityService.AdjustMfcQuantities(_cards); } catch (Exception ex) { Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}"); }
             }
         }
         Status = $"Initial load {_cards.Count} faces (placeholders included).";
@@ -872,8 +720,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             Application.Current.Dispatcher.Invoke(() =>
             {
                 RebuildCardListFromSpecs();
-                if (_collection.IsLoaded) EnrichQuantitiesFromCollection();
-                if (_collection.IsLoaded) AdjustMfcQuantities();
+                if (_collection.IsLoaded) _quantityService.EnrichQuantities(_collection, _cards);
+                if (_collection.IsLoaded) _quantityService.AdjustMfcQuantities(_cards);
                 BuildOrderedFaces();
                 RebuildViews();
                 Refresh();
@@ -884,143 +732,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         });
     }
 
-    private void EnrichQuantitiesFromCollection()
-    {
-        if (_collection.Quantities.Count == 0) return;
-        int updated = 0;
-        for (int i = 0; i < _cards.Count; i++)
-        {
-            var c = _cards[i];
-            if (c.IsBackFace && string.Equals(c.Set, "__BACK__", StringComparison.OrdinalIgnoreCase)) continue; // skip only placeholder backs
-            if (string.IsNullOrEmpty(c.Set) || string.IsNullOrEmpty(c.Number)) continue;
-            // Authoritative variant path: WAR star-number (Japanese alternate planeswalkers)
-            if (string.Equals(c.Set, "WAR", StringComparison.OrdinalIgnoreCase) && c.Number.Contains('★'))
-            {
-                string starBaseRaw = c.Number.Replace("★", string.Empty);
-                string starTrim = starBaseRaw.TrimStart('0'); if (starTrim.Length == 0) starTrim = "0";
-                int qtyVariant = 0; // default 0 even if not present
-                bool variantFound = false;
-                if (int.TryParse(starBaseRaw, out _))
-                {
-                    // Try both JP and ART JP variant buckets flexibly
-                    if (_collection.TryGetVariantQuantityFlexible(c.Set, starBaseRaw, "Art JP", out var artQty) ||
-                        _collection.TryGetVariantQuantityFlexible(c.Set, starTrim, "Art JP", out artQty) ||
-                        _collection.TryGetVariantQuantityFlexible(c.Set, starBaseRaw, "JP", out artQty) ||
-                        _collection.TryGetVariantQuantityFlexible(c.Set, starTrim, "JP", out artQty))
-                    {
-                        qtyVariant = artQty;
-                        variantFound = true;
-                    }
-                }
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                {
-                    if (variantFound)
-                        Debug.WriteLine($"[Collection][VARIANT] WAR star authoritative {c.Number} -> base={starBaseRaw}/{starTrim} JP qty={qtyVariant}");
-                    else
-                        Debug.WriteLine($"[Collection][VARIANT-MISS] WAR star authoritative {c.Number} attempted base={starBaseRaw}/{starTrim} JP (flex) defaulting 0");
-                }
-                if (c.Quantity != qtyVariant)
-                {
-                    _cards[i] = c with { Quantity = qtyVariant };
-                    updated++;
-                }
-                continue; // skip base fallback entirely for star variants
-            }
-            // For display numbers like n(m) we only lookup n (first segment before '(')
-            string numTokenCard = c.Number.Split('/')[0];
-            int parenIndex = numTokenCard.IndexOf('(');
-            if (parenIndex > 0)
-            {
-                numTokenCard = numTokenCard.Substring(0, parenIndex);
-            }
-            string baseNum = numTokenCard;
-            string trimmed = baseNum.TrimStart('0');
-            if (trimmed.Length == 0) trimmed = "0";
-            var setLower = c.Set.ToLowerInvariant();
-            int qty;
-            bool found = _collection.Quantities.TryGetValue((setLower, baseNum), out qty);
-            if (!found && !string.Equals(trimmed, baseNum, StringComparison.Ordinal))
-                found = _collection.Quantities.TryGetValue((setLower, trimmed), out qty);
-            // If still not found and number contains letters (e.g., 270Borderless), try stripping trailing non-digits progressively
-            if (!found)
-            {
-                string candidate = baseNum;
-                while (candidate.Length > 0 && !found && !char.IsDigit(candidate[^1]))
-                {
-                    candidate = candidate.Substring(0, candidate.Length -1);
-                    if (candidate.Length == 0) break;
-                    found = _collection.Quantities.TryGetValue((setLower, candidate), out qty);
-                }
-            }
-            if (!found) {
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                {
-                    try
-                    {
-                        var sampleKeys = string.Join(", ", _collection.Quantities.Keys.Where(k => k.Item1 == setLower).Take(25).Select(k => k.Item1+":"+k.Item2));
-                        Debug.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found. Sample keys for set: {sampleKeys}");
-                    }
-                    catch { }
-                }
-                // Not found -> treat as zero (may have decreased since last refresh)
-                if (c.Quantity != 0)
-                {
-                    _cards[i] = c with { Quantity = 0 };
-                    updated++;
-                }
-                continue;
-            }
-            if (qty >= 0 && c.Quantity != qty)
-            {
-                _cards[i] = c with { Quantity = qty };
-                updated++;
-            }
-        }
-        if (updated > 0)
-            Debug.WriteLine($"[Collection] Quantities applied to {updated} faces");
-    }
-
-    // Adjust quantities for modal double-faced (MFC) cards so display follows rule:
-    // Q=0  => front 0, back 0
-    // Q=1  => front 1, back 0
-    // Q>=2 => front 2, back 2 (cap at 2 for display purposes)
-    private void AdjustMfcQuantities()
-    {
-        for (int i = 0; i < _cards.Count; i++)
-        {
-            var front = _cards[i];
-            if (!front.IsModalDoubleFaced || front.IsBackFace) continue; // only process front faces (real MFC logic retained)
-            int q = front.Quantity;
-            if (q < 0) continue; // not yet populated
-            int frontDisplay, backDisplay;
-            if (q <= 0) { frontDisplay = 0; backDisplay = 0; }
-            else if (q == 1) { frontDisplay = 1; backDisplay = 0; }
-            else { frontDisplay = 2; backDisplay = 2; }
-            if (front.Quantity != frontDisplay) _cards[i] = front with { Quantity = frontDisplay };
-            // locate matching back face (expected immediately next, but search fallback)
-            int backIndex = -1;
-            if (i + 1 < _cards.Count)
-            {
-                var candidate = _cards[i + 1];
-                if (candidate.IsModalDoubleFaced && candidate.IsBackFace && candidate.Set == front.Set && candidate.Number == front.Number)
-                    backIndex = i + 1;
-            }
-            if (backIndex == -1)
-            {
-                for (int j = i + 1; j < _cards.Count; j++)
-                {
-                    var cand = _cards[j];
-                    if (cand.IsModalDoubleFaced && cand.IsBackFace && cand.Set == front.Set && cand.Number == front.Number)
-                    { backIndex = j; break; }
-                }
-            }
-            if (backIndex >= 0)
-            {
-                var back = _cards[backIndex];
-                if (back.Quantity != backDisplay) _cards[backIndex] = back with { Quantity = backDisplay };
-            }
-        }
-    }
+    // Quantity enrichment & MFC adjustment moved to CardQuantityService (Phase 2)
 
     private string? _currentFileHash;
     private const int CacheSchemaVersion = 5; // bump: refined two-sided classification & invalidating prior misclassification cache
@@ -1120,10 +832,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         }
     }
 
-    private record CardSpec(string setCode, string number, string? overrideName, bool explicitEntry, string? numberDisplayOverride = null)
-    {
-        public CardEntry? Resolved { get; set; }
-    }
+    // CardSpec record extracted to CardSpec.cs (Phase 1 refactor)
 
     private async Task<CardEntry?> FetchCardMetadataAsync(string setCode, string number, string? overrideName)
     {
