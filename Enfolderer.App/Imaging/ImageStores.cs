@@ -4,7 +4,7 @@ using System.IO;
 using System.Text;
 using System.Windows.Media.Imaging;
 
-namespace Enfolderer.App;
+namespace Enfolderer.App.Imaging;
 
 /// <summary>
 /// Disk-backed bitmap cache keyed by a logical image key (usually "url|face").
