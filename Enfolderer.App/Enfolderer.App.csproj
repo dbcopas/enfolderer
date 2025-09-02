@@ -14,6 +14,9 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.5" />
   </ItemGroup>
 
+  <!-- Embedded card back image so placeholders never need external file -->
+  <ItemGroup> <Resource Include="Magic_card_back.jpg" /> </ItemGroup>
+
   <!-- Ship databases from repo root -->
   <ItemGroup>
     <Content Include="..\mainDb.db" Condition="Exists('..\\mainDb.db')">

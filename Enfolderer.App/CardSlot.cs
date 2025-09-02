@@ -84,6 +84,79 @@ public class CardSlot : INotifyPropertyChanged
     public async Task TryLoadImageAsync(HttpClient client, string setCode, string number, bool isBackFace)
     {
     if (AppRuntimeFlags.DisableImageFetching) { return; }
+        // Backface placeholder cards (synthetic entries) should never hit external API.
+        if (string.Equals(setCode, "__BACK__", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var (frontUrl, backUrl) = CardImageUrlStore.Get(setCode, number);
+                var chosen = isBackFace ? backUrl : frontUrl;
+                if (string.IsNullOrWhiteSpace(chosen))
+                {
+                    // Fallback: attempt default embedded pack URI directly if mapping not yet created (e.g., cache hit scenario before mapping restoration)
+                    chosen = "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg";
+                    System.Diagnostics.Debug.WriteLine("[CardSlot] Backface mapping missing; using direct pack URI fallback.");
+                }
+                if (!string.IsNullOrWhiteSpace(chosen))
+                {
+                    if (chosen.StartsWith("pack://", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            var bmp = new BitmapImage();
+                            bmp.BeginInit();
+                            bmp.UriSource = new Uri(chosen, UriKind.Absolute);
+                            bmp.CacheOption = BitmapCacheOption.OnLoad;
+                            bmp.EndInit();
+                            if (bmp.CanFreeze) bmp.Freeze();
+                            ImageSource = bmp;
+                            return;
+                        }
+                        catch (Exception exPack)
+                        {
+                            Debug.WriteLine($"[CardSlot] Embedded back image load failed {chosen}: {exPack.Message}");
+                        }
+                    }
+                    else if (File.Exists(chosen))
+                    {
+                        try
+                        {
+                            var bytesLocal = File.ReadAllBytes(chosen);
+                            var bmpLocal = CreateFrozenBitmap(bytesLocal);
+                            ImageSource = bmpLocal;
+                        }
+                        catch (Exception exLocal)
+                        {
+                            Debug.WriteLine($"[CardSlot] Placeholder local back image load failed {chosen}: {exLocal.Message}");
+                        }
+                    }
+            else if (Uri.IsWellFormedUriString(chosen, UriKind.Absolute))
+                    {
+                        try
+                        {
+                            var bytes = await client.GetByteArrayAsync(chosen);
+                            var bmp = CreateFrozenBitmap(bytes);
+                            ImageSource = bmp;
+                return;
+                        }
+                        catch (Exception exRemote)
+                        {
+                            Debug.WriteLine($"[CardSlot] Placeholder remote back fetch failed {chosen}: {exRemote.Message}");
+                        }
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine("[CardSlot] Placeholder back has no cached URL mapping.");
+                }
+                if (ImageSource == null)
+                {
+                    Debug.WriteLine("[CardSlot] Placeholder back image NOT set (post-attempt).");
+                }
+            }
+            catch { }
+            return; // do not attempt API fetch
+        }
         if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
         if (string.Equals(setCode, "TOKEN", StringComparison.OrdinalIgnoreCase) || string.Equals(number, "TOKEN", StringComparison.OrdinalIgnoreCase))
         {

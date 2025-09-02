@@ -28,6 +28,10 @@ public class PageSlotBuilder
                 var face = orderedFaces[gi];
                 var slot = new CardSlot(face, gi);
                 result.Add(slot);
+                // Always invoke image load, including for placeholder backfaces.
+                // The CardSlot logic itself suppresses external HTTP for "__BACK__" and will
+                // load the embedded or local resource instead. Previously we skipped these, which
+                // prevented the back image from ever appearing.
                 tasks.Add(slot.TryLoadImageAsync(http, face.Set ?? string.Empty, face.Number, face.IsBackFace));
             }
             else
