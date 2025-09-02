@@ -438,15 +438,22 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
     _telemetry = new TelemetryService(s => UpdatePanel(s), _debugHttpLogging);
         _nav.ViewChanged += NavOnViewChanged;
-        NextCommand = new RelayCommand(_ => { if (_nav.CanNext) _nav.Next(); }, _ => _nav.CanNext);
-        PrevCommand = new RelayCommand(_ => { if (_nav.CanPrev) _nav.Prev(); }, _ => _nav.CanPrev);
-        FirstCommand = new RelayCommand(_ => { if (_nav.CanFirst) _nav.First(); }, _ => _nav.CanFirst);
-        LastCommand  = new RelayCommand(_ => { if (_nav.CanLast)  _nav.Last();  }, _ => _nav.CanLast);
-        NextBinderCommand = new RelayCommand(_ => { if (_nav.CanJumpBinder(1)) _nav.JumpBinder(1); }, _ => _nav.CanJumpBinder(1));
-        PrevBinderCommand = new RelayCommand(_ => { if (_nav.CanJumpBinder(-1)) _nav.JumpBinder(-1); }, _ => _nav.CanJumpBinder(-1));
-        JumpToPageCommand = new RelayCommand(_ => { if (TryParseJump(out int b, out int p) && _nav.CanJumpToPage(b,p,PagesPerBinder)) _nav.JumpToPage(b,p,PagesPerBinder); }, _ => TryParseJump(out int b, out int p) && _nav.CanJumpToPage(b,p,PagesPerBinder));
-        NextSetCommand = new RelayCommand(_ => { if (_nav.CanJumpSet(true, _orderedFaces.Count)) _nav.JumpSet(true, _orderedFaces, SlotsPerPage, f=>f.Set); }, _ => _nav.CanJumpSet(true, _orderedFaces.Count));
-        PrevSetCommand = new RelayCommand(_ => { if (_nav.CanJumpSet(false, _orderedFaces.Count)) _nav.JumpSet(false, _orderedFaces, SlotsPerPage, f=>f.Set); }, _ => _nav.CanJumpSet(false, _orderedFaces.Count));
+        var commandFactory = new CommandFactory(_nav,
+            () => PagesPerBinder,
+            () => _orderedFaces.Count,
+            () => JumpBinderInput,
+            () => JumpPageInput,
+            () => SlotsPerPage,
+            () => _orderedFaces);
+        NextCommand = commandFactory.CreateNext();
+        PrevCommand = commandFactory.CreatePrev();
+        FirstCommand = commandFactory.CreateFirst();
+        LastCommand  = commandFactory.CreateLast();
+        NextBinderCommand = commandFactory.CreateNextBinder();
+        PrevBinderCommand = commandFactory.CreatePrevBinder();
+        JumpToPageCommand = commandFactory.CreateJumpToPage();
+        NextSetCommand = commandFactory.CreateNextSet();
+        PrevSetCommand = commandFactory.CreatePrevSet();
         RebuildViews();
         Refresh();
         UpdatePanel();
@@ -467,10 +474,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
         _nav.Rebuild(_orderedFaces.Count, SlotsPerPage, PagesPerBinder);
     }
-
-    // Legacy binder/page jump logic removed; NavigationService handles binder & page navigation
-    private bool TryParseJump(out int binder, out int page)
-    { binder=page=0; if (!int.TryParse(JumpBinderInput, out binder) || binder<1) return false; if (!int.TryParse(JumpPageInput, out page) || page<1 || page>PagesPerBinder) return false; return true; }
 
     // Removed legacy synchronous LoadFromFile method (was unused and empty)
 
