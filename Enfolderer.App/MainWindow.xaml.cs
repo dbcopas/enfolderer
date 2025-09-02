@@ -28,28 +28,6 @@ namespace Enfolderer.App;
 public partial class MainWindow : Window
 {
     private readonly BinderViewModel _vm;
-    // Factory wrapper to access BinderViewModel's internal HTTP client creator for external routines
-    private static class BinderViewModelHttpFactory
-    {
-        public static HttpClient Create()
-        {
-            // Reuse the internal static method via reflection (keeps single definition). If it fails, fallback to basic client.
-            try
-            {
-                var mi = typeof(BinderViewModel).GetMethod("CreateClient", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                if (mi != null)
-                {
-                    var obj = mi.Invoke(null, null) as HttpClient;
-                    if (obj != null) return obj;
-                }
-            }
-            catch { }
-            var c = new HttpClient();
-            c.DefaultRequestHeaders.UserAgent.ParseAdd("Enfolderer/0.1 (+https://github.com/yourrepo)");
-            c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
-            return c;
-        }
-    }
 
     private void UpdateMainDbFromCsv_Click(object sender, RoutedEventArgs e)
         {
@@ -314,12 +292,12 @@ public partial class MainWindow : Window
             _vm.SetStatus($"Validating set '{setCode}'...");
             var validateUrl = $"https://api.scryfall.com/sets/{setCode}";
             var swValidate = Stopwatch.StartNew();
-            LogHttpExternal("REQ", validateUrl);
+            HttpHelper.LogHttpExternal("REQ", validateUrl);
             JsonElement? setJson = null;
             using (var setResp = await http.GetAsync(validateUrl))
             {
                 swValidate.Stop();
-                LogHttpExternal("RESP", validateUrl, (int)setResp.StatusCode, swValidate.ElapsedMilliseconds);
+                HttpHelper.LogHttpExternal("RESP", validateUrl, (int)setResp.StatusCode, swValidate.ElapsedMilliseconds);
                 if (!setResp.IsSuccessStatusCode)
                 {
                     string body = string.Empty; try { body = await setResp.Content.ReadAsStringAsync(); } catch { }
@@ -343,10 +321,10 @@ public partial class MainWindow : Window
             while (page != null)
             {
                 var swPage = Stopwatch.StartNew();
-                LogHttpExternal("REQ", page);
+                HttpHelper.LogHttpExternal("REQ", page);
                 var resp = await http.GetAsync(page);
                 swPage.Stop();
-                LogHttpExternal("RESP", page, (int)resp.StatusCode, swPage.ElapsedMilliseconds);
+                HttpHelper.LogHttpExternal("RESP", page, (int)resp.StatusCode, swPage.ElapsedMilliseconds);
                 if (!resp.IsSuccessStatusCode)
                 {
                     string body = string.Empty; try { body = await resp.Content.ReadAsStringAsync(); } catch { }
@@ -515,15 +493,15 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    await ImportSingleSetAsync(setCode, dbPath, forceReimport:false);
-                    imported++;
+                    var result = await ScryfallImportService.ImportSetAsync(setCode, dbPath, forceReimport:false, _vm!);
+                    if (result.Inserted > 0) imported++;
                 }
                 catch (Exception exSet)
                 {
                     Debug.WriteLine($"[AutoImport] Failed {setCode}: {exSet.Message}");
                 }
             }
-            _vm?.SetStatus($"Auto import complete: {imported}/{missing.Count} sets inserted.");
+            _vm?.SetStatus($"Auto import complete: {imported}/{missing.Count} sets with new inserts.");
         }
         catch (Exception ex)
         {
@@ -531,158 +509,7 @@ public partial class MainWindow : Window
         }
     }
 
-    // Reusable logic extracted from ImportScryfallSet_Click for programmatic use
-    private async Task ImportSingleSetAsync(string setCode, string dbPath, bool forceReimport)
-    {
-        using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath}");
-        await con.OpenAsync();
-        long maxId = 0;
-        using (var cmd = con.CreateCommand()) { cmd.CommandText = "SELECT IFNULL(MAX(id),0) FROM Cards"; var o = await cmd.ExecuteScalarAsync(); if (o != null && long.TryParse(o.ToString(), out var v)) maxId = v; }
-        long nextId = Math.Max(1000000, maxId + 1);
-        var cardCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        using (var pragma = con.CreateCommand()) { pragma.CommandText = "PRAGMA table_info(Cards)"; using var pr = await pragma.ExecuteReaderAsync(); while (await pr.ReadAsync()) { try { cardCols.Add(pr.GetString(1)); } catch { } } }
-        string editionCol = cardCols.Contains("edition") ? "edition" : (cardCols.Contains("set") ? "set" : "edition");
-        string collectorCol = cardCols.Contains("collectorNumberValue") ? "collectorNumberValue" : (cardCols.Contains("collectorNumber") ? "collectorNumber" : "collectorNumberValue");
-        string? rarityCol = cardCols.Contains("rarity") ? "rarity" : null;
-        string? gathererCol = cardCols.Contains("gathererId") ? "gathererId" : (cardCols.Contains("gatherer_id") ? "gatherer_id" : null);
-        string? nameCol = cardCols.Contains("name") ? "name" : null;
-        if (forceReimport)
-        {
-            using var del = con.CreateCommand();
-            del.CommandText = $"DELETE FROM Cards WHERE {editionCol}=@e COLLATE NOCASE";
-            del.Parameters.AddWithValue("@e", setCode);
-            await del.ExecuteNonQueryAsync();
-        }
-        using var http = BinderViewModelHttpFactory.Create();
-        _vm?.SetStatus($"Validating set '{setCode}'...");
-        var validateUrl = $"https://api.scryfall.com/sets/{setCode}";
-        JsonElement? setJson = null;
-        using (var setResp = await http.GetAsync(validateUrl))
-        {
-            if (setResp.IsSuccessStatusCode)
-            {
-                try { var bytes = await setResp.Content.ReadAsByteArrayAsync(); using var doc = JsonDocument.Parse(bytes); setJson = doc.RootElement.Clone(); } catch { }
-            }
-            else { _vm?.SetStatus($"Set '{setCode}' not found"); return; }
-        }
-        string api = $"https://api.scryfall.com/cards/search?order=set&q=e:{Uri.EscapeDataString(setCode)}&unique=prints";
-        int? declaredCount = null;
-        if (setJson.HasValue)
-        {
-            var root = setJson.Value;
-            if (root.TryGetProperty("search_uri", out var su) && su.ValueKind == JsonValueKind.String) { var val = su.GetString(); if (!string.IsNullOrWhiteSpace(val)) api = val!; }
-            if (root.TryGetProperty("card_count", out var cc) && cc.ValueKind == JsonValueKind.Number && cc.TryGetInt32(out var countVal)) declaredCount = countVal;
-        }
-        var all = new List<JsonElement>();
-        string? page = api;
-        while (page != null)
-        {
-            var resp = await http.GetAsync(page);
-            if (!resp.IsSuccessStatusCode) { _vm?.SetStatus($"Error {(int)resp.StatusCode} fetching {setCode}"); return; }
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync());
-            var root = doc.RootElement;
-            if (root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
-                foreach (var c in data.EnumerateArray()) all.Add(c.Clone());
-            page = null;
-            if (root.TryGetProperty("has_more", out var hm) && hm.ValueKind == JsonValueKind.True && root.TryGetProperty("next_page", out var np) && np.ValueKind == JsonValueKind.String)
-            {
-                page = np.GetString();
-                _vm?.SetStatus($"{setCode}: {all.Count}{(declaredCount.HasValue?"/"+declaredCount.Value:"")} fetched...");
-            }
-        }
-        int inserted = 0, updatedExisting = 0, skipped = 0;
-        foreach (var card in all)
-        {
-            try
-            {
-                string name = card.TryGetProperty("name", out var nEl) ? nEl.GetString() ?? string.Empty : string.Empty;
-                string rarity = card.TryGetProperty("rarity", out var rEl) ? rEl.GetString() ?? string.Empty : string.Empty;
-                string cardSetCode = card.TryGetProperty("set", out var sEl) ? sEl.GetString() ?? setCode : setCode;
-                string collector = card.TryGetProperty("collector_number", out var cEl) ? cEl.GetString() ?? string.Empty : string.Empty;
-                int? gatherer = null;
-                if (card.TryGetProperty("multiverse_ids", out var mIds) && mIds.ValueKind == JsonValueKind.Array)
-                    foreach (var mv in mIds.EnumerateArray()) if (mv.ValueKind == JsonValueKind.Number && mv.TryGetInt32(out var mvId)) { gatherer = mvId; break; }
-                bool existsRow = false;
-                using (var exists = con.CreateCommand())
-                {
-                    exists.CommandText = $"SELECT {(nameCol??"1")} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE AND {collectorCol}=@n LIMIT 1";
-                    exists.Parameters.AddWithValue("@e", cardSetCode);
-                    exists.Parameters.AddWithValue("@n", collector);
-                    using var er = await exists.ExecuteReaderAsync();
-                    if (await er.ReadAsync())
-                    {
-                        existsRow = true;
-                        bool needsUpdate = false;
-                        if (nameCol != null)
-                        {
-                            try { if (!er.IsDBNull(0) && string.IsNullOrWhiteSpace(er.GetString(0)) && !string.IsNullOrWhiteSpace(name)) needsUpdate = true; } catch { }
-                        }
-                        if (!needsUpdate && (rarityCol != null || gathererCol != null))
-                        {
-                            using var chk = con.CreateCommand();
-                            chk.CommandText = $"SELECT {(rarityCol ?? "NULL")},{(gathererCol ?? "NULL")} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE AND {collectorCol}=@n LIMIT 1";
-                            chk.Parameters.AddWithValue("@e", cardSetCode);
-                            chk.Parameters.AddWithValue("@n", collector);
-                            using var cr = await chk.ExecuteReaderAsync();
-                            if (await cr.ReadAsync())
-                            {
-                                if (rarityCol != null) { try { if (cr.IsDBNull(0) && !string.IsNullOrWhiteSpace(rarity)) needsUpdate = true; } catch { } }
-                                if (gathererCol != null && gatherer.HasValue) { int idx = rarityCol != null ? 1 : 0; try { if (cr.IsDBNull(idx)) needsUpdate = true; } catch { } }
-                            }
-                        }
-                        if (needsUpdate)
-                        {
-                            using var upd = con.CreateCommand();
-                            var parts = new List<string>();
-                            if (nameCol != null && !string.IsNullOrWhiteSpace(name)) { parts.Add(nameCol + "=@name"); upd.Parameters.AddWithValue("@name", name); }
-                            if (rarityCol != null && !string.IsNullOrWhiteSpace(rarity)) { parts.Add(rarityCol + "=@rarity"); upd.Parameters.AddWithValue("@rarity", rarity); }
-                            if (gathererCol != null && gatherer.HasValue) { parts.Add(gathererCol + "=@gath"); upd.Parameters.AddWithValue("@gath", gatherer.Value); }
-                            if (parts.Count > 0)
-                            {
-                                upd.CommandText = $"UPDATE Cards SET {string.Join(",", parts)} WHERE {editionCol}=@e COLLATE NOCASE AND {collectorCol}=@n";
-                                upd.Parameters.AddWithValue("@e", cardSetCode);
-                                upd.Parameters.AddWithValue("@n", collector);
-                                try { if (await upd.ExecuteNonQueryAsync() > 0) updatedExisting++; } catch { }
-                            }
-                        }
-                    }
-                }
-                if (existsRow) { skipped++; continue; }
-                using var ins = con.CreateCommand();
-                ins.CommandText = "INSERT INTO Cards (id, name, edition, collectorNumberValue, rarity, gathererId, MtgsId) VALUES (@id,@name,@ed,@num,@rar,@gath,NULL)";
-                ins.Parameters.AddWithValue("@id", nextId++);
-                ins.Parameters.AddWithValue("@name", name);
-                ins.Parameters.AddWithValue("@ed", cardSetCode);
-                ins.Parameters.AddWithValue("@num", collector);
-                ins.Parameters.AddWithValue("@rar", rarity);
-                if (gatherer.HasValue) ins.Parameters.AddWithValue("@gath", gatherer.Value); else ins.Parameters.AddWithValue("@gath", DBNull.Value);
-                await ins.ExecuteNonQueryAsync();
-                inserted++;
-            }
-            catch { skipped++; }
-        }
-        _vm?.SetStatus($"{setCode} imported: {inserted} new, {updatedExisting} upd, {skipped} skipped.");
-    }
 
-    // --- External HTTP log helper (outside BinderViewModel HTTP handler pipeline) ---
-    private static readonly object _extHttpLogLock = new();
-    private static void LogHttpExternal(string phase, string url, int? status = null, long? ms = null)
-    {
-        try
-        {
-            var path = System.IO.Path.Combine(ImageCacheStore.CacheRoot, "http-log.txt");
-            Directory.CreateDirectory(ImageCacheStore.CacheRoot);
-            var ts = DateTime.UtcNow.ToString("O");
-            string line = status.HasValue
-                ? $"[{ts}] {phase} {(status.Value)} {(ms ?? 0)}ms {url}"
-                : $"[{ts}] {phase} {url}";
-            lock (_extHttpLogLock)
-            {
-                File.AppendAllText(path, line + Environment.NewLine);
-            }
-        }
-        catch { }
-    }
 
     public MainWindow()
     {
@@ -808,361 +635,12 @@ public partial class MainWindow : Window
     }
 }
 
-public record CardEntry(string Name, string Number, string? Set, bool IsModalDoubleFaced, bool IsBackFace = false, string? FrontRaw = null, string? BackRaw = null, string? DisplayNumber = null, int Quantity = -1)
-{
-    public string EffectiveNumber => DisplayNumber ?? Number;
-    public string Display => string.IsNullOrWhiteSpace(EffectiveNumber) ? Name : $"{EffectiveNumber} {Name}";
-    public static CardEntry FromCsv(string line)
-    {
-        // Format: name;number;set(optional);flags(optional)  (Only first 3 considered now). MFC indicated by name suffix "|MFC" or a trailing ;MFC field.
-        if (string.IsNullOrWhiteSpace(line)) throw new ArgumentException("Empty line"); 
-        var raw = line.Split(';');
-        if (raw.Length < 2) throw new ArgumentException("Must have at least name;number");
-        string name = raw[0].Trim();
-        string number = raw[1].Trim();
-        string? set = raw.Length >= 3 ? raw[2].Trim() : null;
-        bool mfc = false;
-        string? front = null;
-        string? back = null;
-        // New required MFC syntax: FRONT/BACK|MFC in name field
-    if (name.Contains("|MFC", StringComparison.OrdinalIgnoreCase) || name.Contains("|DFC", StringComparison.OrdinalIgnoreCase))
-        {
-            mfc = true;
-            var markerIndex = name.LastIndexOf('|');
-            var pairPart = name.Substring(0, markerIndex).Trim();
-            var splitNames = pairPart.Split('/', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-            if (splitNames.Length == 2)
-            {
-                front = splitNames[0];
-                back = splitNames[1];
-        // Display rule (updated): show front name then back in parentheses
-        name = $"{front} ({back})";
-            }
-            else
-            {
-                // Fallback keep original prior to marker
-                name = pairPart;
-            }
-        }
-        else
-        {
-            // Also allow trailing fields specifying MFC (legacy) but not primary here
-            for (int i = 3; i < raw.Length; i++)
-            {
-                var f = raw[i].Trim();
-                if (string.Equals(f, "MFC", StringComparison.OrdinalIgnoreCase) || string.Equals(f, "DFC", StringComparison.OrdinalIgnoreCase))
-                    mfc = true;
-            }
-        }
-        return new CardEntry(name, number, string.IsNullOrWhiteSpace(set) ? null : set, mfc, false, front, back);
-    }
-}
 
-public static class ImageCacheStore
-{
-    public static readonly ConcurrentDictionary<string, BitmapImage> Cache = new(StringComparer.OrdinalIgnoreCase);
-    public static string CacheRoot { get; } = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Enfolderer", "cache");
-    static ImageCacheStore()
-    {
-        try { Directory.CreateDirectory(CacheRoot); } catch { }
-    }
-    public static string ImagePathForKey(string key)
-    {
-        // key is url|face; hash it for filename safety
-        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(key)));
-        return System.IO.Path.Combine(CacheRoot, hash + ".img");
-    }
-    public static bool TryLoadFromDisk(string key, out BitmapImage bmp)
-    {
-        bmp = null!;
-        try
-        {
-            var path = ImagePathForKey(key);
-            if (File.Exists(path))
-            {
-                var bytes = File.ReadAllBytes(path);
-                bmp = CreateBitmap(bytes);
-                Cache[key] = bmp;
-                return true;
-            }
-        }
-        catch { }
-        return false;
-    }
-    public static void PersistImage(string key, byte[] bytes)
-    {
-        try
-        {
-            var path = ImagePathForKey(key);
-            if (!File.Exists(path)) File.WriteAllBytes(path, bytes);
-        }
-        catch { }
-    }
-    private static BitmapImage CreateBitmap(byte[] data)
-    {
-        using var ms = new MemoryStream(data, writable:false);
-        var bmp = new BitmapImage();
-        bmp.BeginInit();
-        bmp.CacheOption = BitmapCacheOption.OnLoad;
-        bmp.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
-        bmp.StreamSource = ms;
-        bmp.EndInit();
-        if (bmp.CanFreeze) bmp.Freeze();
-        return bmp;
-    }
-}
 
-// Stores image URLs (front/back) per card so CardSlot image loader can avoid redundant metadata fetches.
-public static class CardImageUrlStore
-{
-    private static readonly ConcurrentDictionary<string,(string? front,string? back)> _map = new(StringComparer.OrdinalIgnoreCase);
-    private static string Key(string setCode, string number) => $"{setCode.ToLowerInvariant()}/{number}";
-    public static void Set(string setCode, string number, string? front, string? back)
-    {
-        if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
-    _map[Key(setCode, number)] = (front, back);
-    }
-    public static (string? front,string? back) Get(string setCode, string number)
-    {
-        if (_map.TryGetValue(Key(setCode, number), out var v)) return v; return (null,null);
-    }
-}
-
-// Stores layout per card for persistence (used to distinguish true double-sided vs split/aftermath cards)
-public static class CardLayoutStore
-{
-    private static readonly ConcurrentDictionary<string,string?> _map = new(StringComparer.OrdinalIgnoreCase);
-    private static string Key(string setCode, string number) => $"{setCode.ToLowerInvariant()}/{number}";
-    public static void Set(string setCode, string number, string? layout)
-    {
-        if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
-    _map[Key(setCode, number)] = layout;
-    }
-    public static string? Get(string setCode, string number)
-    {
-        _map.TryGetValue(Key(setCode, number), out var v); return v;
-    }
-}
-
-internal static class ApiRateLimiter
-{
-    private const int Limit = 9; // strictly less than 10 per second
-    private static readonly TimeSpan Window = TimeSpan.FromSeconds(1);
-    private static readonly Queue<DateTime> Timestamps = new();
-    private static readonly SemaphoreSlim Gate = new(1,1);
-    public static async Task WaitAsync()
-    {
-        while (true)
-        {
-            await Gate.WaitAsync();
-            try
-            {
-                var now = DateTime.UtcNow;
-                while (Timestamps.Count > 0 && now - Timestamps.Peek() > Window)
-                    Timestamps.Dequeue();
-                if (Timestamps.Count < Limit)
-                {
-                    Timestamps.Enqueue(now);
-                    return;
-                }
-                // Need to wait until earliest timestamp exits window
-                var waitMs = (int)Math.Ceiling((Window - (now - Timestamps.Peek())).TotalMilliseconds);
-                if (waitMs < 1) waitMs = 1;
-                // Release lock before delay to let others observe queue after time passes
-                // Use Task.Delay outside lock
-                _ = Task.Run(async () => { await Task.Delay(waitMs); });
-            }
-            finally
-            {
-                Gate.Release();
-            }
-            // Small delay before retrying to avoid busy-spin
-            await Task.Delay(10);
-        }
-    }
-}
 
 // Computes a single beige tone variation per binder load
-public static class CardSlotTheme
-{
-    private static readonly object _lock = new();
-    private static SolidColorBrush _slotBrush = new SolidColorBrush(Color.FromRgb(240,232,210));
-    public static SolidColorBrush SlotBrush { get { lock(_lock) return _slotBrush; } }
-    public static Color BaseColor { get { lock(_lock) return _slotBrush.Color; } }
-    public static void Recalculate(string? seed)
-    {
-        try
-        {
-            int hash = seed == null ? Environment.TickCount : seed.GetHashCode(StringComparison.OrdinalIgnoreCase);
-            var rnd = new Random(hash ^ 0x5f3759df);
-            int baseR = 240, baseG = 232, baseB = 210;
-            int r = Clamp(baseR + rnd.Next(-10, 11), 215, 248);
-            int g = Clamp(baseG + rnd.Next(-10, 11), 210, 242);
-            int b = Clamp(baseB + rnd.Next(-14, 9), 195, 235);
-            var c = Color.FromRgb((byte)r,(byte)g,(byte)b);
-            var brush = new SolidColorBrush(c);
-            if (brush.CanFreeze) brush.Freeze();
-            lock(_lock) _slotBrush = brush;
-        }
-        catch { }
-    }
-    private static int Clamp(int v, int min, int max) => v < min ? min : (v > max ? max : v);
-}
 
-public class CardSlot : INotifyPropertyChanged
-{
-    private static readonly SemaphoreSlim FetchGate = new(4); // limit concurrent API calls
-    public string Name { get; }
-    public string Number { get; }
-    public string Set { get; }
-    public string Tooltip { get; }
-    public Brush Background { get; }
-    public bool IsBackFace { get; }
-    public bool IsPlaceholderBack { get; }
-    private ImageSource? _imageSource;
-    public ImageSource? ImageSource { get => _imageSource; private set { _imageSource = value; OnPropertyChanged(); } }
-    private int _quantity;
-    public int Quantity { get => _quantity; set { if (_quantity != value) { _quantity = value; OnPropertyChanged(); OnPropertyChanged(nameof(QuantityDisplay)); } } }
-    public string QuantityDisplay => (IsPlaceholderBack || _quantity < 0) ? string.Empty : _quantity.ToString();
-    public CardSlot(CardEntry entry, int index)
-    {
-    Name = entry.Name;
-    Number = entry.EffectiveNumber;
-        Set = entry.Set ?? string.Empty;
-    Tooltip = entry.Display + (string.IsNullOrEmpty(Set) ? string.Empty : $" ({Set})");
-    Background = Brushes.Black;
-    IsBackFace = entry.IsBackFace;
-    IsPlaceholderBack = string.Equals(Set, "__BACK__", StringComparison.OrdinalIgnoreCase) && string.Equals(Name, "Backface", StringComparison.OrdinalIgnoreCase);
-    // Back faces never show quantity nor participate in quantity logic; use -1 sentinel
-    if (IsPlaceholderBack)
-    {
-        _quantity = -1;
-    }
-    else
-    {
-        _quantity = entry.Quantity < 0 ? 0 : entry.Quantity; // treat unknown as 0 for unified zero visual state
-    }
-    }
-    public CardSlot(string placeholder, int index)
-    {
-        Name = placeholder;
-        Number = string.Empty;
-        Set = string.Empty;
-        Tooltip = placeholder;
-    Background = Brushes.Black;
-    _quantity = 0;
-    }
-    // Retained for potential future per-slot variation (unused now)
-    private static Color GenerateColor(int index) => CardSlotTheme.BaseColor;
-
-    public async Task TryLoadImageAsync(HttpClient client, string setCode, string number, bool isBackFace)
-    {
-        if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
-        if (string.Equals(setCode, "TOKEN", StringComparison.OrdinalIgnoreCase) || string.Equals(number, "TOKEN", StringComparison.OrdinalIgnoreCase))
-        {
-            Debug.WriteLine($"[CardSlot] Skip image fetch for token: set={setCode} number={number}");
-            return;
-        }
-        try
-        {
-            int faceIndex = isBackFace ? 1 : 0;
-            // Try existing cached URLs first
-            var (frontUrl, backUrl) = CardImageUrlStore.Get(setCode, number);
-            string? imgUrl = faceIndex == 0 ? frontUrl : backUrl;
-            if (string.IsNullOrEmpty(imgUrl))
-            {
-                // Fetch metadata once to populate image URLs
-                var apiUrl = ScryfallUrlHelper.BuildCardApiUrl(setCode, number);
-                BinderViewModel.WithVm(vm => vm.FlashMetaUrl(apiUrl));
-                Debug.WriteLine($"[CardSlot] API fetch {apiUrl} face={faceIndex} (metadata for image URL)");
-                await ApiRateLimiter.WaitAsync();
-                await FetchGate.WaitAsync();
-                HttpResponseMessage resp = null!;
-                try { resp = await client.GetAsync(apiUrl, HttpCompletionOption.ResponseHeadersRead); }
-                finally { FetchGate.Release(); }
-                using (resp)
-                {
-                    if (!resp.IsSuccessStatusCode)
-                    {
-                        string body = string.Empty; try { body = await resp.Content.ReadAsStringAsync(); } catch { }
-                        Debug.WriteLine($"[CardSlot] API status {(int)resp.StatusCode} {resp.ReasonPhrase} Body: {body}");
-                        return;
-                    }
-                    await using var stream = await resp.Content.ReadAsStreamAsync();
-                    using var doc = await JsonDocument.ParseAsync(stream);
-                    var root = doc.RootElement;
-                    string? front = null; string? back = null;
-                    if (root.TryGetProperty("card_faces", out var faces) && faces.ValueKind == JsonValueKind.Array && faces.GetArrayLength() >= 2)
-                    {
-                        var f0 = faces[0]; var f1 = faces[1];
-                        if (f0.TryGetProperty("image_uris", out var f0Imgs) && f0Imgs.TryGetProperty("normal", out var f0Norm)) front = f0Norm.GetString(); else if (f0.TryGetProperty("image_uris", out f0Imgs) && f0Imgs.TryGetProperty("large", out var f0Large)) front = f0Large.GetString();
-                        if (f1.TryGetProperty("image_uris", out var f1Imgs) && f1Imgs.TryGetProperty("normal", out var f1Norm)) back = f1Norm.GetString(); else if (f1.TryGetProperty("image_uris", out f1Imgs) && f1Imgs.TryGetProperty("large", out var f1Large)) back = f1Large.GetString();
-                    }
-                    if (front == null && root.TryGetProperty("image_uris", out var singleImgs) && singleImgs.TryGetProperty("normal", out var singleNorm)) front = singleNorm.GetString();
-                    if (front == null && root.TryGetProperty("image_uris", out singleImgs) && singleImgs.TryGetProperty("large", out var singleLarge)) front = singleLarge.GetString();
-                    CardImageUrlStore.Set(setCode, number, front, back);
-                    imgUrl = faceIndex == 0 ? front : back;
-                }
-            }
-            if (string.IsNullOrWhiteSpace(imgUrl)) { Debug.WriteLine("[CardSlot] No cached or fetched image URL."); return; }
-            // Support local file path for placeholder backs
-            if (File.Exists(imgUrl))
-            {
-                try
-                {
-                    var bytesLocal = File.ReadAllBytes(imgUrl);
-                    var bmpLocal = CreateFrozenBitmap(bytesLocal);
-                    ImageSource = bmpLocal;
-                    return;
-                }
-                catch (Exception exLocal)
-                {
-                    Debug.WriteLine($"[CardSlot] Local image load failed {imgUrl}: {exLocal.Message}");
-                }
-            }
-            var cacheKey = imgUrl + (isBackFace ? "|back" : "|front");
-            if (ImageCacheStore.Cache.TryGetValue(cacheKey, out var cachedBmp)) { ImageSource = cachedBmp; return; }
-            if (ImageCacheStore.TryLoadFromDisk(cacheKey, out var diskBmp)) { ImageSource = diskBmp; return; }
-            await ApiRateLimiter.WaitAsync();
-            try { BinderViewModel.WithVm(vm => BinderViewModel.SetImageUrlName(imgUrl, Name)); } catch { }
-            BinderViewModel.WithVm(vm => vm.FlashImageFetch(Name));
-            var bytes = await client.GetByteArrayAsync(imgUrl);
-            try
-            {
-                var bmp2 = CreateFrozenBitmap(bytes);
-                ImageSource = bmp2;
-                ImageCacheStore.Cache[cacheKey] = bmp2;
-                ImageCacheStore.PersistImage(cacheKey, bytes);
-            }
-            catch (Exception exBmp)
-            {
-                Debug.WriteLine($"[CardSlot] Bitmap create failed: {exBmp.Message}");
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[CardSlot] Image fetch failed {setCode} {number}: {ex.Message}");
-        }
-    }
-
-    private static BitmapImage CreateFrozenBitmap(byte[] data)
-    {
-        using var ms = new MemoryStream(data, writable:false);
-        var bmp = new BitmapImage();
-        bmp.BeginInit();
-        bmp.CacheOption = BitmapCacheOption.OnLoad;
-        bmp.CreateOptions = BitmapCreateOptions.IgnoreColorProfile; // faster & avoids some metadata issues
-        bmp.StreamSource = ms;
-        bmp.EndInit();
-        if (bmp.CanFreeze) bmp.Freeze();
-        return bmp;
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-    private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
-}
-
-public class BinderViewModel : INotifyPropertyChanged
+public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 {
     // Directory of currently loaded collection (binder) text file
     private string? _currentCollectionDir;
@@ -3277,30 +2755,3 @@ public class BinderViewModel : INotifyPropertyChanged
     }
 }
 
-public class RelayCommand : ICommand
-{
-    private readonly Action<object?> _execute;
-    private readonly Predicate<object?>? _canExecute;
-    public RelayCommand(Action<object?> execute, Predicate<object?>? canExecute = null)
-    { _execute = execute; _canExecute = canExecute; }
-    public bool CanExecute(object? parameter) => _canExecute?.Invoke(parameter) ?? true;
-    public void Execute(object? parameter) => _execute(parameter);
-    public event EventHandler? CanExecuteChanged
-    {
-        add => CommandManager.RequerySuggested += value;
-        remove => CommandManager.RequerySuggested -= value;
-    }
-}
-
-internal static class ScryfallUrlHelper
-{
-    public static string BuildCardApiUrl(string setCode, string number)
-    {
-        if (string.IsNullOrWhiteSpace(setCode)) return string.Empty;
-        setCode = setCode.ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(number)) return $"https://api.scryfall.com/cards/{setCode}";
-        var segments = number.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                             .Select(s => Uri.EscapeDataString(s));
-        return $"https://api.scryfall.com/cards/{setCode}/" + string.Join('/', segments);
-    }
-}
