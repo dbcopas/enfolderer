@@ -48,7 +48,6 @@ public partial class MainWindow : Window
             }
         }
 
-
     private async void ImportScryfallSet_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -87,8 +86,6 @@ public partial class MainWindow : Window
             _vm?.SetStatus("Auto import error: " + ex.Message);
         }
     }
-
-
 
     public MainWindow()
     {
@@ -215,16 +212,12 @@ public partial class MainWindow : Window
 }
 
 
-
-
-// Computes a single beige tone variation per binder load
-
 public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 {
-    // Directory of currently loaded collection (binder) text file
+    // BinderViewModel orchestrates UI state: layout config, navigation, metadata & quantity updates, and delegates heavy logic to extracted services.
+    // It now mainly wires services together and exposes observable properties for binding.
     private string? _currentCollectionDir;
     public string? CurrentCollectionDir => _currentCollectionDir;
-    // ==== Restored state fields (previously lost during file corruption) ====
     private static BinderViewModel? _singleton;
     private static readonly object _singletonLock = new();
     public static void RegisterInstance(BinderViewModel vm) { lock(_singletonLock) _singleton = vm; }
@@ -244,7 +237,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private static string HttpLogPath => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "http-log.txt");
 
 
-    // UI-bound collections & properties (redeclared after corruption)
     public ObservableCollection<CardSlot> LeftSlots { get; } = new();
     public ObservableCollection<CardSlot> RightSlots { get; } = new();
     private string _pageDisplay = string.Empty;
@@ -253,7 +245,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public Brush BinderBackground { get => _binderBackground; private set { if (_binderBackground!=value) { _binderBackground = value; OnPropertyChanged(); } } }
     private readonly BinderThemeService _binderTheme = new();
     private readonly Random _rand = new(12345);
-    // Dynamic layout configuration (default 4x3, 40 sides per binder)
     private int _rowsPerPage = 3;
     private int _columnsPerPage = 4;
     public int RowsPerPage { get => _rowsPerPage; set { if (value>0 && value!=_rowsPerPage) { _rowsPerPage = value; OnPropertyChanged(); RecomputeAfterLayoutChange(); } } }
@@ -283,8 +274,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly NavigationService _nav = new(); // centralized navigation
     private NavigationViewBuilder? _navBuilder; // deferred until ctor end
     private IReadOnlyList<NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
-    private readonly CardCollectionData _collection = new(); // collection DB data
-    private readonly CardQuantityService _quantityService = new(); // phase 2 extracted quantity logic
+    private readonly CardCollectionData _collection = new();
+    private readonly CardQuantityService _quantityService = new();
     private readonly QuantityEnrichmentService _quantityEnrichment;
     private readonly CollectionRepository _collectionRepo; // phase 3 collection repo
     private readonly CardBackImageService _backImageService = new();
@@ -292,8 +283,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly BinderLoadService _binderLoadService;
     private readonly SpecResolutionService _specResolutionService;
     private readonly MetadataLoadOrchestrator _metadataOrchestrator;
-    private TelemetryService? _telemetry; // extracted telemetry service
-    // Expose distinct set codes present in current binder specs/cards
+    private TelemetryService? _telemetry;
     public HashSet<string> GetCurrentSetCodes()
     {
         var hs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -305,7 +295,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         catch { }
         return hs;
     }
-    // Exposed refresh method invoked by MainWindow
     public void RefreshQuantities()
     {
         try
@@ -334,21 +323,17 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         Refresh();
     }
 
-    // EnsureCollectionLoaded logic moved to CollectionRepository
-
     private int? ResolveCardIdFromDb(string setOriginal, string baseNum, string trimmed) => _collectionRepo.ResolveCardId(_currentCollectionDir, setOriginal, baseNum, trimmed);
-    // Explicit pair keys (e.g. base number + language variant) -> enforced pair placement regardless of name differences
-    private System.Collections.Generic.Dictionary<string,string> _explicitVariantPairKeys => _session.ExplicitVariantPairKeys; // built by VariantPairingService (key: Set:Number)
-    private System.Collections.Generic.List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs => _session.PendingExplicitVariantPairs; // captured during parse
+    private System.Collections.Generic.Dictionary<string,string> _explicitVariantPairKeys => _session.ExplicitVariantPairKeys; // Set:Number -> pair id
+    private System.Collections.Generic.List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs => _session.PendingExplicitVariantPairs;
     private readonly VariantPairingService _variantPairing = new();
-    // _currentViewIndex removed; NavigationService.CurrentIndex is authoritative
-    // local back image path now on session
+    // local back image path lives in session
     internal static HttpClient Http => _httpFactory?.Client ?? throw new InvalidOperationException("HTTP factory not initialized");
     private static IHttpClientFactoryService? _httpFactory; // static so slots can reference BinderViewModel.Http
     // Local back image resolution moved to CardBackImageService
     public void FlashImageFetch(string cardName) => _statusFlash.FlashImageFetch(cardName, s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
     public void FlashMetaUrl(string url) => _statusFlash.FlashMetaUrl(url, s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
-    private void RefreshSummaryIfIdle() { /* no-op now; counters centralized */ }
+    private void RefreshSummaryIfIdle() { }
 
     public ICommand NextCommand { get; }
     public ICommand PrevCommand { get; }
@@ -404,13 +389,10 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         public static void SetImageUrlName(string url, string name)
         { WithVm(vm => vm._telemetry?.SetImageUrlName(url, name)); }
 
-    // NavigationService now owns all navigation (page, binder, set, first/last/next/prev)
     private void NavOnViewChanged()
     {
         Refresh();
     }
-
-    // Legacy set jump logic removed; NavigationService handles set navigation
 
     private void RebuildViews()
     {
@@ -418,14 +400,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _navBuilder.Rebuild(_orderedFaces.Count, SlotsPerPage, PagesPerBinder);
     }
 
-    // Removed legacy synchronous LoadFromFile method (was unused and empty)
-
-    // New format loader (async):
-    // Lines:
-    // # comment
-    // =[SETCODE]
-    // number;[optional name override]
-    // numberStart-numberEnd  (inclusive range) optionally followed by ; prefix for name hints (ignored here)
+    // Load binder file (async). Supported lines: comments (#), set headers (=SET), single numbers, ranges start-end, optional ;name overrides.
     public async Task LoadFromFileAsync(string path)
     {
         var load = await _binderLoadService.LoadAsync(path, SlotsPerPage);
@@ -464,9 +439,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         );
     }
 
-    // Quantity enrichment & MFC adjustment moved to CardQuantityService (Phase 2)
-
-    // file hash moved into BinderSession
     private const int CacheSchemaVersion = 5; // bump: refined two-sided classification & invalidating prior misclassification cache
     private static readonly HashSet<string> PhysicallyTwoSidedLayouts = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -476,10 +448,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
         "split","aftermath","adventure","meld","flip","leveler","saga","class","plane","planar","scheme","vanguard","token","emblem","art_series"
     };
-    private readonly CachePathService _cachePaths; // centralized cache path logic
-    private readonly StatusPanelService _statusPanel; // status panel abstraction
-
-    // Spec resolution now handled by SpecResolutionService
+    private readonly CachePathService _cachePaths;
+    private readonly StatusPanelService _statusPanel;
 
     private void RebuildCardListFromSpecs()
     {
@@ -489,11 +459,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _explicitVariantPairKeys.Clear(); foreach (var kv in pairMap) _explicitVariantPairKeys[kv.Key] = kv.Value;
     }
 
-    // CardSpec record extracted to CardSpec.cs (Phase 1 refactor)
-
-    // FetchCardMetadataAsync moved into CardMetadataResolver / SpecResolutionService
-
-    private readonly FaceOrderingService _faceOrdering = new(); // singleton instance reused
+    private readonly FaceOrderingService _faceOrdering = new();
     private void BuildOrderedFaces()
     {
         _orderedFaces.Clear();
@@ -520,10 +486,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
     BinderBackground = _binderTheme.CreateBinderBackground(binderNumber - 1);
     }
-
-    // FillPage logic moved into PageSlotBuilder
-
-    // Color token parsing moved into BinderThemeService
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
