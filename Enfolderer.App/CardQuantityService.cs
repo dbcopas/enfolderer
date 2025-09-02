@@ -273,11 +273,25 @@ public sealed class CardQuantityService
                     int rows = cmd.ExecuteNonQuery();
                     if (rows == 0)
                     {
+                        // No existing row in mtgstudio.collection for this MtgsId-backed card: insert full record.
+                        // Columns (legacy schema): CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added
                         using var ins = con.CreateCommand();
-                        ins.CommandText = "INSERT INTO CollectionCards (CardId, Qty) VALUES (@id, @q)";
+                        ins.CommandText = @"INSERT INTO CollectionCards 
+                            (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)
+                            VALUES (@id,@q,0,0.0,0.0,0.0,0,0,0,0,0,'','',0,'',1,0,0,@added)";
                         ins.Parameters.AddWithValue("@id", cardId);
                         ins.Parameters.AddWithValue("@q", newLogicalQty);
-                        try { ins.ExecuteNonQuery(); } catch { }
+                        var added = DateTime.Now.ToString("s").Replace('T',' ');
+                        ins.Parameters.AddWithValue("@added", added);
+                        try 
+                        { 
+                            int insRows = ins.ExecuteNonQuery();
+                            if (insRows == 0) System.Diagnostics.Debug.WriteLine($"[Collection] Insert failed for CardId {cardId}");
+                        } 
+                        catch (Exception exIns) 
+                        { 
+                            System.Diagnostics.Debug.WriteLine($"[Collection] Insert exception for CardId {cardId}: {exIns.Message}");
+                        }
                     }
                 }
             }
