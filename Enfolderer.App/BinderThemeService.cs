@@ -76,6 +76,22 @@ public class BinderThemeService
         return baseBrush;
     }
 
+    public Brush CreateBinderBackground(int binderZeroBasedIndex)
+    {
+        var baseBrush = GetBrushForBinder(binderZeroBasedIndex);
+        var solid = baseBrush as SolidColorBrush;
+        var c = solid?.Color ?? Colors.Gray;
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new System.Windows.Point(0,0),
+            EndPoint = new System.Windows.Point(1,1)
+        };
+        brush.GradientStops.Add(new GradientStop(c, 0));
+        brush.GradientStops.Add(new GradientStop(Color.FromRgb((byte)(c.R/3),(byte)(c.G/3),(byte)(c.B/3)), 1));
+        if (brush.CanFreeze) brush.Freeze();
+        return brush;
+    }
+
     private static int HashCombine(int h1, int h2)
     {
         unchecked { return ((h1 << 5) + h1) ^ h2; }

@@ -230,7 +230,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public static void RegisterInstance(BinderViewModel vm) { lock(_singletonLock) _singleton = vm; }
     public static void WithVm(Action<BinderViewModel> action) { BinderViewModel? vm; lock(_singletonLock) vm = _singleton; if (vm!=null) { try { action(vm); } catch { } } }
 
-    private static CancellationTokenSource? _apiFlashCts;
+    private readonly StatusFlashService _statusFlash = new();
     private string _apiStatus = string.Empty;
     public string ApiStatus { get => _apiStatus; private set { if (_apiStatus!=value) { _apiStatus = value; OnPropertyChanged(); } } }
 
@@ -393,28 +393,12 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     // Local back image resolution moved to CardBackImageService
     public void FlashImageFetch(string cardName)
     {
-        try
-        {
-            _apiFlashCts?.Cancel();
-            var cts = new CancellationTokenSource();
-            _apiFlashCts = cts;
-            Application.Current?.Dispatcher?.Invoke(() => ApiStatus = $"fetching image for {cardName}");
-            _ = Task.Run(async () => { try { await Task.Delay(2000, cts.Token); } catch { return; } if (!cts.IsCancellationRequested) Application.Current?.Dispatcher?.Invoke(() => { if (ReferenceEquals(cts, _apiFlashCts)) ApiStatus = string.Empty; }); });
-        }
-        catch { }
+    _statusFlash.Flash($"fetching image for {cardName}", TimeSpan.FromSeconds(2), s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
     }
     public void FlashMetaUrl(string url)
     {
-        try
-        {
-            if (string.IsNullOrWhiteSpace(url)) return;
-            _apiFlashCts?.Cancel();
-            var cts = new CancellationTokenSource();
-            _apiFlashCts = cts;
-            Application.Current?.Dispatcher?.Invoke(() => ApiStatus = url);
-            _ = Task.Run(async () => { try { await Task.Delay(2000, cts.Token); } catch { return; } if (!cts.IsCancellationRequested) Application.Current?.Dispatcher?.Invoke(() => { if (ReferenceEquals(cts, _apiFlashCts)) ApiStatus = string.Empty; }); });
-        }
-        catch { }
+    if (string.IsNullOrWhiteSpace(url)) return;
+    _statusFlash.Flash(url, TimeSpan.FromSeconds(2), s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
     }
     private void RefreshSummaryIfIdle() { /* no-op now; counters centralized */ }
 
@@ -602,18 +586,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private void UpdateBinderBackground(int binderNumber)
     {
-        // Binder numbering starts at 1; we no longer force binder 1 to black.
-    int idx = binderNumber - 1;
-    Brush baseBrush = _binderTheme.GetBrushForBinder(idx);
-        var solid = baseBrush as SolidColorBrush;
-        var c = solid?.Color ?? Colors.Gray;
-        var brush = new LinearGradientBrush();
-        brush.StartPoint = new Point(0,0);
-        brush.EndPoint = new Point(1,1);
-        brush.GradientStops.Add(new GradientStop(c, 0));
-        brush.GradientStops.Add(new GradientStop(Color.FromRgb((byte)(c.R/3),(byte)(c.G/3),(byte)(c.B/3)), 1));
-        if (brush.CanFreeze) brush.Freeze();
-        BinderBackground = brush;
+    BinderBackground = _binderTheme.CreateBinderBackground(binderNumber - 1);
     }
 
     // FillPage logic moved into PageSlotBuilder
