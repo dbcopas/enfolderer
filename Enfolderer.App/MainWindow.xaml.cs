@@ -240,7 +240,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private static bool _debugHttpLogging = true;
     private static readonly object _httpLogLock = new();
-    private static int _httpInFlight = 0; private static int _http404 = 0; private static int _http500 = 0;
     private static readonly ConcurrentDictionary<string,string> _imageUrlNameMap = new(StringComparer.OrdinalIgnoreCase);
     private static string HttpLogPath => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "http-log.txt");
 
@@ -295,6 +294,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly CollectionRepository _collectionRepo; // phase 3 collection repo
     private readonly CardBackImageService _backImageService = new();
     private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
+    private TelemetryService? _telemetry; // extracted telemetry service
     // Expose distinct set codes present in current binder specs/cards
     public HashSet<string> GetCurrentSetCodes()
     {
@@ -359,18 +359,18 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         {
             var url = request.RequestUri?.ToString() ?? string.Empty;
             var sw = Stopwatch.StartNew();
-            HttpStart(url);
+            BinderViewModel.WithVm(vm => vm._telemetry?.Start(url));
             try
             {
                 var resp = await base.SendAsync(request, cancellationToken);
                 sw.Stop();
-                HttpDone(url, (int)resp.StatusCode, sw.ElapsedMilliseconds);
+                BinderViewModel.WithVm(vm => vm._telemetry?.Done(url, (int)resp.StatusCode, sw.ElapsedMilliseconds));
                 return resp;
             }
             catch (Exception)
             {
                 sw.Stop();
-                HttpDone(url, -1, sw.ElapsedMilliseconds);
+                BinderViewModel.WithVm(vm => vm._telemetry?.Done(url, -1, sw.ElapsedMilliseconds));
                 throw;
             }
         }
@@ -414,51 +414,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         }
         catch { }
     }
-    private void RefreshSummaryIfIdle() { /* no-op now; counters always separate */ }
-    private static void LogHttp(string line)
-    { if (!_debugHttpLogging) return; try { lock(_httpLogLock) { Directory.CreateDirectory(ImageCacheStore.CacheRoot); File.AppendAllText(HttpLogPath, line + Environment.NewLine); } } catch { } }
-    private static void HttpStart(string url)
-    {
-        Interlocked.Increment(ref _httpInFlight);
-        LogHttp($"[{DateTime.UtcNow:O}] REQ {url}");
-        var label = BuildDisplayLabel(url);
-        WithVm(vm => vm.UpdatePanel(latest:label));
-    }
-    private static void HttpDone(string url, int status, long ms)
-    {
-        Interlocked.Decrement(ref _httpInFlight);
-        if (status==404) Interlocked.Increment(ref _http404); else if (status==500) Interlocked.Increment(ref _http500);
-        LogHttp($"[{DateTime.UtcNow:O}] RESP {status} {ms}ms {url}");
-        var label = BuildDisplayLabel(url);
-        WithVm(vm => vm.UpdatePanel(latest:label));
-    }
-    private static string BuildDisplayLabel(string url)
-    {
-        if (string.IsNullOrEmpty(url)) return string.Empty;
-        try
-        {
-            if (url.Contains("/cards/", StringComparison.OrdinalIgnoreCase)) return url; // metadata URL full
-            if (_imageUrlNameMap.TryGetValue(url, out var name)) return $"img: {name}";
-        }
-        catch { }
-        return ShortenUrl(url);
-    }
-    public static void SetImageUrlName(string url, string name)
-    {
-        if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(name)) return;
-        _imageUrlNameMap[url] = name;
-    }
-    private static string ShortenUrl(string url)
-    {
-        if (string.IsNullOrEmpty(url)) return string.Empty;
-        try {
-            // If it's a Scryfall card image URL, reduce to last path segment before query
-            var u = new Uri(url);
-            var last = u.Segments.Length>0 ? u.Segments[^1].Trim('/') : url;
-            if (last.Length>40) last = last[..40];
-            return last;
-        } catch { return url; }
-    }
+    private void RefreshSummaryIfIdle() { /* no-op now; counters centralized */ }
 
     public ICommand NextCommand { get; }
     public ICommand PrevCommand { get; }
@@ -480,6 +436,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         RegisterInstance(this);
         _collectionRepo = new CollectionRepository(_collection);
         if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
+    _telemetry = new TelemetryService(s => UpdatePanel(s), _debugHttpLogging);
         _nav.ViewChanged += NavOnViewChanged;
         NextCommand = new RelayCommand(_ => { if (_nav.CanNext) _nav.Next(); }, _ => _nav.CanNext);
         PrevCommand = new RelayCommand(_ => { if (_nav.CanPrev) _nav.Prev(); }, _ => _nav.CanPrev);
@@ -494,6 +451,9 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         Refresh();
         UpdatePanel();
     }
+
+        public static void SetImageUrlName(string url, string name)
+        { WithVm(vm => vm._telemetry?.SetImageUrlName(url, name)); }
 
     // NavigationService now owns all navigation (page, binder, set, first/last/next/prev)
     private void NavOnViewChanged()
@@ -788,7 +748,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
     _orderedFaces.Clear();
     if (_cards.Count == 0) return;
-    var service = new FaceLayoutService();
+    var service = new FaceLayoutService(new PairGroupingAnalyzer());
     var ordered = service.BuildOrderedFaces(_cards, LayoutMode, SlotsPerPage, ColumnsPerPage, _explicitVariantPairKeys);
     _orderedFaces.AddRange(ordered);
     }

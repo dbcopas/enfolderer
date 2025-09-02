@@ -6,6 +6,12 @@ namespace Enfolderer.App;
 
 public class FaceLayoutService
 {
+    private readonly PairGroupingAnalyzer _pairAnalyzer;
+    public FaceLayoutService(PairGroupingAnalyzer? pairAnalyzer = null)
+    {
+        _pairAnalyzer = pairAnalyzer ?? new PairGroupingAnalyzer();
+    }
+
     public List<CardEntry> BuildOrderedFaces(
         List<CardEntry> cards,
         string layoutMode,
@@ -20,132 +26,13 @@ public class FaceLayoutService
             ordered.AddRange(cards);
             return ordered;
         }
-        var longRunCards = new HashSet<CardEntry>();
-        int iRun = 0;
-        while (iRun < cards.Count)
-        {
-            var c = cards[iRun];
-            if (c != null && !c.IsModalDoubleFaced && !c.IsBackFace)
-            {
-                string name = (c.Name ?? string.Empty).Trim();
-                int j = iRun + 1;
-                while (j < cards.Count)
-                {
-                    var n = cards[j];
-                    if (n == null || n.IsModalDoubleFaced || n.IsBackFace) break;
-                    if (!string.Equals(name, (n.Name ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)) break;
-                    j++;
-                }
-                int runLen = j - iRun;
-                if (runLen >= 3)
-                {
-                    for (int k = iRun; k < j; k++) longRunCards.Add(cards[k]);
-                }
-                iRun = j;
-                continue;
-            }
-            iRun++;
-        }
+        var longRunCards = _pairAnalyzer.IdentifyLongRunCards(cards);
         var remaining = new List<CardEntry>(cards);
         int globalSlot = 0;
         while (remaining.Count > 0)
         {
             int col = (globalSlot % slotsPerPage) % columnsPerPage;
-
-            bool IsPairStart(List<CardEntry> list, int idx)
-            {
-                if (idx < 0 || idx >= list.Count) return false;
-                var c = list[idx];
-                if (c == null)
-                {
-                    Debug.WriteLine($"[BuildOrderedFaces] Null entry at index {idx} in remaining list (IsPairStart). Treating as single.");
-                    return false;
-                }
-                bool IsNazgul(CardEntry ce) => string.Equals(ce.Name?.Trim(), "Nazgûl", StringComparison.OrdinalIgnoreCase);
-                bool IsBackPlaceholder(CardEntry ce) => string.Equals(ce.Number, "BACK", StringComparison.OrdinalIgnoreCase);
-                if (c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
-                {
-                    var next = list[idx + 1];
-                    if (next != null && next.IsBackFace) return true;
-                }
-                if (explicitPairKeys.Count > 0)
-                {
-                    if (idx + 1 < list.Count && explicitPairKeys.TryGetValue(c, out var key1))
-                    {
-                        var n2 = list[idx + 1];
-                        if (n2 != null && explicitPairKeys.TryGetValue(n2, out var key2) && key1 == key2)
-                        {
-                            return true;
-                        }
-                    }
-                }
-                if (!c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
-                {
-                    var n = list[idx + 1];
-                    if (n != null && !n.IsModalDoubleFaced && !n.IsBackFace)
-                    {
-                        if (IsBackPlaceholder(c) && IsBackPlaceholder(n)) return false;
-                        if (IsNazgul(c) && IsNazgul(n)) return false;
-                        var cName = c.Name ?? string.Empty;
-                        var nName = n.Name ?? string.Empty;
-                        if (string.Equals(cName.Trim(), nName.Trim(), StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (longRunCards.Contains(c) || longRunCards.Contains(n)) return false;
-                            if (idx + 2 < list.Count)
-                            {
-                                var third = list[idx + 2];
-                                if (third != null && !third.IsModalDoubleFaced && !third.IsBackFace)
-                                {
-                                    var tName = third.Name ?? string.Empty;
-                                    if (string.Equals(cName.Trim(), tName.Trim(), StringComparison.OrdinalIgnoreCase))
-                                        return false;
-                                }
-                            }
-                            return true;
-                        }
-                    }
-                }
-                return false;
-            }
-
-            bool IsSecondOfPair(List<CardEntry> list, int idx)
-            {
-                if (idx <= 0 || idx >= list.Count) return false;
-                var c = list[idx];
-                if (c == null)
-                {
-                    Debug.WriteLine($"[BuildOrderedFaces] Null entry at index {idx} in remaining list (IsSecondOfPair). Treating as single.");
-                    return false;
-                }
-                if (c.IsBackFace) return true;
-                if (explicitPairKeys.Count > 0)
-                {
-                    var prevExp = list[idx - 1];
-                    if (prevExp != null && explicitPairKeys.TryGetValue(prevExp, out var pk1) && explicitPairKeys.TryGetValue(c, out var pk2) && pk1 == pk2)
-                        return true;
-                }
-                var prev = list[idx - 1];
-                if (prev != null && !prev.IsModalDoubleFaced && !prev.IsBackFace && !c.IsModalDoubleFaced && !c.IsBackFace)
-                {
-                    bool IsBackPlaceholder(CardEntry ce) => string.Equals(ce.Number, "BACK", StringComparison.OrdinalIgnoreCase);
-                    bool IsNazgul(CardEntry ce) => string.Equals(ce.Name?.Trim(), "Nazgûl", StringComparison.OrdinalIgnoreCase);
-                    if (IsBackPlaceholder(prev) && IsBackPlaceholder(c)) return false;
-                    if (IsNazgul(prev) && IsNazgul(c)) return false;
-                    var prevName = prev.Name ?? string.Empty;
-                    var cName = c.Name ?? string.Empty;
-                    if (string.Equals(prevName.Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (longRunCards.Contains(prev) || longRunCards.Contains(c)) return false;
-                        bool hasPrevPrev = idx - 2 >= 0 && list[idx - 2] != null && !list[idx - 2].IsModalDoubleFaced && !list[idx - 2].IsBackFace && string.Equals((list[idx-2].Name??string.Empty).Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase);
-                        bool hasNext = idx + 1 < list.Count && list[idx + 1] != null && !list[idx + 1].IsModalDoubleFaced && !list[idx + 1].IsBackFace && string.Equals((list[idx+1].Name??string.Empty).Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase);
-                        if (hasPrevPrev || hasNext) return false;
-                        return true;
-                    }
-                }
-                return false;
-            }
-
-            int groupSize = IsPairStart(remaining, 0) ? 2 : 1;
+            int groupSize = _pairAnalyzer.IsPairStart(remaining, 0, longRunCards, explicitPairKeys) ? 2 : 1;
             if (groupSize == 2)
             {
                 if (col % 2 == 1 || col == columnsPerPage -1)
@@ -156,7 +43,7 @@ public class FaceLayoutService
                         var cand = remaining[i];
                         bool isBackPlaceholder = string.Equals(cand.Number, "BACK", StringComparison.OrdinalIgnoreCase);
                         if (isBackPlaceholder) continue;
-                        if (!IsPairStart(remaining, i) && !IsSecondOfPair(remaining, i) && !cand.IsBackFace)
+                        if (!_pairAnalyzer.IsPairStart(remaining, i, longRunCards, explicitPairKeys) && !_pairAnalyzer.IsSecondOfPair(remaining, i, longRunCards, explicitPairKeys) && !cand.IsBackFace)
                         {
                             singleIndex = i;
                             break;
