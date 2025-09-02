@@ -1,6 +1,10 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Net.Http;
+using Enfolderer.App.Infrastructure;
+using Enfolderer.App.Core;
+using Enfolderer.App.Layout;
+using Enfolderer.App.Binder;
 
 namespace Enfolderer.App.Tests;
 

@@ -22,6 +22,15 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using Enfolderer.App.Imaging;
+using Enfolderer.App.Infrastructure;
+using Enfolderer.App.Importing;
+using Enfolderer.App.Collection;
+using Enfolderer.App.Quantity;
+using Enfolderer.App.Layout;
+using Enfolderer.App.Binder;
+using Enfolderer.App.Metadata;
+using Enfolderer.App.Core;
 
 namespace Enfolderer.App;
 
@@ -305,18 +314,19 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private List<CardEntry> _orderedFaces => _session.OrderedFaces; // reordered faces honoring placement constraints
     private List<CardSpec> _specs => _session.Specs; // raw specs in file order
     private System.Collections.Concurrent.ConcurrentDictionary<int, CardEntry> _mfcBacks => _session.MfcBacks; // synthetic back faces keyed by spec index
-    private readonly NavigationService _nav = new(); // centralized navigation
-    private NavigationViewBuilder? _navBuilder; // deferred until ctor end
-    private IReadOnlyList<NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
-    private readonly CardCollectionData _collection = new();
-    private readonly CardQuantityService _quantityService = new();
-    private readonly QuantityEnrichmentService _quantityEnrichment;
-    private readonly CollectionRepository _collectionRepo; // phase 3 collection repo
+    // Explicitly reference layout navigation service to avoid ambiguity with System.Windows.Navigation.NavigationService
+    private readonly Enfolderer.App.Layout.NavigationService _nav = new(); // centralized navigation
+    private Enfolderer.App.Binder.NavigationViewBuilder? _navBuilder; // deferred until ctor end
+    private IReadOnlyList<Enfolderer.App.Layout.NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
+    private readonly Enfolderer.App.Collection.CardCollectionData _collection = new();
+    private readonly Enfolderer.App.Quantity.CardQuantityService _quantityService = new();
+    private readonly Enfolderer.App.Quantity.QuantityEnrichmentService _quantityEnrichment;
+    private readonly Enfolderer.App.Collection.CollectionRepository _collectionRepo; // phase 3 collection repo
     private readonly CardBackImageService _backImageService = new();
     private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
     private readonly BinderLoadService _binderLoadService;
     private readonly SpecResolutionService _specResolutionService;
-    private readonly MetadataLoadOrchestrator _metadataOrchestrator;
+    private readonly Enfolderer.App.Metadata.MetadataLoadOrchestrator _metadataOrchestrator;
     private TelemetryService? _telemetry;
     public HashSet<string> GetCurrentSetCodes()
     {
@@ -350,10 +360,10 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         }
     }
 
-    private readonly QuantityToggleService _quantityToggleService;
+    private readonly Enfolderer.App.Quantity.QuantityToggleService _quantityToggleService;
     public void ToggleCardQuantity(CardSlot slot)
     {
-        _quantityToggleService.Toggle(slot, _currentCollectionDir, _cards, _orderedFaces, ResolveCardIdFromDb, SetStatus);
+    _quantityToggleService.Toggle(slot, _currentCollectionDir, _cards, _orderedFaces, ResolveCardIdFromDb, SetStatus);
         Refresh();
     }
 
@@ -400,9 +410,9 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _httpFactory = new HttpClientFactoryService(_telemetry);
     _binderLoadService = new BinderLoadService(_binderTheme, _metadataResolver, _backImageService, hash => _cachePaths.IsMetaComplete(hash));
     _specResolutionService = new SpecResolutionService(_metadataResolver);
-    _metadataOrchestrator = new MetadataLoadOrchestrator(_specResolutionService, _quantityService, _metadataResolver);
+    _metadataOrchestrator = new Enfolderer.App.Metadata.MetadataLoadOrchestrator(_specResolutionService, _quantityService, _metadataResolver);
     _quantityEnrichment = new QuantityEnrichmentService(_quantityService);
-        _quantityToggleService = new QuantityToggleService(_quantityService, _collectionRepo, _collection);
+    _quantityToggleService = new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
         _nav.ViewChanged += NavOnViewChanged;
         var commandFactory = new CommandFactory(_nav,
             () => PagesPerBinder,

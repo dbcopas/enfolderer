@@ -1,5 +1,8 @@
 using System.Collections.Generic;
 using System.Net.Http;
+using Enfolderer.App.Infrastructure;
+using Enfolderer.App.Core;
+using Enfolderer.App.Layout;
 
 namespace Enfolderer.App.Tests;
 

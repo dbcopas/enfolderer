@@ -1,4 +1,7 @@
 using System.Collections.Generic;
+using Enfolderer.App.Collection;
+using Enfolderer.App.Quantity;
+using Enfolderer.App.Core;
 
 namespace Enfolderer.App.Tests;
 

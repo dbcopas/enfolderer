@@ -1,3 +1,4 @@
+using Enfolderer.App.Layout;
 namespace Enfolderer.App.Tests;
 
 // Lightweight self-check harness (no external test framework yet)

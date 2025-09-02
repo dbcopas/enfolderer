@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 
-namespace Enfolderer.App;
+namespace Enfolderer.App.Imaging;
 
 public sealed class CardBackImageService
 {
