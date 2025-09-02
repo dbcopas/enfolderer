@@ -11,13 +11,13 @@ public class CardListBuilder
     private readonly VariantPairingService _variantPairing;
     public CardListBuilder(VariantPairingService variantPairing) => _variantPairing = variantPairing;
 
-    public (List<CardEntry> cards, Dictionary<CardEntry,string> explicitVariantPairKeys) Build(
+    public (List<CardEntry> cards, Dictionary<string,string> explicitVariantPairKeys) Build(
         IList<CardSpec> specs,
         IReadOnlyDictionary<int, CardEntry> mfcBacks,
         IList<(string set,string baseNum,string variantNum)> pendingExplicitVariantPairs)
     {
         var cards = new List<CardEntry>();
-        var variantMap = new Dictionary<CardEntry,string>();
+        var variantMap = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
         for (int i=0;i<specs.Count;i++)
         {
             var s = specs[i];
@@ -37,7 +37,11 @@ public class CardListBuilder
             if (mfcBacks.TryGetValue(i, out var back)) cards.Add(back);
         }
         var built = _variantPairing.BuildExplicitPairKeyMap(cards, pendingExplicitVariantPairs);
-        foreach (var kv in built) variantMap[kv.Key] = kv.Value;
+        foreach (var kv in built)
+        {
+            var key = (kv.Key.Set ?? "") + ":" + kv.Key.Number;
+            variantMap[key] = kv.Value;
+        }
         return (cards, variantMap);
     }
 }

@@ -243,11 +243,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private static readonly ConcurrentDictionary<string,string> _imageUrlNameMap = new(StringComparer.OrdinalIgnoreCase);
     private static string HttpLogPath => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "http-log.txt");
 
-    private void UpdatePanel(string? latest = null)
-    {
-        // Minimal implementation: reflect latest URL/status plus simple counters.
-        if (!string.IsNullOrEmpty(latest)) ApiStatus = latest;
-    }
 
     // UI-bound collections & properties (redeclared after corruption)
     public ObservableCollection<CardSlot> LeftSlots { get; } = new();
@@ -268,14 +263,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public int PagesPerBinder { get => _pagesPerBinder; set { if (value>0 && value!=_pagesPerBinder) { _pagesPerBinder = value; OnPropertyChanged(); RebuildViews(); Refresh(); } } }
     private string _layoutMode = "4x3"; // UI selection token
     public string LayoutMode { get => _layoutMode; set { if (!string.Equals(_layoutMode, value, StringComparison.OrdinalIgnoreCase)) { _layoutMode = value; OnPropertyChanged(); ApplyLayoutModeToken(); } } }
+    private LayoutConfigService _layoutConfig = new();
     private void ApplyLayoutModeToken()
     {
-        switch (_layoutMode.ToLowerInvariant())
-        {
-            case "3x3": RowsPerPage = 3; ColumnsPerPage = 3; break;
-            case "2x2": RowsPerPage = 2; ColumnsPerPage = 2; break;
-            default: RowsPerPage = 3; ColumnsPerPage = 4; _layoutMode = "4x3"; OnPropertyChanged(nameof(LayoutMode)); break;
-        }
+        var (r,c,canon) = _layoutConfig.ApplyToken(_layoutMode);
+        RowsPerPage = r; ColumnsPerPage = c; if (_layoutMode != canon) { _layoutMode = canon; OnPropertyChanged(nameof(LayoutMode)); }
     }
     private void RecomputeAfterLayoutChange()
     {
@@ -283,10 +275,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         RebuildViews();
         Refresh();
     }
-    private readonly List<CardEntry> _cards = new();
-    private readonly List<CardEntry> _orderedFaces = new(); // reordered faces honoring placement constraints
-    private readonly List<CardSpec> _specs = new(); // raw specs in file order
-    private readonly ConcurrentDictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
+    private readonly BinderSession _session = new();
+    private List<CardEntry> _cards => _session.Cards;
+    private List<CardEntry> _orderedFaces => _session.OrderedFaces; // reordered faces honoring placement constraints
+    private List<CardSpec> _specs => _session.Specs; // raw specs in file order
+    private System.Collections.Concurrent.ConcurrentDictionary<int, CardEntry> _mfcBacks => _session.MfcBacks; // synthetic back faces keyed by spec index
     private readonly NavigationService _nav = new(); // centralized navigation
     private NavigationViewBuilder? _navBuilder; // deferred until ctor end
     private IReadOnlyList<NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
@@ -334,75 +327,27 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         }
     }
 
+    private readonly QuantityToggleService _quantityToggleService;
     public void ToggleCardQuantity(CardSlot slot)
     {
-        if (slot == null) return;
-        if (slot.IsPlaceholderBack) { SetStatus("Back face placeholder"); return; }
-        if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { SetStatus("No set/number"); return; }
-        if (string.IsNullOrEmpty(_currentCollectionDir)) { SetStatus("No collection loaded"); return; }
-        _collectionRepo.EnsureLoaded(_currentCollectionDir);
-        if (!_collection.IsLoaded) { SetStatus("Collection not loaded"); return; }
-
-    _quantityService.ToggleQuantity(slot, _currentCollectionDir, _collection, _cards, _orderedFaces, ResolveCardIdFromDb, SetStatus);
-    Refresh();
+        _quantityToggleService.Toggle(slot, _currentCollectionDir, _cards, _orderedFaces, ResolveCardIdFromDb, SetStatus);
+        Refresh();
     }
 
     // EnsureCollectionLoaded logic moved to CollectionRepository
 
     private int? ResolveCardIdFromDb(string setOriginal, string baseNum, string trimmed) => _collectionRepo.ResolveCardId(_currentCollectionDir, setOriginal, baseNum, trimmed);
     // Explicit pair keys (e.g. base number + language variant) -> enforced pair placement regardless of name differences
-    private readonly Dictionary<string,string> _explicitVariantPairKeys = new(); // built by VariantPairingService (key: Set:Number)
-    private readonly List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs = new(); // captured during parse
+    private System.Collections.Generic.Dictionary<string,string> _explicitVariantPairKeys => _session.ExplicitVariantPairKeys; // built by VariantPairingService (key: Set:Number)
+    private System.Collections.Generic.List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs => _session.PendingExplicitVariantPairs; // captured during parse
     private readonly VariantPairingService _variantPairing = new();
     // _currentViewIndex removed; NavigationService.CurrentIndex is authoritative
-    private string? _localBackImagePath; // cached resolved local back image path (or null if not found)
-    internal static readonly HttpClient Http = CreateClient();
-    private class HttpLoggingHandler : DelegatingHandler
-    {
-        public HttpLoggingHandler(HttpMessageHandler inner) : base(inner) { }
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var url = request.RequestUri?.ToString() ?? string.Empty;
-            var sw = Stopwatch.StartNew();
-            BinderViewModel.WithVm(vm => vm._telemetry?.Start(url));
-            try
-            {
-                var resp = await base.SendAsync(request, cancellationToken);
-                sw.Stop();
-                BinderViewModel.WithVm(vm => vm._telemetry?.Done(url, (int)resp.StatusCode, sw.ElapsedMilliseconds));
-                return resp;
-            }
-            catch (Exception)
-            {
-                sw.Stop();
-                BinderViewModel.WithVm(vm => vm._telemetry?.Done(url, -1, sw.ElapsedMilliseconds));
-                throw;
-            }
-        }
-    }
-    private static HttpClient CreateClient()
-    {
-        var sockets = new SocketsHttpHandler
-        {
-            AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(5)
-        };
-        var c = new HttpClient(new HttpLoggingHandler(sockets));
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("Enfolderer/0.1");
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("(+https://github.com/yourrepo)");
-        c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
-        return c;
-    }
+    // local back image path now on session
+    internal static HttpClient Http => _httpFactory?.Client ?? throw new InvalidOperationException("HTTP factory not initialized");
+    private static IHttpClientFactoryService? _httpFactory; // static so slots can reference BinderViewModel.Http
     // Local back image resolution moved to CardBackImageService
-    public void FlashImageFetch(string cardName)
-    {
-    _statusFlash.Flash($"fetching image for {cardName}", TimeSpan.FromSeconds(2), s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
-    }
-    public void FlashMetaUrl(string url)
-    {
-    if (string.IsNullOrWhiteSpace(url)) return;
-    _statusFlash.Flash(url, TimeSpan.FromSeconds(2), s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
-    }
+    public void FlashImageFetch(string cardName) => _statusFlash.FlashImageFetch(cardName, s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
+    public void FlashMetaUrl(string url) => _statusFlash.FlashMetaUrl(url, s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
     private void RefreshSummaryIfIdle() { /* no-op now; counters centralized */ }
 
     public ICommand NextCommand { get; }
@@ -428,10 +373,12 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _cachePaths = new CachePathService(ImageCacheStore.CacheRoot);
     _statusPanel = new StatusPanelService(s => ApiStatus = s);
     _telemetry = new TelemetryService(s => _statusPanel.Update(s, s2 => ApiStatus = s2), _debugHttpLogging);
+    _httpFactory = new HttpClientFactoryService(_telemetry);
     _binderLoadService = new BinderLoadService(_binderTheme, _metadataResolver, _backImageService, hash => _cachePaths.IsMetaComplete(hash));
     _specResolutionService = new SpecResolutionService(_metadataResolver);
     _metadataOrchestrator = new MetadataLoadOrchestrator(_specResolutionService, _quantityService, _metadataResolver);
     _quantityEnrichment = new QuantityEnrichmentService(_quantityService);
+        _quantityToggleService = new QuantityToggleService(_quantityService, _collectionRepo, _collection);
         _nav.ViewChanged += NavOnViewChanged;
         var commandFactory = new CommandFactory(_nav,
             () => PagesPerBinder,
@@ -482,12 +429,12 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public async Task LoadFromFileAsync(string path)
     {
         var load = await _binderLoadService.LoadAsync(path, SlotsPerPage);
-        _currentFileHash = load.FileHash;
+    _session.CurrentFileHash = load.FileHash;
         _currentCollectionDir = load.CollectionDir;
         if (load.PagesPerBinderOverride.HasValue) PagesPerBinder = load.PagesPerBinderOverride.Value;
         if (!string.IsNullOrEmpty(load.LayoutModeOverride)) LayoutMode = load.LayoutModeOverride;
         if (load.HttpDebugEnabled) _debugHttpLogging = true;
-        _localBackImagePath = load.LocalBackImagePath;
+    _session.LocalBackImagePath = load.LocalBackImagePath;
         _cards.Clear(); _specs.Clear(); _mfcBacks.Clear(); _orderedFaces.Clear(); _pendingExplicitVariantPairs.Clear();
         if (load.CacheHit)
         {
@@ -512,14 +459,14 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             BuildOrderedFaces,
             () => { _nav.ResetIndex(); RebuildViews(); },
             Refresh,
-            () => _metadataResolver.PersistMetadataCache(_currentFileHash, _cards),
-            () => _metadataResolver.MarkCacheComplete(_currentFileHash)
+            () => _metadataResolver.PersistMetadataCache(_session.CurrentFileHash!, _cards),
+            () => _metadataResolver.MarkCacheComplete(_session.CurrentFileHash!)
         );
     }
 
     // Quantity enrichment & MFC adjustment moved to CardQuantityService (Phase 2)
 
-    private string? _currentFileHash;
+    // file hash moved into BinderSession
     private const int CacheSchemaVersion = 5; // bump: refined two-sided classification & invalidating prior misclassification cache
     private static readonly HashSet<string> PhysicallyTwoSidedLayouts = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -537,13 +484,9 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private void RebuildCardListFromSpecs()
     {
         var builder = new CardListBuilder(_variantPairing);
-        var (cards, pairMap) = builder.Build(_specs, _mfcBacks, _pendingExplicitVariantPairs);
+    var (cards, pairMap) = builder.Build(_specs, _mfcBacks, _pendingExplicitVariantPairs);
         _cards.Clear(); _cards.AddRange(cards);
-        _explicitVariantPairKeys.Clear(); foreach (var kv in pairMap)
-        {
-            var key = (kv.Key.Set ?? "") + ":" + kv.Key.Number;
-            _explicitVariantPairKeys[key] = kv.Value;
-        }
+    _explicitVariantPairKeys.Clear(); foreach (var kv in pairMap) _explicitVariantPairKeys[kv.Key] = kv.Value;
     }
 
     // CardSpec record extracted to CardSpec.cs (Phase 1 refactor)
