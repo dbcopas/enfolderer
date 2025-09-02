@@ -1,0 +1,270 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using Microsoft.Data.Sqlite;
+
+namespace Enfolderer.App;
+
+/// <summary>
+/// Encapsulates quantity enrichment, MFC display adjustment, and toggle persistence logic.
+/// Extracted from MainWindow.xaml.cs (Phase 2 refactor).
+/// </summary>
+internal sealed class CardQuantityService
+{
+    public void EnrichQuantities(CardCollectionData collection, List<CardEntry> cards)
+    {
+        if (collection.Quantities.Count == 0) return;
+        int updated = 0;
+        for (int i = 0; i < cards.Count; i++)
+        {
+            var c = cards[i];
+            if (c.IsBackFace && string.Equals(c.Set, "__BACK__", StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.IsNullOrEmpty(c.Set) || string.IsNullOrEmpty(c.Number)) continue;
+            // WAR Japanese alt-art star planeswalkers authoritative variant path
+            if (string.Equals(c.Set, "WAR", StringComparison.OrdinalIgnoreCase) && c.Number.Contains('★'))
+            {
+                string starBaseRaw = c.Number.Replace("★", string.Empty);
+                string starTrim = starBaseRaw.TrimStart('0'); if (starTrim.Length == 0) starTrim = "0";
+                int qtyVariant = 0; bool variantFound = false;
+                if (int.TryParse(starBaseRaw, out _))
+                {
+                    if (collection.TryGetVariantQuantityFlexible(c.Set, starBaseRaw, "Art JP", out var artQty) ||
+                        collection.TryGetVariantQuantityFlexible(c.Set, starTrim, "Art JP", out artQty) ||
+                        collection.TryGetVariantQuantityFlexible(c.Set, starBaseRaw, "JP", out artQty) ||
+                        collection.TryGetVariantQuantityFlexible(c.Set, starTrim, "JP", out artQty))
+                    { qtyVariant = artQty; variantFound = true; }
+                }
+                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                {
+                    if (variantFound)
+                        System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT] WAR star authoritative {c.Number} -> base={starBaseRaw}/{starTrim} JP qty={qtyVariant}");
+                    else
+                        System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT-MISS] WAR star authoritative {c.Number} attempted base={starBaseRaw}/{starTrim} JP (flex) defaulting 0");
+                }
+                if (c.Quantity != qtyVariant) { cards[i] = c with { Quantity = qtyVariant }; updated++; }
+                continue;
+            }
+            string numTokenCard = c.Number.Split('/')[0];
+            int parenIndex = numTokenCard.IndexOf('(');
+            if (parenIndex > 0) numTokenCard = numTokenCard.Substring(0, parenIndex);
+            string baseNum = numTokenCard;
+            string trimmed = baseNum.TrimStart('0'); if (trimmed.Length == 0) trimmed = "0";
+            var setLower = c.Set.ToLowerInvariant();
+            int qty; bool found = collection.Quantities.TryGetValue((setLower, baseNum), out qty);
+            if (!found && !string.Equals(trimmed, baseNum, StringComparison.Ordinal))
+                found = collection.Quantities.TryGetValue((setLower, trimmed), out qty);
+            if (!found)
+            {
+                string candidate = baseNum;
+                while (candidate.Length > 0 && !found && !char.IsDigit(candidate[^1]))
+                {
+                    candidate = candidate.Substring(0, candidate.Length - 1);
+                    if (candidate.Length == 0) break;
+                    found = collection.Quantities.TryGetValue((setLower, candidate), out qty);
+                }
+            }
+            if (!found)
+            {
+                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                {
+                    try
+                    {
+                        var sampleKeys = string.Join(", ", collection.Quantities.Keys.Where(k => k.Item1 == setLower).Take(25).Select(k => k.Item1+":"+k.Item2));
+                        System.Diagnostics.Debug.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found. Sample keys for set: {sampleKeys}");
+                    }
+                    catch { }
+                }
+                if (c.Quantity != 0) { cards[i] = c with { Quantity = 0 }; updated++; }
+                continue;
+            }
+            if (qty >= 0 && c.Quantity != qty) { cards[i] = c with { Quantity = qty }; updated++; }
+        }
+        if (updated > 0)
+            System.Diagnostics.Debug.WriteLine($"[Collection] Quantities applied to {updated} faces");
+    }
+
+    public void AdjustMfcQuantities(List<CardEntry> cards)
+    {
+        for (int i = 0; i < cards.Count; i++)
+        {
+            var front = cards[i];
+            if (!front.IsModalDoubleFaced || front.IsBackFace) continue;
+            int q = front.Quantity; if (q < 0) continue;
+            int frontDisplay, backDisplay;
+            if (q <= 0) { frontDisplay = 0; backDisplay = 0; }
+            else if (q == 1) { frontDisplay = 1; backDisplay = 0; }
+            else { frontDisplay = 2; backDisplay = 2; }
+            if (front.Quantity != frontDisplay) cards[i] = front with { Quantity = frontDisplay };
+            int backIndex = -1;
+            if (i + 1 < cards.Count)
+            {
+                var candidate = cards[i + 1];
+                if (candidate.IsModalDoubleFaced && candidate.IsBackFace && candidate.Set == front.Set && candidate.Number == front.Number)
+                    backIndex = i + 1;
+            }
+            if (backIndex == -1)
+            {
+                for (int j = i + 1; j < cards.Count; j++)
+                {
+                    var cand = cards[j];
+                    if (cand.IsModalDoubleFaced && cand.IsBackFace && cand.Set == front.Set && cand.Number == front.Number)
+                    { backIndex = j; break; }
+                }
+            }
+            if (backIndex >= 0)
+            {
+                var back = cards[backIndex];
+                if (back.Quantity != backDisplay) cards[backIndex] = back with { Quantity = backDisplay };
+            }
+        }
+    }
+
+    public int ToggleQuantity(
+        CardSlot slot,
+        string currentCollectionDir,
+        CardCollectionData collection,
+        List<CardEntry> cards,
+        List<CardEntry> orderedFaces,
+        Func<string,string,string,int?> resolveCardIdFromDb,
+        Action<string> setStatus)
+    {
+        if (slot == null) { setStatus("No slot"); return -1; }
+        if (slot.IsPlaceholderBack) { setStatus("Back face placeholder"); return -1; }
+        if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { setStatus("No set/number"); return -1; }
+        if (string.IsNullOrEmpty(currentCollectionDir)) { setStatus("No collection loaded"); return -1; }
+        if (!collection.IsLoaded) { setStatus("Collection not loaded"); return -1; }
+
+        string numToken = slot.Number.Split('/')[0];
+        int parenIdx = numToken.IndexOf('('); if (parenIdx > 0) numToken = numToken.Substring(0, parenIdx);
+        string baseNum = numToken;
+        string trimmed = baseNum.TrimStart('0'); if (trimmed.Length == 0) trimmed = "0";
+        string setLower = slot.Set.ToLowerInvariant();
+        (int cardId, int? gatherer) foundEntry = default; bool indexFound = false;
+        if (baseNum.IndexOf('★') >= 0)
+        {
+            var starStripped = baseNum.Replace("★", string.Empty);
+            if (starStripped.Length == 0) starStripped = "0";
+            if (!indexFound && collection.MainIndex.TryGetValue((setLower, starStripped), out foundEntry)) indexFound = true;
+            var starTrimmed = starStripped.TrimStart('0'); if (starTrimmed.Length == 0) starTrimmed = "0";
+            if (!indexFound && !string.Equals(starTrimmed, starStripped, StringComparison.Ordinal) && collection.MainIndex.TryGetValue((setLower, starTrimmed), out foundEntry)) indexFound = true;
+            if (indexFound) { baseNum = starStripped; trimmed = starTrimmed; }
+        }
+        if (collection.MainIndex.TryGetValue((setLower, baseNum), out foundEntry)) indexFound = true;
+        else if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal) && collection.MainIndex.TryGetValue((setLower, trimmed), out foundEntry)) indexFound = true;
+        else
+        {
+            string candidate = baseNum;
+            while (candidate.Length > 0 && !indexFound && !char.IsDigit(candidate[^1]))
+            {
+                candidate = candidate.Substring(0, candidate.Length - 1);
+                if (collection.MainIndex.TryGetValue((setLower, candidate), out foundEntry)) { indexFound = true; break; }
+            }
+        }
+        if (!indexFound)
+        {
+            if (slot.Set.Equals("WAR", StringComparison.OrdinalIgnoreCase) && slot.Number.IndexOf('★') >= 0)
+            {
+                var baseStar = slot.Number.Replace("★", string.Empty);
+                var baseStarTrim = baseStar.TrimStart('0'); if (baseStarTrim.Length == 0) baseStarTrim = "0";
+                int variantId;
+                if (collection.TryGetVariantCardIdFlexible(slot.Set, baseStar, "Art JP", out variantId) ||
+                    collection.TryGetVariantCardIdFlexible(slot.Set, baseStarTrim, "Art JP", out variantId) ||
+                    collection.TryGetVariantCardIdFlexible(slot.Set, baseStar, "JP", out variantId) ||
+                    collection.TryGetVariantCardIdFlexible(slot.Set, baseStarTrim, "JP", out variantId))
+                { foundEntry = (variantId, null); indexFound = true; }
+            }
+            if (!indexFound)
+            {
+                int? directId = resolveCardIdFromDb(slot.Set, baseNum, trimmed);
+                if (directId == null) { setStatus("Card not found"); return -1; }
+                foundEntry = (directId.Value, null);
+            }
+        }
+        int cardId = foundEntry.cardId;
+
+        int logicalQty = slot.Quantity;
+        bool isMfcFront = false;
+        var entry = cards.FirstOrDefault(c => c.Set != null && string.Equals(c.Set, slot.Set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number.Split('/')[0], baseNum.Split('/')[0], StringComparison.OrdinalIgnoreCase) && c.Name == slot.Name);
+        if (entry != null && entry.IsModalDoubleFaced && !entry.IsBackFace) { isMfcFront = true; logicalQty = slot.Quantity; }
+        int newLogicalQty = !isMfcFront ? (logicalQty == 0 ? 1 : 0) : (logicalQty == 0 ? 1 : (logicalQty == 1 ? 2 : 0));
+
+        bool isCustom = collection.CustomCards.Contains(cardId);
+        if (isCustom)
+        {
+            string mainDbPath = Path.Combine(currentCollectionDir, "mainDb.db");
+            if (!File.Exists(mainDbPath)) { setStatus("mainDb missing"); return -1; }
+            try
+            {
+                using var conMain = new SqliteConnection($"Data Source={mainDbPath}");
+                conMain.Open();
+                using var cmd = conMain.CreateCommand();
+                cmd.CommandText = "UPDATE Cards SET Qty=@q WHERE id=@id";
+                cmd.Parameters.AddWithValue("@q", newLogicalQty);
+                cmd.Parameters.AddWithValue("@id", cardId);
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            { System.Diagnostics.Debug.WriteLine($"[CustomQty] mainDb write failed: {ex.Message}"); setStatus("Write failed"); return -1; }
+        }
+        else
+        {
+            string collectionPath = Path.Combine(currentCollectionDir, "mtgstudio.collection");
+            if (!File.Exists(collectionPath)) { setStatus("Collection file missing"); return -1; }
+            try
+            {
+                using var con = new SqliteConnection($"Data Source={collectionPath}");
+                con.Open();
+                using (var cmd = con.CreateCommand())
+                {
+                    cmd.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
+                    cmd.Parameters.AddWithValue("@q", newLogicalQty);
+                    cmd.Parameters.AddWithValue("@id", cardId);
+                    int rows = cmd.ExecuteNonQuery();
+                    if (rows == 0)
+                    {
+                        using var ins = con.CreateCommand();
+                        ins.CommandText = "INSERT INTO CollectionCards (CardId, Qty) VALUES (@id, @q)";
+                        ins.Parameters.AddWithValue("@id", cardId);
+                        ins.Parameters.AddWithValue("@q", newLogicalQty);
+                        try { ins.ExecuteNonQuery(); } catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            { System.Diagnostics.Debug.WriteLine($"[Collection] Toggle write failed: {ex.Message}"); setStatus("Write failed"); return -1; }
+        }
+
+        if (newLogicalQty > 0) collection.Quantities[(setLower, baseNum)] = newLogicalQty; else collection.Quantities.Remove((setLower, baseNum));
+        if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal))
+        {
+            if (newLogicalQty > 0) collection.Quantities[(setLower, trimmed)] = newLogicalQty; else collection.Quantities.Remove((setLower, trimmed));
+        }
+        for (int i = 0; i < cards.Count; i++)
+        {
+            var c = cards[i];
+            if (c.Set != null && string.Equals(c.Set, slot.Set, StringComparison.OrdinalIgnoreCase))
+            {
+                string cBase = c.Number.Split('/')[0];
+                if (string.Equals(cBase, baseNum, StringComparison.OrdinalIgnoreCase) || string.Equals(cBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase))
+                    cards[i] = c with { Quantity = newLogicalQty };
+            }
+        }
+        AdjustMfcQuantities(cards);
+        for (int i = 0; i < orderedFaces.Count; i++)
+        {
+            var o = orderedFaces[i];
+            if (o.Set != null && string.Equals(o.Set, slot.Set, StringComparison.OrdinalIgnoreCase))
+            {
+                string oBase = o.Number.Split('/')[0];
+                if (string.Equals(oBase, baseNum, StringComparison.OrdinalIgnoreCase) || string.Equals(oBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase))
+                {
+                    var updated = cards.FirstOrDefault(c => c.Set != null && c.Set.Equals(o.Set, StringComparison.OrdinalIgnoreCase) && c.Number == o.Number && c.IsBackFace == o.IsBackFace);
+                    if (updated != null) orderedFaces[i] = updated;
+                }
+            }
+        }
+        setStatus($"Set {slot.Set} #{slot.Number} => {newLogicalQty}");
+        return newLogicalQty;
+    }
+}
