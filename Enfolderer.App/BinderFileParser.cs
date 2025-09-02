@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 
 namespace Enfolderer.App;
 
-internal sealed class BinderFileParser
+public sealed class BinderFileParser
 {
     private readonly BinderThemeService _theme;
     private readonly CardMetadataResolver _metadataResolver;
@@ -408,7 +408,7 @@ internal sealed class BinderFileParser
     }
 }
 
-internal sealed record BinderParseResult(
+public sealed record BinderParseResult(
     string FileHash,
     bool CacheHit,
     List<CardEntry> CachedCards,
@@ -428,4 +428,4 @@ internal sealed record BinderParseResult(
         new BinderParseResult(hash, false, new List<CardEntry>(), specs, fetch, initial, pendingPairs, dir, backImage, pagesOverride, layoutOverride, httpDebug);
 }
 
-internal sealed record BinderParsedSpec(string SetCode, string Number, string? OverrideName, bool ExplicitEntry, string? NumberDisplayOverride, CardEntry? Resolved);
+public sealed record BinderParsedSpec(string SetCode, string Number, string? OverrideName, bool ExplicitEntry, string? NumberDisplayOverride, CardEntry? Resolved);
