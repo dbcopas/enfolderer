@@ -64,16 +64,6 @@ public class NavigationService
     public void First() { if (CanFirst) { CurrentIndex = 0; OnChanged(); } }
     public void Last() { if (CanLast) { CurrentIndex = _views.Count -1; OnChanged(); } }
 
-    /// <summary>
-    /// Align internal current index with an external canonical index without triggering change events.
-    /// Used during incremental migration where an external view index still drives UI state.
-    /// </summary>
-    public void AlignIndex(int index)
-    {
-        if (index < 0) index = 0;
-        if (index >= _views.Count) index = _views.Count - 1;
-        CurrentIndex = index;
-    }
 
     public bool CanJumpBinder(int delta)
     { if (_views.Count==0) return false; int targetBinder = _views[CurrentIndex].BinderIndex + delta; if (targetBinder <0) return false; int maxBinder = _views[^1].BinderIndex; return targetBinder <= maxBinder; }

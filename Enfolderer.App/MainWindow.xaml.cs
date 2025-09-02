@@ -502,7 +502,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly List<CardEntry> _orderedFaces = new(); // reordered faces honoring placement constraints
     private readonly List<CardSpec> _specs = new(); // raw specs in file order
     private readonly ConcurrentDictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
-    private readonly List<PageView> _views = new(); // sequence of display views across all binders
+    private readonly NavigationService _nav = new(); // centralized navigation
+    private IReadOnlyList<NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly CardCollectionData _collection = new(); // collection DB data
     // Expose distinct set codes present in current binder specs/cards
     public HashSet<string> GetCurrentSetCodes()
@@ -782,7 +783,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly Dictionary<CardEntry,string> _explicitPairKeys = new();
     // Pending variant pairs captured during parse before resolution (set, baseNumber, variantNumber)
     private readonly List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs = new();
-    private int _currentViewIndex = 0;
+    // _currentViewIndex removed; NavigationService.CurrentIndex is authoritative
     private string? _localBackImagePath; // cached resolved local back image path (or null if not found)
     private static readonly HttpClient Http = CreateClient();
     private class HttpLoggingHandler : DelegatingHandler
@@ -935,42 +936,26 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     public BinderViewModel()
     {
-    RegisterInstance(this);
-    if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
-    // INITIAL placeholder wiring; real wiring applied after NavigationService created below
-    NextCommand = new RelayCommand(_ => { _currentViewIndex++; Refresh(); }, _ => _currentViewIndex < _views.Count - 1);
-    PrevCommand = new RelayCommand(_ => { _currentViewIndex--; Refresh(); }, _ => _currentViewIndex > 0);
-    FirstCommand = new RelayCommand(_ => { _currentViewIndex = 0; Refresh(); }, _ => _currentViewIndex != 0);
-    LastCommand = new RelayCommand(_ => { if (_views.Count>0) { _currentViewIndex = _views.Count -1; Refresh(); } }, _ => _views.Count>0 && _currentViewIndex != _views.Count -1);
-        NextBinderCommand = new RelayCommand(_ => { if (_nav!=null && _nav.CanJumpBinder(1)) _nav.JumpBinder(1); }, _ => _nav!=null && _nav.CanJumpBinder(1));
-        PrevBinderCommand = new RelayCommand(_ => { if (_nav!=null && _nav.CanJumpBinder(-1)) _nav.JumpBinder(-1); }, _ => _nav!=null && _nav.CanJumpBinder(-1));
-    JumpToPageCommand = new RelayCommand(_ => { if (_nav!=null && TryParseJump(out int b, out int p) && _nav.CanJumpToPage(b,p,PagesPerBinder)) _nav.JumpToPage(b, p, PagesPerBinder); }, _ => _nav!=null && TryParseJump(out int b, out int p) && _nav.CanJumpToPage(b,p,PagesPerBinder));
-    NextSetCommand = new RelayCommand(_ => { if (_nav!=null && _nav.CanJumpSet(true, _orderedFaces.Count)) _nav.JumpSet(true, _orderedFaces, SlotsPerPage, f=>f.Set); }, _ => _nav!=null && _nav.CanJumpSet(true, _orderedFaces.Count));
-    PrevSetCommand = new RelayCommand(_ => { if (_nav!=null && _nav.CanJumpSet(false, _orderedFaces.Count)) _nav.JumpSet(false, _orderedFaces, SlotsPerPage, f=>f.Set); }, _ => _nav!=null && _nav.CanJumpSet(false, _orderedFaces.Count));
+        RegisterInstance(this);
+        if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
+        _nav.ViewChanged += NavOnViewChanged;
+        NextCommand = new RelayCommand(_ => { if (_nav.CanNext) _nav.Next(); }, _ => _nav.CanNext);
+        PrevCommand = new RelayCommand(_ => { if (_nav.CanPrev) _nav.Prev(); }, _ => _nav.CanPrev);
+        FirstCommand = new RelayCommand(_ => { if (_nav.CanFirst) _nav.First(); }, _ => _nav.CanFirst);
+        LastCommand  = new RelayCommand(_ => { if (_nav.CanLast)  _nav.Last();  }, _ => _nav.CanLast);
+        NextBinderCommand = new RelayCommand(_ => { if (_nav.CanJumpBinder(1)) _nav.JumpBinder(1); }, _ => _nav.CanJumpBinder(1));
+        PrevBinderCommand = new RelayCommand(_ => { if (_nav.CanJumpBinder(-1)) _nav.JumpBinder(-1); }, _ => _nav.CanJumpBinder(-1));
+        JumpToPageCommand = new RelayCommand(_ => { if (TryParseJump(out int b, out int p) && _nav.CanJumpToPage(b,p,PagesPerBinder)) _nav.JumpToPage(b,p,PagesPerBinder); }, _ => TryParseJump(out int b, out int p) && _nav.CanJumpToPage(b,p,PagesPerBinder));
+        NextSetCommand = new RelayCommand(_ => { if (_nav.CanJumpSet(true, _orderedFaces.Count)) _nav.JumpSet(true, _orderedFaces, SlotsPerPage, f=>f.Set); }, _ => _nav.CanJumpSet(true, _orderedFaces.Count));
+        PrevSetCommand = new RelayCommand(_ => { if (_nav.CanJumpSet(false, _orderedFaces.Count)) _nav.JumpSet(false, _orderedFaces, SlotsPerPage, f=>f.Set); }, _ => _nav.CanJumpSet(false, _orderedFaces.Count));
         RebuildViews();
-        // After views are built, create navigation service snapshot and rewire Next/Prev to use it.
-        try
-        {
-            _nav = new NavigationService(new List<NavigationService.PageView>(_views.ConvertAll(v => new NavigationService.PageView(v.LeftPage, v.RightPage, v.BinderIndex))));
-            _nav.AlignIndex(_currentViewIndex);
-            _nav.ViewChanged += NavOnViewChanged;
-            NextCommand = new RelayCommand(_ => { if (_nav.CanNext) _nav.Next(); }, _ => _nav.CanNext);
-            PrevCommand = new RelayCommand(_ => { if (_nav.CanPrev) _nav.Prev(); }, _ => _nav.CanPrev);
-            FirstCommand = new RelayCommand(_ => { if (_nav.CanFirst) _nav.First(); }, _ => _nav.CanFirst);
-            LastCommand  = new RelayCommand(_ => { if (_nav.CanLast)  _nav.Last();  }, _ => _nav.CanLast);
-        }
-        catch { /* Non-fatal: fallback to legacy behavior */ }
         Refresh();
-    UpdatePanel();
+        UpdatePanel();
     }
 
-    private record PageView(int? LeftPage, int? RightPage, int BinderIndex);
     // NavigationService now owns all navigation (page, binder, set, first/last/next/prev)
-    private NavigationService? _nav;
     private void NavOnViewChanged()
     {
-        if (_nav == null) return;
-        _currentViewIndex = _nav.CurrentIndex;
         Refresh();
     }
 
@@ -978,58 +963,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private void RebuildViews()
     {
-        _views.Clear();
-        // total pages needed based on card faces
-        int totalFaces = _orderedFaces.Count;
-        int totalPages = (int)Math.Ceiling(totalFaces / (double)SlotsPerPage);
-        if (totalPages == 0) totalPages = 1; // at least one page even if empty
-        int remaining = totalPages;
-        int globalPage = 1;
-        int binderIndex = 0;
-        while (remaining > 0)
-        {
-            int pagesInBinder = Math.Min(PagesPerBinder, remaining);
-            // Front cover view (page 1 right only)
-            _views.Add(new PageView(null, globalPage, binderIndex));
-            // Interior spreads
-            // pages inside binder: 1..pagesInBinder
-            for (int local = 2; local <= pagesInBinder - 1; local += 2)
-            {
-                int left = globalPage + (local -1) -1; // compute using offsets may be error; simpler: left page number = binder start globalPage + (local-2)
-            }
-            // Rebuild interior properly
-            // Remove incorrectly added spreads (we will rebuild after front)
-            _views.RemoveAll(v => v.BinderIndex==binderIndex && v.LeftPage.HasValue && v.RightPage.HasValue && v.LeftPage==null);
-            // Add spreads correctly
-            int binderStartGlobal = globalPage; // page number corresponding to local 1
-            for (int local = 2; local <= pagesInBinder - 1; local += 2)
-            {
-                int leftPageNum = binderStartGlobal + (local -1);
-                int rightPageNum = leftPageNum + 1;
-                if (local == pagesInBinder) break; // safety
-                if (rightPageNum > binderStartGlobal + pagesInBinder -1) break; // not enough pages for pair
-                _views.Add(new PageView(leftPageNum, rightPageNum, binderIndex));
-            }
-            // Back cover view (last page left only) if more than 1 page in binder
-            if (pagesInBinder > 1)
-            {
-                int lastPageGlobal = binderStartGlobal + pagesInBinder -1;
-                _views.Add(new PageView(lastPageGlobal, null, binderIndex));
-            }
-            // Advance
-            globalPage += pagesInBinder;
-            remaining -= pagesInBinder;
-            binderIndex++;
-        }
-        if (_currentViewIndex >= _views.Count) _currentViewIndex = _views.Count -1;
-        // Sync navigation service snapshot if present
-        if (_nav != null)
-        {
-            _nav.ViewChanged -= NavOnViewChanged;
-            _nav = new NavigationService(new List<NavigationService.PageView>(_views.ConvertAll(v => new NavigationService.PageView(v.LeftPage, v.RightPage, v.BinderIndex))));
-            _nav.AlignIndex(_currentViewIndex);
-            _nav.ViewChanged += NavOnViewChanged;
-        }
+        _nav.Rebuild(_orderedFaces.Count, SlotsPerPage, PagesPerBinder);
     }
 
     // Legacy binder/page jump logic removed; NavigationService handles binder & page navigation
@@ -1069,7 +1003,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         }
         Status = $"Loaded {_cards.Count} faces from file.";
         BuildOrderedFaces();
-        _currentViewIndex = 0;
+    _nav.ResetIndex();
         RebuildViews();
         Refresh();
     }
@@ -1127,7 +1061,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
         Status = "Loaded metadata from cache.";
         BuildOrderedFaces();
-        _currentViewIndex = 0;
+    _nav.ResetIndex();
         RebuildViews();
         Refresh();
         // Fire off background image warm for first two pages (slots) if desired later
@@ -1546,7 +1480,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         }
         Status = $"Initial load {_cards.Count} faces (placeholders included).";
         BuildOrderedFaces();
-        _currentViewIndex = 0;
+    _nav.ResetIndex();
         RebuildViews();
         Refresh();
         // Background fetch remaining
@@ -2266,7 +2200,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             PageDisplay = "No pages";
             return;
         }
-        var view = _views[_currentViewIndex];
+    var view = _views[_nav.CurrentIndex];
         if (view.LeftPage.HasValue)
             FillPage(LeftSlots, view.LeftPage.Value);
         if (view.RightPage.HasValue)
@@ -2428,13 +2362,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                 {
                     // Page boundaries depend on total face count; rebuild them to avoid duplicated fronts after new MFC backs appear.
                     RebuildViews();
-                    // Clamp current view index in case count changed
-                    if (_currentViewIndex >= _views.Count) _currentViewIndex = Math.Max(0, _views.Count -1);
                 }
-                // redraw current view only if still same index
-                if (_currentViewIndex < _views.Count)
+                // redraw current view
+                if (_nav.CurrentIndex < _views.Count)
                 {
-                    var v = _views[_currentViewIndex];
+                    var v = _views[_nav.CurrentIndex];
                     LeftSlots.Clear(); RightSlots.Clear();
                     if (v.LeftPage.HasValue) FillPage(LeftSlots, v.LeftPage.Value);
                     if (v.RightPage.HasValue) FillPage(RightSlots, v.RightPage.Value);
