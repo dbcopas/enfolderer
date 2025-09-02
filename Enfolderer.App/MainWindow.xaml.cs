@@ -937,112 +937,44 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
     RegisterInstance(this);
     if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
+    // INITIAL placeholder wiring; real wiring applied after NavigationService created below
     NextCommand = new RelayCommand(_ => { _currentViewIndex++; Refresh(); }, _ => _currentViewIndex < _views.Count - 1);
     PrevCommand = new RelayCommand(_ => { _currentViewIndex--; Refresh(); }, _ => _currentViewIndex > 0);
     FirstCommand = new RelayCommand(_ => { _currentViewIndex = 0; Refresh(); }, _ => _currentViewIndex != 0);
     LastCommand = new RelayCommand(_ => { if (_views.Count>0) { _currentViewIndex = _views.Count -1; Refresh(); } }, _ => _views.Count>0 && _currentViewIndex != _views.Count -1);
-        NextBinderCommand = new RelayCommand(_ => { JumpBinder(1); }, _ => CanJumpBinder(1));
-        PrevBinderCommand = new RelayCommand(_ => { JumpBinder(-1); }, _ => CanJumpBinder(-1));
-    JumpToPageCommand = new RelayCommand(_ => JumpToBinderPage(), _ => CanJumpToBinderPage());
-    NextSetCommand = new RelayCommand(_ => { JumpSet(forward:true); }, _ => CanJumpSet(forward:true));
-    PrevSetCommand = new RelayCommand(_ => { JumpSet(forward:false); }, _ => CanJumpSet(forward:false));
+        NextBinderCommand = new RelayCommand(_ => { if (_nav!=null && _nav.CanJumpBinder(1)) _nav.JumpBinder(1); }, _ => _nav!=null && _nav.CanJumpBinder(1));
+        PrevBinderCommand = new RelayCommand(_ => { if (_nav!=null && _nav.CanJumpBinder(-1)) _nav.JumpBinder(-1); }, _ => _nav!=null && _nav.CanJumpBinder(-1));
+    JumpToPageCommand = new RelayCommand(_ => { if (_nav!=null && TryParseJump(out int b, out int p) && _nav.CanJumpToPage(b,p,PagesPerBinder)) _nav.JumpToPage(b, p, PagesPerBinder); }, _ => _nav!=null && TryParseJump(out int b, out int p) && _nav.CanJumpToPage(b,p,PagesPerBinder));
+    NextSetCommand = new RelayCommand(_ => { if (_nav!=null && _nav.CanJumpSet(true, _orderedFaces.Count)) _nav.JumpSet(true, _orderedFaces, SlotsPerPage, f=>f.Set); }, _ => _nav!=null && _nav.CanJumpSet(true, _orderedFaces.Count));
+    PrevSetCommand = new RelayCommand(_ => { if (_nav!=null && _nav.CanJumpSet(false, _orderedFaces.Count)) _nav.JumpSet(false, _orderedFaces, SlotsPerPage, f=>f.Set); }, _ => _nav!=null && _nav.CanJumpSet(false, _orderedFaces.Count));
         RebuildViews();
+        // After views are built, create navigation service snapshot and rewire Next/Prev to use it.
+        try
+        {
+            _nav = new NavigationService(new List<NavigationService.PageView>(_views.ConvertAll(v => new NavigationService.PageView(v.LeftPage, v.RightPage, v.BinderIndex))));
+            _nav.AlignIndex(_currentViewIndex);
+            _nav.ViewChanged += NavOnViewChanged;
+            NextCommand = new RelayCommand(_ => { if (_nav.CanNext) _nav.Next(); }, _ => _nav.CanNext);
+            PrevCommand = new RelayCommand(_ => { if (_nav.CanPrev) _nav.Prev(); }, _ => _nav.CanPrev);
+            FirstCommand = new RelayCommand(_ => { if (_nav.CanFirst) _nav.First(); }, _ => _nav.CanFirst);
+            LastCommand  = new RelayCommand(_ => { if (_nav.CanLast)  _nav.Last();  }, _ => _nav.CanLast);
+        }
+        catch { /* Non-fatal: fallback to legacy behavior */ }
         Refresh();
     UpdatePanel();
     }
 
     private record PageView(int? LeftPage, int? RightPage, int BinderIndex);
-
-    private bool CanJumpSet(bool forward)
+    // NavigationService now owns all navigation (page, binder, set, first/last/next/prev)
+    private NavigationService? _nav;
+    private void NavOnViewChanged()
     {
-        if (_orderedFaces.Count == 0 || _views.Count == 0) return false;
-        if (forward)
-        {
-            // If already at last view, no forward set jump
-            if (_currentViewIndex >= _views.Count -1) return false;
-        }
-        else
-        {
-            if (_currentViewIndex <= 0) return false;
-        }
-        return true;
+        if (_nav == null) return;
+        _currentViewIndex = _nav.CurrentIndex;
+        Refresh();
     }
 
-    private void JumpSet(bool forward)
-    {
-        if (_orderedFaces.Count == 0 || _views.Count == 0) return;
-        var currentView = _views[_currentViewIndex];
-        // Determine anchor card indices displayed in current view
-        List<CardEntry> displayed = new();
-        if (currentView.LeftPage.HasValue) displayed.AddRange(GetFacesForPage(currentView.LeftPage.Value));
-        if (currentView.RightPage.HasValue) displayed.AddRange(GetFacesForPage(currentView.RightPage.Value));
-        if (displayed.Count == 0) return;
-        if (forward)
-        {
-            // Anchor = last displayed (bottom-right conceptual)
-            var anchor = displayed[^1];
-            string? anchorSet = anchor.Set;
-            if (anchorSet == null) return;
-            // Find first global face after anchor with different set
-            int globalIndex = _orderedFaces.FindIndex(f => ReferenceEquals(f, anchor));
-            if (globalIndex < 0) return;
-            string anchorSetLower = anchorSet.ToLowerInvariant();
-            int targetFaceIndex = -1;
-            for (int i = globalIndex + 1; i < _orderedFaces.Count; i++)
-            {
-                var f = _orderedFaces[i];
-                if (!string.Equals(f.Set, anchorSet, StringComparison.OrdinalIgnoreCase)) { targetFaceIndex = i; break; }
-            }
-            if (targetFaceIndex == -1) return; // no further set
-            // Determine page containing targetFaceIndex
-            int targetPage = (targetFaceIndex / SlotsPerPage) + 1; // pages are 1-based
-            // Find view containing targetPage prioritizing first view showing that page
-            int viewIdx = _views.FindIndex(v => (v.LeftPage.HasValue && v.LeftPage.Value == targetPage) || (v.RightPage.HasValue && v.RightPage.Value == targetPage));
-            if (viewIdx >= 0) { _currentViewIndex = viewIdx; Refresh(); }
-        }
-        else
-        {
-            // Backward: anchor = first displayed (top-left conceptual)
-            var anchor = displayed[0];
-            string? anchorSet = anchor.Set;
-            if (anchorSet == null) return;
-            int globalIndex = _orderedFaces.FindIndex(f => ReferenceEquals(f, anchor));
-            if (globalIndex < 0) return;
-            // Find last face before anchor with different set (start of previous set run)
-            int targetFaceIndex = -1;
-            string anchorSetLower = anchorSet.ToLowerInvariant();
-            for (int i = globalIndex -1; i >=0; i--)
-            {
-                var f = _orderedFaces[i];
-                if (!string.Equals(f.Set, anchorSet, StringComparison.OrdinalIgnoreCase))
-                {
-                    // Now we are inside previous set region; we want its first face, so rewind to its run start
-                    int runStart = i;
-                    while (runStart -1 >=0 && !string.Equals(_orderedFaces[runStart -1].Set, anchorSet, StringComparison.OrdinalIgnoreCase) && string.Equals(_orderedFaces[runStart -1].Set, f.Set, StringComparison.OrdinalIgnoreCase))
-                        runStart--;
-                    targetFaceIndex = runStart;
-                    break;
-                }
-            }
-            if (targetFaceIndex == -1) return; // no previous set
-            int targetPage = (targetFaceIndex / SlotsPerPage) + 1;
-            int viewIdx = _views.FindIndex(v => (v.LeftPage.HasValue && v.LeftPage.Value == targetPage) || (v.RightPage.HasValue && v.RightPage.Value == targetPage));
-            if (viewIdx >= 0) { _currentViewIndex = viewIdx; Refresh(); }
-        }
-    }
-
-    private IEnumerable<CardEntry> GetFacesForPage(int pageNumber)
-    {
-        int startIndex = (pageNumber -1) * SlotsPerPage;
-        for (int i = 0; i < SlotsPerPage; i++)
-        {
-            int idx = startIndex + i;
-            if (idx >= 0 && idx < _orderedFaces.Count)
-            {
-                yield return _orderedFaces[idx];
-            }
-        }
-    }
+    // Legacy set jump logic removed; NavigationService handles set navigation
 
     private void RebuildViews()
     {
@@ -1090,54 +1022,19 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             binderIndex++;
         }
         if (_currentViewIndex >= _views.Count) _currentViewIndex = _views.Count -1;
-    }
-
-    private void JumpBinder(int delta)
-    {
-        if (_views.Count==0) return;
-        var currentBinder = _views[_currentViewIndex].BinderIndex;
-        var targetBinder = currentBinder + delta;
-        if (targetBinder <0) targetBinder =0;
-        int maxBinder = _views[^1].BinderIndex;
-        if (targetBinder>maxBinder) targetBinder = maxBinder;
-        // Jump to first view of target binder
-        int idx = _views.FindIndex(v => v.BinderIndex==targetBinder);
-        if (idx>=0) { _currentViewIndex = idx; Refresh(); }
-    }
-    private bool CanJumpBinder(int delta)
-    {
-        if (_views.Count==0) return false;
-        var currentBinder = _views[_currentViewIndex].BinderIndex;
-        int target = currentBinder + delta;
-        if (target <0) return false;
-        int maxBinder = _views[^1].BinderIndex;
-        if (target>maxBinder) return false;
-        return true;
-    }
-
-    private bool CanJumpToBinderPage()
-    {
-        if (!int.TryParse(JumpBinderInput, out int binder) || binder <1) return false;
-        if (!int.TryParse(JumpPageInput, out int page) || page <1 || page>PagesPerBinder) return false;
-        int maxBinder = _views.Count==0?0:_views[^1].BinderIndex +1;
-        if (binder>maxBinder) return false;
-        return true;
-    }
-    private void JumpToBinderPage()
-    {
-        if (!int.TryParse(JumpBinderInput, out int binder) || binder <1) return;
-        if (!int.TryParse(JumpPageInput, out int page) || page <1 || page>PagesPerBinder) return;
-        int binderIndex = binder -1;
-        // Translate binder+local page to global page number
-        int globalPage = binderIndex * PagesPerBinder + page;
-        // Find a view containing that page
-        int idx = _views.FindIndex(v => (v.LeftPage==globalPage) || (v.RightPage==globalPage));
-        if (idx>=0)
+        // Sync navigation service snapshot if present
+        if (_nav != null)
         {
-            _currentViewIndex = idx;
-            Refresh();
+            _nav.ViewChanged -= NavOnViewChanged;
+            _nav = new NavigationService(new List<NavigationService.PageView>(_views.ConvertAll(v => new NavigationService.PageView(v.LeftPage, v.RightPage, v.BinderIndex))));
+            _nav.AlignIndex(_currentViewIndex);
+            _nav.ViewChanged += NavOnViewChanged;
         }
     }
+
+    // Legacy binder/page jump logic removed; NavigationService handles binder & page navigation
+    private bool TryParseJump(out int binder, out int page)
+    { binder=page=0; if (!int.TryParse(JumpBinderInput, out binder) || binder<1) return false; if (!int.TryParse(JumpPageInput, out page) || page<1 || page>PagesPerBinder) return false; return true; }
 
     public void LoadFromFile(string path)
     {
