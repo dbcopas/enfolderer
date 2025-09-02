@@ -13,6 +13,11 @@ public static class SelfTests
         failures += VariantPairingServiceTests.RunAll();
         failures += PairGroupingAnalyzerTests.RunAll();
         failures += FaceLayoutServiceTests.RunAll();
+    failures += NavigationServiceTests.RunAll();
+    failures += PageSlotBuilderTests.RunAll();
+    failures += PageViewPresenterTests.RunAll();
+    failures += CommandFactoryTests.RunAll();
+    failures += QuantityServicesTests.RunAll();
         return failures;
     }
 }
