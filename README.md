@@ -7,6 +7,30 @@ Physical pagination is emulated:
 * Interior: two‑page spreads (left + right simultaneously)
 * Final page of a binder: single left page (back cover)
 
+## Quick Start (Basic Setup)
+1. Download or build the app. After a publish/build you will have an executable (e.g. `Enfolderer.App.exe`).
+2. Place `mainDb.db` and `mtgstudio.collection` in the SAME directory as the executable. The build already copies them during development; for releases ensure they are present.
+3. Launch the app and open your binder definition file (`File > Open`).
+4. (Optional) If your real `mtgstudio.collection` lives elsewhere (e.g. managed by MTG Studio), create a symbolic link beside the exe instead of copying the file so updates propagate automatically.
+
+### Creating a Symbolic Link (Windows)
+Open an elevated PowerShell or Command Prompt in the folder containing the executable and run one of:
+
+PowerShell:
+```
+New-Item -ItemType SymbolicLink -Path .\mtgstudio.collection -Target "C:\Path\To\Your\mtgstudio.collection"
+```
+CMD:
+```
+mklink mtgstudio.collection "C:\Path\To\Your\mtgstudio.collection"
+```
+You should then see `mtgstudio.collection` listed; the application will read it as if it were a local file.
+
+### Verifying Files
+On startup you should NOT see build errors about missing databases. If the app cannot find `mainDb.db` or `mtgstudio.collection`, place (or link) them next to the executable and restart.
+
+---
+
 ## Key Features (Current)
 * Unlimited binders with correct cover / spread pagination
 * Dynamic page geometry: choose 4x3 (12 slots), 3x3 (9), or 2x2 (4) at runtime (toolbar)
@@ -215,7 +239,7 @@ Page label displays binder number and local page numbers (covers annotated).
 	2. Application base directory
 	3. `%USERPROFILE%/Pictures/Enfolderer`
 	4. `images` subfolder under application base
-	If none found, falls back to Scryfall standard back image.
+	If none found, falls back to the embedded `Magic_card_back.jpg` resource shipped inside the executable (no network call required).
 
 Environment override for debugging two‑sided classification: set `ENFOLDERER_FORCE_TWO_SIDED_ALL_FACES=1` to treat every multi‑face card as physically two‑sided.
 

@@ -80,5 +80,11 @@ jobs:
             Enfolderer-win-x64-selfcontained.zip
             Enfolderer-win-x64-frameworkdependent.zip
             sample_collection.csv
+            ALT_ARTS.csv
+            Promos.csv
+            secret_lair.csv
+            secret_lair_bonus.csv
+            special_guests.csv
+            special_sets.csv
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
