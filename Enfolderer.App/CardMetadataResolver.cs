@@ -14,6 +14,8 @@ public class CardMetadataResolver
     private readonly HashSet<string> _physicallyTwoSidedLayouts;
     private readonly string _cacheRoot;
     private readonly int _schemaVersion;
+    private static readonly bool CacheDebug = Environment.GetEnvironmentVariable("ENFOLDERER_CACHE_DEBUG") == "1";
+    private static void CacheLog(string msg) { if (CacheDebug) Debug.WriteLine("[Cache][Diag] " + msg); }
 
     public CardMetadataResolver(string cacheRoot, IEnumerable<string> physicallyTwoSidedLayouts, int schemaVersion)
     {
@@ -88,11 +90,23 @@ public class CardMetadataResolver
         try
         {
             var path = MetaCachePath(hash);
-            if (!File.Exists(path)) return false;
+            if (!File.Exists(path)) { CacheLog($"MISS hash={hash} reason=file_missing path={path}"); return false; }
             var json = File.ReadAllText(path);
             var faces = JsonSerializer.Deserialize<List<CachedFace>>(json);
-            if (faces == null || faces.Count == 0) return false;
-            if (faces.Exists(f => string.IsNullOrEmpty(f.Layout))) return false;
+            if (faces == null) { CacheLog($"MISS hash={hash} reason=deser_null"); return false; }
+            if (faces.Count == 0) { CacheLog($"MISS hash={hash} reason=empty_list"); return false; }
+            // Schema version diagnostic (not enforced currently)
+            var firstVersion = faces[0].SchemaVersion;
+            if (firstVersion != _schemaVersion)
+            {
+                CacheLog($"NOTE hash={hash} schema_mismatch cached={firstVersion} current={_schemaVersion} (still attempting use)");
+            }
+            var missingLayout = faces.Where(f => string.IsNullOrEmpty(f.Layout) && !(string.Equals(f.Set, "__BACK__", StringComparison.OrdinalIgnoreCase) && string.Equals(f.Number, "BACK", StringComparison.OrdinalIgnoreCase))).Take(5).ToList();
+            if (missingLayout.Count > 0)
+            {
+                CacheLog($"MISS hash={hash} reason=missing_layout count={missingLayout.Count} sample=" + string.Join(',', missingLayout.Select(f => (f.Set??"?")+":"+f.Number)));
+                return false;
+            }
             intoCards.Clear();
             foreach (var f in faces)
             {
@@ -105,6 +119,7 @@ public class CardMetadataResolver
                 if (!string.IsNullOrEmpty(f.Layout) && f.Set != null)
                     CardLayoutStore.Set(f.Set, f.Number, f.Layout);
             }
+            CacheLog($"HIT hash={hash} faces={faces.Count} schema={firstVersion}");
             return true;
         }
         catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to load metadata cache: {ex.Message}"); return false; }
@@ -121,10 +136,22 @@ public class CardMetadataResolver
             {
                 var (frontImg, backImg) = CardImageUrlStore.Get(c.Set ?? string.Empty, c.Number);
                 var layout = c.Set != null ? CardLayoutStore.Get(c.Set, c.Number) : null;
+                if (layout == null && string.Equals(c.Set, "__BACK__", StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number, "BACK", StringComparison.OrdinalIgnoreCase))
+                {
+                    layout = "back_placeholder"; // synthetic layout so cache can be reused
+                }
                 list.Add(new CachedFace(c.Name, c.Number, c.Set, c.IsModalDoubleFaced, c.IsBackFace, c.FrontRaw, c.BackRaw, frontImg, backImg, layout, _schemaVersion));
             }
             var json = JsonSerializer.Serialize(list);
-            File.WriteAllText(MetaCachePath(hash), json);
+            var path = MetaCachePath(hash);
+            bool existed = File.Exists(path);
+            File.WriteAllText(path, json);
+            if (CacheDebug)
+            {
+                Debug.WriteLine($"[Cache][Diag] Persist hash={hash} faces={list.Count} overwrite={existed}");
+                var missingLayout = list.Where(f => string.IsNullOrEmpty(f.Layout)).Take(5).ToList();
+                if (missingLayout.Count>0) Debug.WriteLine($"[Cache][Diag] Persist missing_layout count={missingLayout.Count} sample=" + string.Join(',', missingLayout.Select(f => (f.Set??"?")+":"+f.Number)));
+            }
             Debug.WriteLine($"[Cache] Wrote metadata cache {hash} faces={list.Count}");
         }
         catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to write metadata cache: {ex.Message}"); }

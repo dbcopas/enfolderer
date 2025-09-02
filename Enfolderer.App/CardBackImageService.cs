@@ -33,6 +33,7 @@ public sealed class CardBackImageService
             catch { }
         }
         if (logIfMissing) System.Diagnostics.Debug.WriteLine("[BackImage] No local card back image found.");
-        return null;
+    // Fallback to embedded resource (pack URI) if present
+    return "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg";
     }
 }

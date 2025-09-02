@@ -51,6 +51,27 @@ public sealed class BinderFileParser
         var cachedCards = new List<CardEntry>();
         if (_isCacheComplete(fileHash) && _metadataResolver.TryLoadMetadataCache(fileHash, cachedCards))
         {
+            // Re-create backface placeholder mapping(s) because the original parse path (which sets CardImageUrlStore)
+            // is skipped on cache hits.
+            try
+            {
+                string? localBack = _resolveLocalBackImagePath(true);
+                bool hasLocalBack = localBack != null && (File.Exists(localBack) || localBack.StartsWith("pack://", StringComparison.OrdinalIgnoreCase));
+                var fallbackPack = "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg";
+                foreach (var ce in cachedCards)
+                {
+                    if (string.Equals(ce.Set, "__BACK__", StringComparison.OrdinalIgnoreCase) && string.Equals(ce.EffectiveNumber, "BACK", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var chosen = hasLocalBack ? localBack! : fallbackPack;
+                        CardImageUrlStore.Set("__BACK__", "BACK", chosen, chosen);
+                        System.Diagnostics.Debug.WriteLine($"[BinderFileParser] (CacheHit) Registered backface mapping front/back={chosen}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[BinderFileParser] Failed to restore backface mappings on cache hit: {ex.Message}");
+            }
             return BinderParseResult.CacheHitResult(fileHash, cachedCards, pagesPerBinderOverride, layoutModeOverride, enableHttpDebug, Path.GetDirectoryName(path));
         }
         var parsedSpecs = new List<BinderParsedSpec>();
@@ -72,14 +93,16 @@ public sealed class BinderFileParser
                 {
                     if (localBackImagePath == null)
                         localBackImagePath = _resolveLocalBackImagePath(true);
-                    bool hasLocal = localBackImagePath != null && File.Exists(localBackImagePath);
+                    bool hasLocal = localBackImagePath != null && (File.Exists(localBackImagePath) || localBackImagePath.StartsWith("pack://", StringComparison.OrdinalIgnoreCase));
                     for (int bi = 0; bi < backCount; bi++)
                     {
                         var spec = new BinderParsedSpec("__BACK__", "BACK", null, true, null, null);
                         parsedSpecs.Add(spec);
                         var entry = new CardEntry("Backface", "BACK", "__BACK__", false, true, null, null, string.Empty);
-                        var frontUrl = hasLocal ? localBackImagePath! : "https://c1.scryfall.com/file/scryfall-card-backs/en.png";
+                        var frontUrl = hasLocal ? localBackImagePath! : "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg";
+                        // Register image URL mapping for synthetic backface so CardSlot can load embedded/local resource.
                         CardImageUrlStore.Set("__BACK__", "BACK", frontUrl, frontUrl);
+                        System.Diagnostics.Debug.WriteLine($"[BinderFileParser] Registered backface mapping front/back={frontUrl}");
                         parsedSpecs[^1] = parsedSpecs[^1] with { Resolved = entry };
                     }
                 }
