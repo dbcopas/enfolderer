@@ -110,6 +110,18 @@ public partial class MainWindow : Window
         }
         _vm = new BinderViewModel();
         DataContext = _vm;
+#if SELF_TESTS
+        try
+        {
+            int fail = Enfolderer.App.Tests.SelfTests.RunAll();
+            if (fail==0) Debug.WriteLine("[SELF-TEST] All self tests passed.");
+            else Debug.WriteLine($"[SELF-TEST] FAILURES: {fail}");
+        }
+        catch (Exception stex)
+        {
+            Debug.WriteLine($"[SELF-TEST] Exception: {stex.Message}");
+        }
+#endif
     }
 
     private async void OpenCollection_Click(object sender, RoutedEventArgs e)
