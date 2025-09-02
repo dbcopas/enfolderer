@@ -288,6 +288,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly List<CardSpec> _specs = new(); // raw specs in file order
     private readonly ConcurrentDictionary<int, CardEntry> _mfcBacks = new(); // synthetic back faces keyed by spec index
     private readonly NavigationService _nav = new(); // centralized navigation
+    private NavigationViewBuilder? _navBuilder; // deferred until ctor end
     private IReadOnlyList<NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly CardCollectionData _collection = new(); // collection DB data
     private readonly CardQuantityService _quantityService = new(); // phase 2 extracted quantity logic
@@ -348,7 +349,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private int? ResolveCardIdFromDb(string setOriginal, string baseNum, string trimmed) => _collectionRepo.ResolveCardId(_currentCollectionDir, setOriginal, baseNum, trimmed);
     // Explicit pair keys (e.g. base number + language variant) -> enforced pair placement regardless of name differences
-    private readonly Dictionary<CardEntry,string> _explicitVariantPairKeys = new(); // built by VariantPairingService
+    private readonly Dictionary<string,string> _explicitVariantPairKeys = new(); // built by VariantPairingService (key: Set:Number)
     private readonly List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs = new(); // captured during parse
     private readonly VariantPairingService _variantPairing = new();
     // _currentViewIndex removed; NavigationService.CurrentIndex is authoritative
@@ -460,7 +461,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private void RebuildViews()
     {
-        _nav.Rebuild(_orderedFaces.Count, SlotsPerPage, PagesPerBinder);
+    _navBuilder ??= new NavigationViewBuilder(_nav);
+    _navBuilder.Rebuild(_orderedFaces.Count, SlotsPerPage, PagesPerBinder);
     }
 
     // Removed legacy synchronous LoadFromFile method (was unused and empty)
@@ -548,7 +550,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         var builder = new CardListBuilder(_variantPairing);
         var (cards, pairMap) = builder.Build(_specs, _mfcBacks, _pendingExplicitVariantPairs);
         _cards.Clear(); _cards.AddRange(cards);
-        _explicitVariantPairKeys.Clear(); foreach (var kv in pairMap) _explicitVariantPairKeys[kv.Key] = kv.Value;
+        _explicitVariantPairKeys.Clear(); foreach (var kv in pairMap)
+        {
+            var key = (kv.Key.Set ?? "") + ":" + kv.Key.Number;
+            _explicitVariantPairKeys[key] = kv.Value;
+        }
     }
 
     // CardSpec record extracted to CardSpec.cs (Phase 1 refactor)
@@ -559,8 +565,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
     _orderedFaces.Clear();
     if (_cards.Count == 0) return;
-    var service = new FaceLayoutService(new PairGroupingAnalyzer());
-    var ordered = service.BuildOrderedFaces(_cards, LayoutMode, SlotsPerPage, ColumnsPerPage, _explicitVariantPairKeys);
+    var ordering = new FaceOrderingService();
+    var ordered = ordering.BuildOrderedFaces(_cards, LayoutMode, SlotsPerPage, ColumnsPerPage, _explicitVariantPairKeys);
     _orderedFaces.AddRange(ordered);
     }
 
