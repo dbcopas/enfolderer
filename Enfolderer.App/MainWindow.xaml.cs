@@ -561,43 +561,10 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private void RebuildCardListFromSpecs()
     {
-        _cards.Clear();
-    _explicitVariantPairKeys.Clear();
-        for (int i=0;i<_specs.Count;i++)
-        {
-            var s = _specs[i];
-            if (s.Resolved != null)
-            {
-                var resolved = s.Resolved;
-                // Attach display number without altering canonical number used for API/cache
-                if (s.numberDisplayOverride != null && resolved.DisplayNumber != s.numberDisplayOverride)
-                    resolved = resolved with { DisplayNumber = s.numberDisplayOverride };
-                _cards.Add(resolved);
-                // After adding card, if it matches a pending variant pair, map base+variant to same pair key
-                try
-                {
-                    foreach (var pending in _pendingExplicitVariantPairs)
-                    {
-                        if (!string.Equals(pending.set, resolved.Set, StringComparison.OrdinalIgnoreCase)) continue;
-                        if (string.Equals(resolved.Number, pending.baseNum, StringComparison.OrdinalIgnoreCase))
-                        {
-                            // Locate variant entry if already added later; handled after loop as well
-                        }
-                    }
-                } catch { }
-            }
-            else
-            {
-                var placeholderName = s.overrideName ?? s.number; // unresolved: show number placeholder
-                var displayNumber = s.numberDisplayOverride; // may be null
-                _cards.Add(new CardEntry(placeholderName, s.number, s.setCode, false, false, null, null, displayNumber));
-            }
-            if (_mfcBacks.TryGetValue(i, out var back))
-                _cards.Add(back);
-        }
-        // Build explicit pair key map now that all resolved/placeholder entries exist
-    var built = _variantPairing.BuildExplicitPairKeyMap(_cards, _pendingExplicitVariantPairs);
-    foreach (var kv in built) _explicitVariantPairKeys[kv.Key] = kv.Value;
+        var builder = new CardListBuilder(_variantPairing);
+        var (cards, pairMap) = builder.Build(_specs, _mfcBacks, _pendingExplicitVariantPairs);
+        _cards.Clear(); _cards.AddRange(cards);
+        _explicitVariantPairKeys.Clear(); foreach (var kv in pairMap) _explicitVariantPairKeys[kv.Key] = kv.Value;
     }
 
     // CardSpec record extracted to CardSpec.cs (Phase 1 refactor)
@@ -615,41 +582,21 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private void Refresh()
     {
-        // Use _views list to determine what to display
-        LeftSlots.Clear();
-        RightSlots.Clear();
+        var slotBuilder = new PageSlotBuilder();
+        LeftSlots.Clear(); RightSlots.Clear();
         if (_views.Count == 0)
         {
-            PageDisplay = "No pages";
-            return;
+            PageDisplay = "No pages"; OnPropertyChanged(nameof(PageDisplay)); return;
         }
-    var view = _views[_nav.CurrentIndex];
+        var view = _views[_nav.CurrentIndex];
         if (view.LeftPage.HasValue)
-            FillPage(LeftSlots, view.LeftPage.Value);
+            foreach (var s in slotBuilder.BuildPageSlots(_orderedFaces, view.LeftPage.Value, SlotsPerPage, Http)) LeftSlots.Add(s);
         if (view.RightPage.HasValue)
-            FillPage(RightSlots, view.RightPage.Value);
-        // Trigger async metadata resolution for shown pages
+            foreach (var s in slotBuilder.BuildPageSlots(_orderedFaces, view.RightPage.Value, SlotsPerPage, Http)) RightSlots.Add(s);
         TriggerPageResolution(view.LeftPage ?? 0, view.RightPage ?? 0);
-        // Build display text
-        int binderNumber = view.BinderIndex + 1;
-        if (view.LeftPage.HasValue && view.RightPage.HasValue)
-        {
-            int leftLocal = ((view.LeftPage.Value -1) % PagesPerBinder) +1;
-            int rightLocal = ((view.RightPage.Value -1) % PagesPerBinder) +1;
-            PageDisplay = $"Binder {binderNumber}: Pages {leftLocal}-{rightLocal}";
-        }
-        else if (view.RightPage.HasValue)
-        {
-            int local = ((view.RightPage.Value -1) % PagesPerBinder) +1;
-            PageDisplay = $"Binder {binderNumber}: Page {local} (Front Cover)";
-        }
-        else if (view.LeftPage.HasValue)
-        {
-            int local = ((view.LeftPage.Value -1) % PagesPerBinder) +1;
-            PageDisplay = $"Binder {binderNumber}: Page {local} (Back Cover)";
-        }
+    PageDisplay = slotBuilder.BuildPageDisplay(view, PagesPerBinder);
         OnPropertyChanged(nameof(PageDisplay));
-        UpdateBinderBackground(binderNumber);
+        UpdateBinderBackground(view.BinderIndex + 1);
         CommandManager.InvalidateRequerySuggested();
     }
 
@@ -669,29 +616,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         BinderBackground = brush;
     }
 
-    private void FillPage(ObservableCollection<CardSlot> collection, int pageNumber)
-    {
-        if (pageNumber <= 0) return;
-    // Metadata resolution happens asynchronously; placeholders shown until resolved
-        int startIndex = (pageNumber - 1) * SlotsPerPage;
-        var tasks = new List<Task>();
-        for (int i = 0; i < SlotsPerPage; i++)
-        {
-            int gi = startIndex + i;
-            if (gi < _orderedFaces.Count)
-            {
-                var face = _orderedFaces[gi];
-                var slot = new CardSlot(face, gi);
-                collection.Add(slot);
-                tasks.Add(slot.TryLoadImageAsync(Http, face.Set ?? string.Empty, face.Number, face.IsBackFace));
-            }
-            else
-            {
-                collection.Add(new CardSlot("(Empty)", gi));
-            }
-        }
-        _ = Task.WhenAll(tasks);
-    }
+    // FillPage logic moved into PageSlotBuilder
 
     // Color token parsing moved into BinderThemeService
 
@@ -744,8 +669,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                 {
                     var v = _views[_nav.CurrentIndex];
                     LeftSlots.Clear(); RightSlots.Clear();
-                    if (v.LeftPage.HasValue) FillPage(LeftSlots, v.LeftPage.Value);
-                    if (v.RightPage.HasValue) FillPage(RightSlots, v.RightPage.Value);
+                    var slotBuilder = new PageSlotBuilder();
+                    if (v.LeftPage.HasValue)
+                        foreach (var s in slotBuilder.BuildPageSlots(_orderedFaces, v.LeftPage.Value, SlotsPerPage, Http)) LeftSlots.Add(s);
+                    if (v.RightPage.HasValue)
+                        foreach (var s in slotBuilder.BuildPageSlots(_orderedFaces, v.RightPage.Value, SlotsPerPage, Http)) RightSlots.Add(s);
                 }
             });
         });
