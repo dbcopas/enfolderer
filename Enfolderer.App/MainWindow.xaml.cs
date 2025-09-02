@@ -113,6 +113,7 @@ public partial class MainWindow : Window
 #if SELF_TESTS
         try
         {
+            AppRuntimeFlags.DisableImageFetching = true; // suppress external HTTP during self tests
             int fail = Enfolderer.App.Tests.SelfTests.RunAll();
             if (fail==0) Debug.WriteLine("[SELF-TEST] All self tests passed.");
             else Debug.WriteLine($"[SELF-TEST] FAILURES: {fail}");
@@ -120,6 +121,10 @@ public partial class MainWindow : Window
         catch (Exception stex)
         {
             Debug.WriteLine($"[SELF-TEST] Exception: {stex.Message}");
+        }
+        finally
+        {
+            AppRuntimeFlags.DisableImageFetching = false; // re-enable for normal runtime use
         }
 #endif
     }

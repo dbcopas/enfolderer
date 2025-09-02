@@ -20,6 +20,7 @@ public static class PageViewPresenterTests
         var result = presenter.Present(nav,left,right,ordered,9,40,http,theme);
         Check(left.Count>0 || right.Count>0);
         Check(!string.IsNullOrEmpty(result.PageDisplay));
+    Check(AppRuntimeFlags.DisableImageFetching == true);
         return failures;
     }
 }
