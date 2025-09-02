@@ -425,8 +425,10 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         RegisterInstance(this);
         _collectionRepo = new CollectionRepository(_collection);
         if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
-    _telemetry = new TelemetryService(s => UpdatePanel(s), _debugHttpLogging);
-    _binderLoadService = new BinderLoadService(_binderTheme, _metadataResolver, _backImageService, IsCacheComplete);
+    _cachePaths = new CachePathService(ImageCacheStore.CacheRoot);
+    _statusPanel = new StatusPanelService(s => ApiStatus = s);
+    _telemetry = new TelemetryService(s => _statusPanel.Update(s, s2 => ApiStatus = s2), _debugHttpLogging);
+    _binderLoadService = new BinderLoadService(_binderTheme, _metadataResolver, _backImageService, hash => _cachePaths.IsMetaComplete(hash));
     _specResolutionService = new SpecResolutionService(_metadataResolver);
     _metadataOrchestrator = new MetadataLoadOrchestrator(_specResolutionService, _quantityService, _metadataResolver);
     _quantityEnrichment = new QuantityEnrichmentService(_quantityService);
@@ -449,7 +451,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         PrevSetCommand = commandFactory.CreatePrevSet();
         RebuildViews();
         Refresh();
-        UpdatePanel();
+    _statusPanel.Update(null, s => ApiStatus = s);
     }
 
         public static void SetImageUrlName(string url, string name)
@@ -527,9 +529,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
         "split","aftermath","adventure","meld","flip","leveler","saga","class","plane","planar","scheme","vanguard","token","emblem","art_series"
     };
-    private string MetaCacheDir => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "meta");
-    private string MetaCacheDonePath(string hash) => System.IO.Path.Combine(MetaCacheDir, hash + ".done");
-    private bool IsCacheComplete(string hash) => File.Exists(MetaCacheDonePath(hash));
+    private readonly CachePathService _cachePaths; // centralized cache path logic
+    private readonly StatusPanelService _statusPanel; // status panel abstraction
 
     // Spec resolution now handled by SpecResolutionService
 
@@ -549,32 +550,26 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     // FetchCardMetadataAsync moved into CardMetadataResolver / SpecResolutionService
 
+    private readonly FaceOrderingService _faceOrdering = new(); // singleton instance reused
     private void BuildOrderedFaces()
     {
-    _orderedFaces.Clear();
-    if (_cards.Count == 0) return;
-    var ordering = new FaceOrderingService();
-    var ordered = ordering.BuildOrderedFaces(_cards, LayoutMode, SlotsPerPage, ColumnsPerPage, _explicitVariantPairKeys);
-    _orderedFaces.AddRange(ordered);
+        _orderedFaces.Clear();
+        if (_cards.Count == 0) return;
+        var ordered = _faceOrdering.BuildOrderedFaces(_cards, LayoutMode, SlotsPerPage, ColumnsPerPage, _explicitVariantPairKeys);
+        _orderedFaces.AddRange(ordered);
     }
 
     private void Refresh()
     {
-        var slotBuilder = new PageSlotBuilder();
-        LeftSlots.Clear(); RightSlots.Clear();
-        if (_views.Count == 0)
+        var presenter = new PageViewPresenter();
+        var result = presenter.Present(_nav, LeftSlots, RightSlots, _orderedFaces, SlotsPerPage, PagesPerBinder, Http, _binderTheme);
+        PageDisplay = result.PageDisplay; OnPropertyChanged(nameof(PageDisplay));
+        BinderBackground = result.BinderBackground; OnPropertyChanged(nameof(BinderBackground));
+        if (_nav.Views.Count>0)
         {
-            PageDisplay = "No pages"; OnPropertyChanged(nameof(PageDisplay)); return;
+            var v = _nav.Views[_nav.CurrentIndex];
+            TriggerPageResolution(v.LeftPage ?? 0, v.RightPage ?? 0);
         }
-        var view = _views[_nav.CurrentIndex];
-        if (view.LeftPage.HasValue)
-            foreach (var s in slotBuilder.BuildPageSlots(_orderedFaces, view.LeftPage.Value, SlotsPerPage, Http)) LeftSlots.Add(s);
-        if (view.RightPage.HasValue)
-            foreach (var s in slotBuilder.BuildPageSlots(_orderedFaces, view.RightPage.Value, SlotsPerPage, Http)) RightSlots.Add(s);
-        TriggerPageResolution(view.LeftPage ?? 0, view.RightPage ?? 0);
-    PageDisplay = slotBuilder.BuildPageDisplay(view, PagesPerBinder);
-        OnPropertyChanged(nameof(PageDisplay));
-        UpdateBinderBackground(view.BinderIndex + 1);
         CommandManager.InvalidateRequerySuggested();
     }
 
@@ -590,60 +585,20 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
+    private readonly PageResolutionBatcher _pageBatcher = new();
     private void TriggerPageResolution(params int[] pageNumbers)
     {
-        // Collect needed spec indices for provided pages plus lookahead page for each
-        var neededSpecs = new HashSet<int>();
-        int desiredFacesStart = int.MaxValue;
-    int preFaceCount = _orderedFaces.Count; // capture current face count so we can detect growth (e.g., MFC back injection)
-        foreach (var p in pageNumbers)
-        {
-            if (p <=0) continue;
-            int startFace = (p -1) * SlotsPerPage;
-            int endFace = startFace + SlotsPerPage * 2; // include lookahead
-            desiredFacesStart = Math.Min(desiredFacesStart, startFace);
-            int faceCounter = 0;
-            for (int si=0; si<_specs.Count && faceCounter < endFace; si++)
-            {
-                if (faceCounter >= startFace && faceCounter < endFace && _specs[si].Resolved == null && !_specs[si].explicitEntry)
-                    neededSpecs.Add(si);
-                faceCounter++;
-                if (_mfcBacks.ContainsKey(si)) faceCounter++; // skip back
-            }
-        }
-        if (neededSpecs.Count == 0) return;
-        var quickList = new List<(string setCode,string number,string? nameOverride,int specIndex)>();
-        foreach (var si in neededSpecs)
-        {
-            var s = _specs[si];
-            quickList.Add((s.setCode, s.number, s.overrideName, si));
-        }
-        _ = Task.Run(async () =>
-        {
-            await _specResolutionService.ResolveAsync(quickList, neededSpecs, 3, _specs, _mfcBacks, s => Status = s);
-            Application.Current.Dispatcher.Invoke(() =>
-            {
-                RebuildCardListFromSpecs();
-                BuildOrderedFaces();
-                bool faceCountChanged = _orderedFaces.Count != preFaceCount;
-                if (faceCountChanged)
-                {
-                    // Page boundaries depend on total face count; rebuild them to avoid duplicated fronts after new MFC backs appear.
-                    RebuildViews();
-                }
-                // redraw current view
-                if (_nav.CurrentIndex < _views.Count)
-                {
-                    var v = _views[_nav.CurrentIndex];
-                    LeftSlots.Clear(); RightSlots.Clear();
-                    var slotBuilder = new PageSlotBuilder();
-                    if (v.LeftPage.HasValue)
-                        foreach (var s in slotBuilder.BuildPageSlots(_orderedFaces, v.LeftPage.Value, SlotsPerPage, Http)) LeftSlots.Add(s);
-                    if (v.RightPage.HasValue)
-                        foreach (var s in slotBuilder.BuildPageSlots(_orderedFaces, v.RightPage.Value, SlotsPerPage, Http)) RightSlots.Add(s);
-                }
-            });
-        });
+        _pageBatcher.Trigger(pageNumbers, SlotsPerPage, _specs, _mfcBacks, _orderedFaces, _explicitVariantPairKeys,
+            _specResolutionService,
+            () => Status,
+            s => Status = s,
+            RebuildCardListFromSpecs,
+            BuildOrderedFaces,
+            RebuildViews,
+            _nav,
+            _views,
+            LeftSlots,
+            RightSlots);
     }
 }
 
