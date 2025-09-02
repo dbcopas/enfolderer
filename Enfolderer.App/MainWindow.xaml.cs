@@ -292,6 +292,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private IReadOnlyList<NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly CardCollectionData _collection = new(); // collection DB data
     private readonly CardQuantityService _quantityService = new(); // phase 2 extracted quantity logic
+    private readonly CollectionRepository _collectionRepo; // phase 3 collection repo
+    private readonly CardBackImageService _backImageService = new();
     private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
     // Expose distinct set codes present in current binder specs/cards
     public HashSet<string> GetCurrentSetCodes()
@@ -333,136 +335,20 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         if (slot.IsPlaceholderBack) { SetStatus("Back face placeholder"); return; }
         if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { SetStatus("No set/number"); return; }
         if (string.IsNullOrEmpty(_currentCollectionDir)) { SetStatus("No collection loaded"); return; }
-        EnsureCollectionLoaded();
+        _collectionRepo.EnsureLoaded(_currentCollectionDir);
         if (!_collection.IsLoaded) { SetStatus("Collection not loaded"); return; }
 
     _quantityService.ToggleQuantity(slot, _currentCollectionDir, _collection, _cards, _orderedFaces, ResolveCardIdFromDb, SetStatus);
     Refresh();
     }
 
-    private void EnsureCollectionLoaded()
-    {
-        try
-        {
-            if (!_collection.IsLoaded && !string.IsNullOrEmpty(_currentCollectionDir))
-            {
-                _collection.Load(_currentCollectionDir);
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[Collection] Ensure load failed: {ex.Message}");
-        }
-    }
+    // EnsureCollectionLoaded logic moved to CollectionRepository
 
-    private int? ResolveCardIdFromDb(string setOriginal, string baseNum, string trimmed)
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(_currentCollectionDir)) return null;
-            string mainDb = System.IO.Path.Combine(_currentCollectionDir, "mainDb.db");
-            if (!File.Exists(mainDb)) return null;
-            using var con = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={mainDb};Mode=ReadOnly");
-            con.Open();
-            // Discover columns
-            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            using (var pragma = con.CreateCommand())
-            {
-                pragma.CommandText = "PRAGMA table_info(Cards)";
-                using var r = pragma.ExecuteReader();
-                while (r.Read()) { try { cols.Add(r.GetString(1)); } catch { } }
-            }
-            string? idCol = cols.Contains("id") ? "id" : (cols.Contains("cardId") ? "cardId" : null);
-            string? editionCol = cols.Contains("edition") ? "edition" : (cols.Contains("set") ? "set" : null);
-            string? numberValueCol = cols.Contains("collectorNumberValue") ? "collectorNumberValue" : (cols.Contains("numberValue") ? "numberValue" : null);
-            if (idCol == null || editionCol == null || numberValueCol == null) return null;
-            // Normalize composite numbers like n(m) to use only leading n for DB lookups
-            int parenIndex = baseNum.IndexOf('(');
-            if (parenIndex > 0) baseNum = baseNum.Substring(0, parenIndex);
-
-            // Candidate numbers list (original, trimmed, progressive stripping)
-            var candidates = new List<string>();
-            void AddCand(string c)
-            {
-                if (string.IsNullOrWhiteSpace(c)) return;
-                if (!candidates.Contains(c, StringComparer.OrdinalIgnoreCase)) candidates.Add(c);
-            }
-            AddCand(baseNum);
-            if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal)) AddCand(trimmed);
-            // Star / special symbol normalization (e.g., WAR Japanese alt art: 1★)
-            if (baseNum.IndexOf('★') >= 0)
-            {
-                var stripped = baseNum.Replace("★", string.Empty);
-                if (!string.IsNullOrWhiteSpace(stripped))
-                {
-                    AddCand(stripped);
-                    var strippedTrim = stripped.TrimStart('0'); if (strippedTrim.Length == 0) strippedTrim = "0";
-                    if (!string.Equals(strippedTrim, stripped, StringComparison.Ordinal)) AddCand(strippedTrim);
-                }
-            }
-            // Progressive strip trailing non-digits
-            string prog = baseNum;
-            while (prog.Length > 0 && !char.IsDigit(prog[^1]))
-            {
-                prog = prog[..^1];
-                if (prog.Length == 0) break;
-                AddCand(prog);
-            }
-
-            // Padding variants: 0n, 00n etc (up to two leading zeros) for both baseNum and trimmed forms
-            List<string> baseForPad = new();
-            if (int.TryParse(baseNum, out _)) baseForPad.Add(baseNum);
-            if (int.TryParse(trimmed, out _)) baseForPad.Add(trimmed);
-            foreach (var b in baseForPad.Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                if (b.Length < 3) // only pad reasonably small numbers to avoid explosion
-                {
-                    if (b.Length == 1)
-                    {
-                        AddCand("0" + b);
-                        AddCand("00" + b);
-                    }
-                    else if (b.Length == 2)
-                    {
-                        AddCand("0" + b);
-                    }
-                }
-            }
-            // Edition candidates (original, upper, lower) to handle case mismatches
-            var editionCandidates = new List<string>();
-            if (!string.IsNullOrEmpty(setOriginal)) editionCandidates.Add(setOriginal);
-            var upper = setOriginal?.ToUpperInvariant();
-            var lower = setOriginal?.ToLowerInvariant();
-            if (!string.IsNullOrEmpty(upper) && !editionCandidates.Contains(upper)) editionCandidates.Add(upper);
-            if (!string.IsNullOrEmpty(lower) && !editionCandidates.Contains(lower)) editionCandidates.Add(lower);
-
-            foreach (var editionCandidate in editionCandidates)
-            {
-                foreach (var cand in candidates)
-                {
-                    using var cmd = con.CreateCommand();
-                    // Use COLLATE NOCASE as an extra safety; still supply candidate edition.
-                    cmd.CommandText = $"SELECT {idCol} FROM Cards WHERE {editionCol}=@set COLLATE NOCASE AND {numberValueCol}=@num LIMIT 1";
-                    cmd.Parameters.AddWithValue("@set", editionCandidate);
-                    cmd.Parameters.AddWithValue("@num", cand);
-                    var val = cmd.ExecuteScalar();
-                    if (val != null && val != DBNull.Value)
-                    {
-                        if (int.TryParse(val.ToString(), out int idVal)) return idVal;
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[Collection] Direct cardId resolve failed: {ex.Message}");
-        }
-        return null;
-    }
+    private int? ResolveCardIdFromDb(string setOriginal, string baseNum, string trimmed) => _collectionRepo.ResolveCardId(_currentCollectionDir, setOriginal, baseNum, trimmed);
     // Explicit pair keys (e.g. base number + language variant) -> enforced pair placement regardless of name differences
-    private readonly Dictionary<CardEntry,string> _explicitPairKeys = new();
-    // Pending variant pairs captured during parse before resolution (set, baseNumber, variantNumber)
-    private readonly List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs = new();
+    private readonly Dictionary<CardEntry,string> _explicitVariantPairKeys = new(); // built by VariantPairingService
+    private readonly List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs = new(); // captured during parse
+    private readonly VariantPairingService _variantPairing = new();
     // _currentViewIndex removed; NavigationService.CurrentIndex is authoritative
     private string? _localBackImagePath; // cached resolved local back image path (or null if not found)
     private static readonly HttpClient Http = CreateClient();
@@ -502,32 +388,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         return c;
     }
-    private string? ResolveLocalBackImagePath(bool logIfMissing)
-    {
-        var names = new[] { "Magic_card_back.jpg", "magic_card_back.jpg", "card_back.jpg", "back.jpg", "Magic_card_back.jpeg", "Magic_card_back.png" };
-        var dirs = new[]
-        {
-            _currentCollectionDir,
-            AppContext.BaseDirectory,
-            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Enfolderer"),
-            Directory.Exists(System.IO.Path.Combine(AppContext.BaseDirectory, "images")) ? System.IO.Path.Combine(AppContext.BaseDirectory, "images") : null
-        };
-        foreach (var dir in dirs.Where(d => !string.IsNullOrWhiteSpace(d)))
-        {
-            try
-            {
-                foreach (var name in names)
-                {
-                    var path = System.IO.Path.Combine(dir!, name);
-                    if (File.Exists(path)) return path;
-                }
-            }
-            catch { }
-        }
-        if (logIfMissing)
-            Debug.WriteLine("[BackImage] No local card back image found.");
-        return null;
-    }
+    // Local back image resolution moved to CardBackImageService
     public void FlashImageFetch(string cardName)
     {
         try
@@ -617,6 +478,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public BinderViewModel()
     {
         RegisterInstance(this);
+        _collectionRepo = new CollectionRepository(_collection);
         if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
         _nav.ViewChanged += NavOnViewChanged;
         NextCommand = new RelayCommand(_ => { if (_nav.CanNext) _nav.Next(); }, _ => _nav.CanNext);
@@ -662,7 +524,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
         // Recompute slot theme seed
         try { var fi = new FileInfo(path); CardSlotTheme.Recalculate(path + fi.LastWriteTimeUtc.Ticks); } catch { CardSlotTheme.Recalculate(path); }
-        var parser = new BinderFileParser(_binderTheme, _metadataResolver, log => ResolveLocalBackImagePath(log), IsCacheComplete);
+    var parser = new BinderFileParser(_binderTheme, _metadataResolver, log => _backImageService.Resolve(_currentCollectionDir, log), IsCacheComplete);
         var parseResult = await parser.ParseAsync(path, SlotsPerPage);
         _currentFileHash = parseResult.FileHash;
         _currentCollectionDir = parseResult.CollectionDir;
@@ -785,7 +647,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private void RebuildCardListFromSpecs()
     {
         _cards.Clear();
-        _explicitPairKeys.Clear();
+    _explicitVariantPairKeys.Clear();
         for (int i=0;i<_specs.Count;i++)
         {
             var s = _specs[i];
@@ -819,17 +681,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                 _cards.Add(back);
         }
         // Build explicit pair key map now that all resolved/placeholder entries exist
-        foreach (var tup in _pendingExplicitVariantPairs)
-        {
-            CardEntry? baseEntry = _cards.FirstOrDefault(c => string.Equals(c.Set, tup.set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number, tup.baseNum, StringComparison.OrdinalIgnoreCase));
-            CardEntry? varEntry = _cards.FirstOrDefault(c => string.Equals(c.Set, tup.set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number, tup.variantNum, StringComparison.OrdinalIgnoreCase));
-            if (baseEntry != null && varEntry != null)
-            {
-                string key = $"{tup.set.ToLowerInvariant()}|{tup.baseNum.ToLowerInvariant()}|{tup.variantNum.ToLowerInvariant()}";
-                _explicitPairKeys[baseEntry] = key;
-                _explicitPairKeys[varEntry] = key;
-            }
-        }
+    var built = _variantPairing.BuildExplicitPairKeyMap(_cards, _pendingExplicitVariantPairs);
+    foreach (var kv in built) _explicitVariantPairKeys[kv.Key] = kv.Value;
     }
 
     // CardSpec record extracted to CardSpec.cs (Phase 1 refactor)
@@ -936,7 +789,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _orderedFaces.Clear();
     if (_cards.Count == 0) return;
     var service = new FaceLayoutService();
-    var ordered = service.BuildOrderedFaces(_cards, LayoutMode, SlotsPerPage, ColumnsPerPage, _explicitPairKeys);
+    var ordered = service.BuildOrderedFaces(_cards, LayoutMode, SlotsPerPage, ColumnsPerPage, _explicitVariantPairKeys);
     _orderedFaces.AddRange(ordered);
     }
 
