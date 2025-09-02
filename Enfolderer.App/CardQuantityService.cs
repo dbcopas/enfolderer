@@ -10,7 +10,7 @@ namespace Enfolderer.App;
 /// Encapsulates quantity enrichment, MFC display adjustment, and toggle persistence logic.
 /// Extracted from MainWindow.xaml.cs (Phase 2 refactor).
 /// </summary>
-internal sealed class CardQuantityService
+public sealed class CardQuantityService
 {
     public void EnrichQuantities(CardCollectionData collection, List<CardEntry> cards)
     {
