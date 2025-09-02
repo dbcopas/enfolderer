@@ -470,8 +470,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public string PageDisplay { get => _pageDisplay; private set { if (_pageDisplay!=value) { _pageDisplay = value; OnPropertyChanged(); } } }
     private Brush _binderBackground = Brushes.Black;
     public Brush BinderBackground { get => _binderBackground; private set { if (_binderBackground!=value) { _binderBackground = value; OnPropertyChanged(); } } }
-    private readonly List<Brush> _customBinderBrushes = new();
-    private readonly List<Brush> _generatedRandomBinderBrushes = new();
+    private readonly BinderThemeService _binderTheme = new();
     private readonly Random _rand = new(12345);
     // Dynamic layout configuration (default 4x3, 40 sides per binder)
     private int _rowsPerPage = 3;
@@ -1022,37 +1021,17 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _localBackImagePath = null; // reset; will lazily resolve when first placeholder encountered
     var lines = await File.ReadAllLinesAsync(path);
     // Directive: first non-comment line starting with ** can specify colors/layout/pages
-    _customBinderBrushes.Clear();
-    _generatedRandomBinderBrushes.Clear();
+    _binderTheme.Reset(path + (new FileInfo(path).LastWriteTimeUtc.Ticks));
     foreach (var dirLine in lines)
     {
         if (string.IsNullOrWhiteSpace(dirLine)) continue;
         var tl = dirLine.Trim();
         if (tl.StartsWith('#')) continue;
-        if (tl.StartsWith("**"))
-        {
-            var payload = tl.Substring(2).Trim();
-            if (!string.IsNullOrEmpty(payload))
-            {
-                var parts = payload.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                foreach (var partRaw in parts)
-                {
-                    var part = partRaw.Trim();
-                    if (part.StartsWith("pages=", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (int.TryParse(part.Substring(6), out int pages) && pages>0) PagesPerBinder = pages;
-                        continue;
-                    }
-                    if (string.Equals(part, "4x3", StringComparison.OrdinalIgnoreCase) || string.Equals(part, "3x3", StringComparison.OrdinalIgnoreCase) || string.Equals(part, "2x2", StringComparison.OrdinalIgnoreCase))
-                    { LayoutMode = part.ToLowerInvariant(); continue; }
-                    if (part.Equals("httplog", StringComparison.OrdinalIgnoreCase) || part.Equals("debughttp", StringComparison.OrdinalIgnoreCase))
-                    { _debugHttpLogging = true; continue; }
-                    if (TryParseColorToken(part, out var b)) _customBinderBrushes.Add(b);
-                }
-            }
-            break; // processed directive (only first considered)
-        }
-        break; // first non-comment line not directive stops search
+        var dr = _binderTheme.ApplyDirectiveLine(tl);
+        if (dr.PagesPerBinder.HasValue) PagesPerBinder = dr.PagesPerBinder.Value;
+        if (!string.IsNullOrEmpty(dr.LayoutMode)) LayoutMode = dr.LayoutMode;
+        if (dr.EnableHttpDebug) _debugHttpLogging = true;
+        break; // only consider first non-comment line
     }
     // Compute hash of input file contents for metadata/image cache lookup
     string fileHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", lines))));
@@ -1977,217 +1956,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private void BuildOrderedFaces()
     {
-        _orderedFaces.Clear();
-        if (_cards.Count == 0) return;
-        // In 3x3 layout we disable pair grouping (MFC adjacency + duplicate-name pairing) and
-        // preserve the natural sequence (front then back already injected during load).
-        if (string.Equals(LayoutMode, "3x3", StringComparison.OrdinalIgnoreCase))
-        {
-            _orderedFaces.AddRange(_cards);
-            return;
-        }
-        // Precompute cards that belong to duplicate name runs of length >=3 so we disable forced pairing for them.
-        var longRunCards = new HashSet<CardEntry>();
-        int iRun = 0;
-        while (iRun < _cards.Count)
-        {
-            var c = _cards[iRun];
-            if (c != null && !c.IsModalDoubleFaced && !c.IsBackFace)
-            {
-                string name = (c.Name ?? string.Empty).Trim();
-                int j = iRun + 1;
-                while (j < _cards.Count)
-                {
-                    var n = _cards[j];
-                    if (n == null || n.IsModalDoubleFaced || n.IsBackFace) break;
-                    if (!string.Equals(name, (n.Name ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)) break;
-                    j++;
-                }
-                int runLen = j - iRun;
-                if (runLen >= 3)
-                {
-                    for (int k = iRun; k < j; k++) longRunCards.Add(_cards[k]);
-                }
-                iRun = j;
-                continue;
-            }
-            iRun++;
-        }
-        // Work on a queue (list) of indices; we will remove as we schedule.
-        var remaining = new List<CardEntry>(_cards); // copy
-        int globalSlot = 0;
-        while (remaining.Count > 0)
-        {
-            int col = (globalSlot % SlotsPerPage) % ColumnsPerPage; // column within current row
-
-            bool IsPairStart(List<CardEntry> list, int idx)
-            {
-                if (idx < 0 || idx >= list.Count) return false;
-                var c = list[idx];
-                if (c == null)
-                {
-                    Debug.WriteLine($"[BuildOrderedFaces] Null entry at index {idx} in remaining list (IsPairStart). Treating as single.");
-                    return false;
-                }
-        bool IsNazgul(CardEntry ce) => string.Equals(ce.Name?.Trim(), "Nazgûl", StringComparison.OrdinalIgnoreCase);
-                bool IsBackPlaceholder(CardEntry ce) => string.Equals(ce.Number, "BACK", StringComparison.OrdinalIgnoreCase);
-                // MFC front + back
-                if (c != null && c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
-                {
-                    var next = list[idx + 1];
-                    if (next != null && next.IsBackFace) return true;
-                }
-                // Explicit variant pair (base + language variant) irrespective of name match
-                if (_explicitPairKeys.Count > 0)
-                {
-                    if (idx + 1 < list.Count && c != null && _explicitPairKeys.TryGetValue(c, out var key1))
-                    {
-                        var n2 = list[idx + 1];
-                        if (n2 != null && _explicitPairKeys.TryGetValue(n2, out var key2) && key1 == key2)
-                        {
-                            return true;
-                        }
-                    }
-                }
-                // Duplicate pair (exactly two identical names, excluding long runs)
-                if (c != null && !c.IsModalDoubleFaced && !c.IsBackFace && idx + 1 < list.Count)
-                {
-                    var n = list[idx + 1];
-                    if (n != null && !n.IsModalDoubleFaced && !n.IsBackFace)
-                    {
-                        // Treat consecutive backface placeholders as independent singles (never force pair alignment)
-                        if (IsBackPlaceholder(c) && IsBackPlaceholder(n)) return false;
-            // Nazgûl copies are always treated as independent singles (no enforced pairing)
-            if (IsNazgul(c) && IsNazgul(n)) return false;
-                        var cName = c.Name ?? string.Empty;
-                        var nName = n.Name ?? string.Empty;
-                        if (string.Equals(cName.Trim(), nName.Trim(), StringComparison.OrdinalIgnoreCase))
-                        {
-                            // If either card is in a long run (>=3), do not treat as a pair
-                            if (longRunCards.Contains(c) || longRunCards.Contains(n)) return false;
-                            // Check if there is a third consecutive with same name; if so, treat all as singles
-                            if (idx + 2 < list.Count)
-                            {
-                                var third = list[idx + 2];
-                                if (third != null && !third.IsModalDoubleFaced && !third.IsBackFace)
-                                {
-                                    var tName = third.Name ?? string.Empty;
-                                    if (string.Equals(cName.Trim(), tName.Trim(), StringComparison.OrdinalIgnoreCase))
-                                        return false; // 3+ run -> no enforced pairing
-                                }
-                            }
-                            return true; // exactly two
-                        }
-                    }
-                }
-                return false;
-            }
-
-            bool IsSecondOfPair(List<CardEntry> list, int idx)
-            {
-                if (idx <= 0 || idx >= list.Count) return false;
-                var c = list[idx];
-                if (c == null)
-                {
-                    Debug.WriteLine($"[BuildOrderedFaces] Null entry at index {idx} in remaining list (IsSecondOfPair). Treating as single.");
-                    return false;
-                }
-                // MFC back face is inherently second
-                if (c.IsBackFace) return true;
-                // Explicit variant pair second
-                if (_explicitPairKeys.Count > 0)
-                {
-                    var prevExp = list[idx - 1];
-                    if (prevExp != null && c != null && _explicitPairKeys.TryGetValue(prevExp, out var pk1) && _explicitPairKeys.TryGetValue(c, out var pk2) && pk1 == pk2)
-                        return true;
-                }
-                // Duplicate second if previous + this form a standard duplicate-name pair
-                var prev = list[idx - 1];
-                if (prev != null && c != null && !prev.IsModalDoubleFaced && !prev.IsBackFace && !c.IsModalDoubleFaced && !c.IsBackFace)
-                {
-                    bool IsBackPlaceholder(CardEntry ce) => string.Equals(ce.Number, "BACK", StringComparison.OrdinalIgnoreCase);
-                    bool IsNazgul(CardEntry ce) => string.Equals(ce.Name?.Trim(), "Nazgûl", StringComparison.OrdinalIgnoreCase);
-                    // If both are backface placeholders, treat as independent singles
-                    if (IsBackPlaceholder(prev) && IsBackPlaceholder(c)) return false;
-                    // Nazgûl copies: never second of a forced pair
-                    if (IsNazgul(prev) && IsNazgul(c)) return false;
-                    var prevName = prev.Name ?? string.Empty;
-                    var cName = c.Name ?? string.Empty;
-                    if (string.Equals(prevName.Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase))
-                    {
-                        // If either card belongs to a long run (>=3), skip pairing logic.
-                        if (longRunCards.Contains(prev) || longRunCards.Contains(c)) return false;
-                        // Ensure not part of a 3+ run: if previous-previous shares name or next shares name, skip
-                        bool hasPrevPrev = idx - 2 >= 0 && list[idx - 2] != null && !list[idx - 2].IsModalDoubleFaced && !list[idx - 2].IsBackFace && string.Equals((list[idx-2].Name??string.Empty).Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase);
-                        bool hasNext = idx + 1 < list.Count && list[idx + 1] != null && !list[idx + 1].IsModalDoubleFaced && !list[idx + 1].IsBackFace && string.Equals((list[idx+1].Name??string.Empty).Trim(), cName.Trim(), StringComparison.OrdinalIgnoreCase);
-                        if (hasPrevPrev || hasNext) return false; // part of 3+ run => not a strict second
-                        return true; // exactly a second of a 2-run
-                    }
-                }
-                return false;
-            }
-
-            // Determine group at head
-            int groupSize;
-            if (IsPairStart(remaining, 0)) groupSize = 2; else groupSize = 1;
-            if (groupSize == 2)
-            {
-                // Need to start pair at an even column. Last column cannot host first half of a pair.
-                if (col % 2 == 1 || col == ColumnsPerPage -1)
-                {
-                    // Find first true single later (not part of any pair front or back, nor second half)
-                    int singleIndex = -1;
-                    for (int i = 1; i < remaining.Count; i++)
-                    {
-                        var cand = remaining[i];
-                        bool isBackPlaceholder = string.Equals(cand.Number, "BACK", StringComparison.OrdinalIgnoreCase);
-                        if (isBackPlaceholder) continue; // skip placeholder itself but keep searching beyond it
-                        if (!IsPairStart(remaining, i) && !IsSecondOfPair(remaining, i) && !cand.IsBackFace)
-                        {
-                            singleIndex = i;
-                            break;
-                        }
-                    }
-                    if (singleIndex != -1)
-                    {
-                        // Pull forward that single to fill this misaligned slot
-                        _orderedFaces.Add(remaining[singleIndex]);
-                        remaining.RemoveAt(singleIndex);
-                        globalSlot++;
-                        continue; // reconsider same pair at next column (which will now be even)
-                    }
-                    // Fallback: no singles available, we must place pair misaligned (will straddle rows) to avoid holes.
-                }
-            }
-
-            if (groupSize == 1)
-            {
-                if (remaining[0] == null)
-                {
-                    Debug.WriteLine("[BuildOrderedFaces] Encountered null single at head; skipping.");
-                    remaining.RemoveAt(0);
-                    continue;
-                }
-                _orderedFaces.Add(remaining[0]);
-                remaining.RemoveAt(0);
-                globalSlot++;
-            }
-            else // groupSize == 2
-            {
-                if (remaining[0] == null || remaining[1] == null)
-                {
-                    Debug.WriteLine("[BuildOrderedFaces] Encountered null within pair; downgrading to single placement.");
-                    if (remaining[0] != null) { _orderedFaces.Add(remaining[0]); }
-                    remaining.RemoveAt(0);
-                    globalSlot++;
-                    continue;
-                }
-                _orderedFaces.Add(remaining[0]);
-                _orderedFaces.Add(remaining[1]);
-                remaining.RemoveRange(0, 2);
-                globalSlot += 2;
-            }
-        }
+    _orderedFaces.Clear();
+    if (_cards.Count == 0) return;
+    var service = new FaceLayoutService();
+    var ordered = service.BuildOrderedFaces(_cards, LayoutMode, SlotsPerPage, ColumnsPerPage, _explicitPairKeys);
+    _orderedFaces.AddRange(ordered);
     }
 
     private void Refresh()
@@ -2233,22 +2006,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private void UpdateBinderBackground(int binderNumber)
     {
         // Binder numbering starts at 1; we no longer force binder 1 to black.
-        int idx = binderNumber - 1; // zero-based index into custom/random sequence
-        Brush baseBrush;
-        if (idx < _customBinderBrushes.Count)
-        {
-            baseBrush = _customBinderBrushes[idx];
-        }
-        else
-        {
-            int needed = idx - _customBinderBrushes.Count;
-            while (_generatedRandomBinderBrushes.Count <= needed)
-            {
-                var col = Color.FromRgb((byte)_rand.Next(48,256), (byte)_rand.Next(48,256), (byte)_rand.Next(48,256));
-                _generatedRandomBinderBrushes.Add(new SolidColorBrush(col));
-            }
-            baseBrush = _generatedRandomBinderBrushes[needed];
-        }
+    int idx = binderNumber - 1;
+    Brush baseBrush = _binderTheme.GetBrushForBinder(idx);
         var solid = baseBrush as SolidColorBrush;
         var c = solid?.Color ?? Colors.Gray;
         var brush = new LinearGradientBrush();
@@ -2284,40 +2043,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         _ = Task.WhenAll(tasks);
     }
 
-    private bool TryParseColorToken(string token, out Brush brush)
-    {
-        brush = Brushes.Transparent;
-        if (string.IsNullOrWhiteSpace(token)) return false;
-        token = token.Trim();
-        // Try known colors via ColorConverter
-        try
-        {
-            var obj = ColorConverter.ConvertFromString(token);
-            if (obj is Color col)
-            {
-                var solid = new SolidColorBrush(col);
-                if (solid.CanFreeze) solid.Freeze();
-                brush = solid;
-                return true;
-            }
-        }
-        catch { }
-        // Hex shorthand without #
-        if (Regex.IsMatch(token, "^[0-9A-Fa-f]{6}$"))
-        {
-            try
-            {
-                byte r = Convert.ToByte(token.Substring(0,2),16);
-                byte g = Convert.ToByte(token.Substring(2,2),16);
-                byte b = Convert.ToByte(token.Substring(4,2),16);
-                var solid = new SolidColorBrush(Color.FromRgb(r,g,b));
-                if (solid.CanFreeze) solid.Freeze();
-                brush = solid;
-                return true;
-            } catch { }
-        }
-        return false;
-    }
+    // Color token parsing moved into BinderThemeService
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
