@@ -1017,40 +1017,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     public void LoadFromFile(string path)
     {
-        var lines = File.ReadAllLines(path);
-        _cards.Clear();
-        foreach (var line in lines)
-        {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            var trimmed = line.TrimStart();
-            if (trimmed.StartsWith('#')) continue; // comment line
-            try
-            {
-                var entry = CardEntry.FromCsv(line);
-                _cards.Add(entry);
-                if (entry.IsModalDoubleFaced)
-                {
-                    // Add a synthetic back side with same number + marker
-                    // Build back display: show original front (if parsed) with back in parentheses if we had both
-                    string backDisplay;
-                    if (!string.IsNullOrWhiteSpace(entry.FrontRaw) && !string.IsNullOrWhiteSpace(entry.BackRaw))
-                        backDisplay = $"{entry.BackRaw} ({entry.FrontRaw})";
-                    else
-                        backDisplay = entry.Name + " (Back)";
-                    // Preserve IsModalDoubleFaced=true for synthetic back so adjustment logic can detect
-                    _cards.Add(new CardEntry(backDisplay, entry.Number, entry.Set, true, true, entry.FrontRaw, entry.BackRaw, entry.DisplayNumber));
-                }
-            }
-            catch
-            {
-                // ignore malformed lines
-            }
-        }
-        Status = $"Loaded {_cards.Count} faces from file.";
-        BuildOrderedFaces();
-    _nav.ResetIndex();
-        RebuildViews();
-        Refresh();
+    // Legacy synchronous loader removed (unused). Use LoadFromFileAsync instead.
     }
 
     // New format loader (async):
@@ -1061,461 +1028,63 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     // numberStart-numberEnd  (inclusive range) optionally followed by ; prefix for name hints (ignored here)
     public async Task LoadFromFileAsync(string path)
     {
-    // Recompute slot theme (seeded by file path + last write ticks for variability when file changes)
-    try { var fi = new FileInfo(path); CardSlotTheme.Recalculate(path + fi.LastWriteTimeUtc.Ticks); } catch { CardSlotTheme.Recalculate(path); }
-    _currentCollectionDir = System.IO.Path.GetDirectoryName(path);
-    _localBackImagePath = null; // reset; will lazily resolve when first placeholder encountered
-    var lines = await File.ReadAllLinesAsync(path);
-    // Directive: first non-comment line starting with ** can specify colors/layout/pages
-    _binderTheme.Reset(path + (new FileInfo(path).LastWriteTimeUtc.Ticks));
-    foreach (var dirLine in lines)
-    {
-        if (string.IsNullOrWhiteSpace(dirLine)) continue;
-        var tl = dirLine.Trim();
-        if (tl.StartsWith('#')) continue;
-        var dr = _binderTheme.ApplyDirectiveLine(tl);
-        if (dr.PagesPerBinder.HasValue) PagesPerBinder = dr.PagesPerBinder.Value;
-        if (!string.IsNullOrEmpty(dr.LayoutMode)) LayoutMode = dr.LayoutMode;
-        if (dr.EnableHttpDebug) _debugHttpLogging = true;
-        break; // only consider first non-comment line
-    }
-    // Compute hash of input file contents for metadata/image cache lookup
-    string fileHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", lines))));
-    _currentFileHash = fileHash;
-    if (IsCacheComplete(fileHash) && _metadataResolver.TryLoadMetadataCache(fileHash, _cards))
-    {
-        Status = "Loaded metadata from cache.";
-        BuildOrderedFaces();
-    _nav.ResetIndex();
-        RebuildViews();
-        Refresh();
-        // Fire off background image warm for first two pages (slots) if desired later
-        return;
-    }
-    _cards.Clear();
-    _specs.Clear();
-    _mfcBacks.Clear();
-    _orderedFaces.Clear();
-        string? currentSet = null;
-    var fetchList = new List<(string setCode,string number,string? nameOverride,int specIndex)>();
-        // Helper for paired range expansion (primary & secondary ranges of equal length)
-        static List<string> ExpandSimpleNumericRange(string text)
+        // Recompute slot theme seed
+        try { var fi = new FileInfo(path); CardSlotTheme.Recalculate(path + fi.LastWriteTimeUtc.Ticks); } catch { CardSlotTheme.Recalculate(path); }
+        var parser = new BinderFileParser(_binderTheme, _metadataResolver, log => ResolveLocalBackImagePath(log), IsCacheComplete);
+        var parseResult = await parser.ParseAsync(path, SlotsPerPage);
+        _currentFileHash = parseResult.FileHash;
+        _currentCollectionDir = parseResult.CollectionDir;
+        if (parseResult.PagesPerBinderOverride.HasValue) PagesPerBinder = parseResult.PagesPerBinderOverride.Value;
+        if (!string.IsNullOrEmpty(parseResult.LayoutModeOverride)) LayoutMode = parseResult.LayoutModeOverride;
+        if (parseResult.HttpDebugEnabled) _debugHttpLogging = true;
+        _localBackImagePath = parseResult.LocalBackImagePath; // may be null
+        _cards.Clear();
+        _specs.Clear();
+        _mfcBacks.Clear();
+        _orderedFaces.Clear();
+        _pendingExplicitVariantPairs.Clear();
+        if (parseResult.CacheHit)
         {
-            var list = new List<string>();
-            text = text.Trim();
-            if (string.IsNullOrEmpty(text)) return list;
-            if (text.Contains('-'))
-            {
-                var parts = text.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length == 2 && int.TryParse(parts[0], out int s) && int.TryParse(parts[1], out int e) && s <= e)
-                {
-                    for (int n = s; n <= e; n++) list.Add(n.ToString());
-                    return list;
-                }
-            }
-            if (int.TryParse(text, out int single)) list.Add(single.ToString());
-            return list;
+            _cards.AddRange(parseResult.CachedCards);
+            Status = "Loaded metadata from cache.";
+            BuildOrderedFaces();
+            _nav.ResetIndex();
+            RebuildViews();
+            Refresh();
+            return;
         }
-        foreach (var raw in lines)
+        foreach (var ps in parseResult.Specs)
         {
-            if (string.IsNullOrWhiteSpace(raw)) continue;
-            var line = raw.Trim();
-            if (line.StartsWith("**")) continue; // skip directive line completely
-            if (line.StartsWith('#')) continue;
-            // Backface placeholder syntax: "N;backface" => insert N placeholder slots showing MTG card back
-            var backfaceMatch = Regex.Match(line, @"^(?<count>\d+)\s*;\s*backface$", RegexOptions.IgnoreCase);
-            if (backfaceMatch.Success)
+            var cs = new CardSpec(ps.SetCode, ps.Number, ps.OverrideName, ps.ExplicitEntry, ps.NumberDisplayOverride)
             {
-                if (int.TryParse(backfaceMatch.Groups["count"].Value, out int backCount) && backCount > 0)
-                {
-                    // Resolve local placeholder image path (cached) on first use
-                    if (_localBackImagePath == null)
-                        _localBackImagePath = ResolveLocalBackImagePath(logIfMissing:true);
-                    bool hasLocal = _localBackImagePath != null && File.Exists(_localBackImagePath);
-                    for (int bi = 0; bi < backCount; bi++)
-                    {
-                        var spec = new CardSpec("__BACK__", "BACK", overrideName: null, explicitEntry: true);
-                        _specs.Add(spec);
-                        var entry = new CardEntry("Backface", "BACK", "__BACK__", false, true, null, null, string.Empty);
-                        // Map image URL (front & back same) to local file if present, else fallback to remote standard back.
-                        var frontUrl = hasLocal ? _localBackImagePath! : "https://c1.scryfall.com/file/scryfall-card-backs/en.png";
-                        CardImageUrlStore.Set("__BACK__", "BACK", frontUrl, frontUrl);
-                        _specs[^1] = _specs[^1] with { Resolved = entry };
-                    }
-                }
-                continue; // processed line
-            }
-            if (line.StartsWith('=') && line.Length>1)
-            {
-                currentSet = line.Substring(1).Trim();
-                continue;
-            }
-            if (currentSet == null) continue; // ignore until a set code defined
-            // Explicit placeholder/card line: Name;SetCode;Number (bypasses API, used for tokens or custom entries)
-            // Detect by having at least two semicolons and last segment numeric
-            if (line.Count(c => c==';') >= 2)
-            {
-                var parts = line.Split(';', StringSplitOptions.TrimEntries);
-                if (parts.Length >=3)
-                {
-                    string possibleName = parts[0];
-                    string possibleSet = parts[1].ToUpperInvariant();
-                    string possibleNumber = parts[2];
-                    if (int.TryParse(possibleNumber, out _))
-                    {
-            _specs.Add(new CardSpec(possibleSet, possibleNumber, overrideName: possibleName, explicitEntry:true));
-                        continue;
-                    }
-                }
-            }
-            // Range or single
-            string? nameOverride = null;
-            var semiIdx = line.IndexOf(';');
-            string numberPart = line;
-            if (semiIdx >=0)
-            {
-                numberPart = line.Substring(0, semiIdx).Trim();
-                nameOverride = line.Substring(semiIdx+1).Trim();
-                if (nameOverride.Length==0) nameOverride = null;
-            }
-            // Support prefixed collector numbers like "RA 1-8" or "GR 5" => RA1..RA8 / GR5
-            // Pattern: PREFIX (letters) whitespace startNumber optional - endNumber
-            var prefixRangeMatch = Regex.Match(numberPart, @"^(?<pfx>[A-Za-z]{1,8})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
-            if (prefixRangeMatch.Success)
-            {
-                var pfx = prefixRangeMatch.Groups["pfx"].Value.Trim();
-                var startStr = prefixRangeMatch.Groups["start"].Value;
-                var endGrp = prefixRangeMatch.Groups["end"];
-                if (endGrp.Success && int.TryParse(startStr, out int ps) && int.TryParse(endGrp.Value, out int pe) && ps <= pe)
-                {
-                    for (int n = ps; n <= pe; n++)
-                    {
-                        var fullNum = pfx + n.ToString();
-                        _specs.Add(new CardSpec(currentSet, fullNum, null, false));
-                        fetchList.Add((currentSet, fullNum, null, _specs.Count-1));
-                    }
-                    continue;
-                }
-                else
-                {
-                    // Single prefixed number
-                    var fullNum = pfx + startStr;
-                    _specs.Add(new CardSpec(currentSet, fullNum, nameOverride, false));
-                    fetchList.Add((currentSet, fullNum, nameOverride, _specs.Count-1));
-                    continue;
-                }
-            }
-            // Paired range syntax: 296-340&&361-405 -> single slots whose NUMBER displays as "296(361)", name remains the fetched card name.
-            if (numberPart.Contains("&&"))
-            {
-                var pairSegs = numberPart.Split("&&", 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-                if (pairSegs.Length == 2)
-                {
-                    var primaryList = ExpandSimpleNumericRange(pairSegs[0]);
-                    var secondaryList = ExpandSimpleNumericRange(pairSegs[1]);
-                    if (primaryList.Count > 0 && primaryList.Count == secondaryList.Count)
-                    {
-                        for (int i = 0; i < primaryList.Count; i++)
-                        {
-                            var prim = primaryList[i];
-                            var sec = secondaryList[i];
-                            var numberDisplay = prim + "(" + sec + ")";
-                            // numberDisplayOverride stores the composite number; overrideName stays null so real name is fetched
-                            _specs.Add(new CardSpec(currentSet, prim, null, false, numberDisplay));
-                            fetchList.Add((currentSet, prim, null, _specs.Count -1));
-                        }
-                        continue; // processed line
-                    }
-                }
-            }
-            // Generalized attached OR spaced prefix + range or single: e.g. J1-5, J1, 2024-0 7-8 (prefix may include digits and hyphens), 2024-07
-            // Skip this block if it's a pure numeric range (e.g. 1-44) so later generic range logic handles it.
-            bool isPureNumericRange = Regex.IsMatch(numberPart, @"^\d+-\d+$");
-            if (!isPureNumericRange)
-            {
-                // Pattern 1: Attached prefix: <prefix><start>(-<end>)? where prefix must contain at least one letter (avoid treating 1-44 as prefix 1- + 44)
-                var attachedPrefixMatch = Regex.Match(numberPart, @"^(?<pfx>(?=.*[A-Za-z])[A-Za-z0-9\-]{1,24}?)(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
-                if (attachedPrefixMatch.Success)
-                {
-                    var pfx = attachedPrefixMatch.Groups["pfx"].Value;
-                    var startStr = attachedPrefixMatch.Groups["start"].Value;
-                    var endGrp = attachedPrefixMatch.Groups["end"];
-                    int width = startStr.Length; // preserve zero padding
-                    if (endGrp.Success && int.TryParse(startStr, out int aps) && int.TryParse(endGrp.Value, out int ape) && aps <= ape)
-                    {
-                        for (int n = aps; n <= ape; n++)
-                        {
-                            var fullNum = pfx + n.ToString().PadLeft(width, '0');
-                            _specs.Add(new CardSpec(currentSet, fullNum, null, false));
-                            fetchList.Add((currentSet, fullNum, null, _specs.Count -1));
-                        }
-                        continue;
-                    }
-                    else
-                    {
-                        // Single
-                        var fullNum = pfx + startStr;
-                        _specs.Add(new CardSpec(currentSet, fullNum, nameOverride, false));
-                        fetchList.Add((currentSet, fullNum, nameOverride, _specs.Count -1));
-                        continue;
-                    }
-                }
-            }
-            // Pattern 2: Spaced general prefix with range or single (expands earlier letter-only rule): <prefix> <start>(-<end>)?
-            var spacedPrefixMatch = Regex.Match(numberPart, @"^(?<pfx>[A-Za-z0-9\-]{1,24})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
-            if (spacedPrefixMatch.Success)
-            {
-                var pfx = spacedPrefixMatch.Groups["pfx"].Value;
-                var startStr = spacedPrefixMatch.Groups["start"].Value;
-                var endGrp = spacedPrefixMatch.Groups["end"];
-                int width = startStr.Length;
-                if (endGrp.Success && int.TryParse(startStr, out int sps) && int.TryParse(endGrp.Value, out int spe) && sps <= spe)
-                {
-                    for (int n = sps; n <= spe; n++)
-                    {
-                        var fullNum = pfx + n.ToString().PadLeft(width, '0');
-                        _specs.Add(new CardSpec(currentSet, fullNum, null, false));
-                        fetchList.Add((currentSet, fullNum, null, _specs.Count-1));
-                    }
-                    continue;
-                }
-                else
-                {
-                    var fullNum = pfx + startStr;
-                    _specs.Add(new CardSpec(currentSet, fullNum, nameOverride, false));
-                    fetchList.Add((currentSet, fullNum, nameOverride, _specs.Count-1));
-                    continue;
-                }
-            }
-            // Pattern 3: Range with suffix (e.g. 2J-b, 5J-b or 01X etc.)  start-end<suffix> OR start-end <suffix>
-            var rangeSuffixMatch = Regex.Match(numberPart, @"^(?<start>\d+)-(?: (?<endSpace>\d+)|(?<end>\d+))(?<suffix>[A-Za-z][A-Za-z0-9\-]+)$", RegexOptions.Compiled);
-            if (rangeSuffixMatch.Success)
-            {
-                string startStr = rangeSuffixMatch.Groups["start"].Value;
-                string endStr = rangeSuffixMatch.Groups["end"].Success ? rangeSuffixMatch.Groups["end"].Value : rangeSuffixMatch.Groups["endSpace"].Value;
-                string suffix = rangeSuffixMatch.Groups["suffix"].Value;
-                if (int.TryParse(startStr, out int rs) && int.TryParse(endStr, out int re) && rs <= re)
-                {
-                    int width = startStr.Length;
-                    for (int n = rs; n <= re; n++)
-                    {
-                        var fullNum = n.ToString().PadLeft(width, '0') + suffix;
-                        _specs.Add(new CardSpec(currentSet, fullNum, null, false));
-                        fetchList.Add((currentSet, fullNum, null, _specs.Count -1));
-                    }
-                    continue;
-                }
-            }
-            // Pattern 4: Single number with suffix (e.g. 2J-b)
-            var singleSuffixMatch = Regex.Match(numberPart, @"^(?<num>\d+)(?<suffix>[A-Za-z][A-Za-z0-9\-]+)$", RegexOptions.Compiled);
-            if (singleSuffixMatch.Success)
-            {
-                var numStr = singleSuffixMatch.Groups["num"].Value;
-                var suffix = singleSuffixMatch.Groups["suffix"].Value;
-                var fullNum = numStr + suffix;
-                _specs.Add(new CardSpec(currentSet, fullNum, nameOverride, false));
-                fetchList.Add((currentSet, fullNum, nameOverride, _specs.Count -1));
-                continue;
-            }
-            // Star suffix syntax: "★1-36" expands to 1★,2★,...,36★ (input has leading star, meaning output gets trailing star)
-            if (numberPart.StartsWith('★'))
-            {
-                var starBody = numberPart.Substring(1).Trim();
-                if (starBody.Contains('-'))
-                {
-                    var pieces = starBody.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-                    if (pieces.Length == 2 && int.TryParse(pieces[0], out int s) && int.TryParse(pieces[1], out int e) && s <= e)
-                    {
-                        for (int n=s; n<=e; n++)
-                        {
-                            var fullNum = n.ToString() + '★';
-                            _specs.Add(new CardSpec(currentSet, fullNum, null, false));
-                            fetchList.Add((currentSet, fullNum, null, _specs.Count-1));
-                        }
-                        continue;
-                    }
-                }
-                // Single number with leading star => trailing star number
-                if (int.TryParse(starBody, out int singleStar))
-                {
-                    var fullNum = singleStar.ToString() + '★';
-                    _specs.Add(new CardSpec(currentSet, fullNum, nameOverride, false));
-                    fetchList.Add((currentSet, fullNum, nameOverride, _specs.Count-1));
-                    continue;
-                }
-            }
-            // Interleaving syntax: a line containing "||" splits into multiple segments; we round-robin them.
-            if (numberPart.Contains("||", StringComparison.Ordinal))
-            {
-                var segments = numberPart.Split("||", StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-                if (segments.Length > 1)
-                {
-                    var lists = new List<List<string>>();
-                    foreach (var seg in segments)
-                    {
-                        // Each segment can be a range A-B or single C
-                        var segPrefixMatch = Regex.Match(seg, @"^(?<pfx>[A-Za-z]{1,8})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
-                        if (segPrefixMatch.Success)
-                        {
-                            var pfx = segPrefixMatch.Groups["pfx"].Value;
-                            var sStr = segPrefixMatch.Groups["start"].Value;
-                            var eGrp = segPrefixMatch.Groups["end"];
-                            if (eGrp.Success && int.TryParse(sStr, out int sNum) && int.TryParse(eGrp.Value, out int eNum) && sNum <= eNum)
-                            {
-                                var l = new List<string>();
-                                for (int n = sNum; n <= eNum; n++) l.Add(pfx + n.ToString());
-                                lists.Add(l);
-                            }
-                            else
-                            {
-                                lists.Add(new List<string>{ pfx + sStr });
-                            }
-                        }
-                        else if (seg.Contains('-', StringComparison.Ordinal))
-                        {
-                            var pieces = seg.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-                            if (pieces.Length==2 && int.TryParse(pieces[0], out int s) && int.TryParse(pieces[1], out int e) && s<=e)
-                            {
-                                var l = new List<string>();
-                                for (int n=s; n<=e; n++) l.Add(n.ToString());
-                                lists.Add(l);
-                            }
-                        }
-                        else if (int.TryParse(seg, out int singleNum))
-                        {
-                            lists.Add(new List<string>{ singleNum.ToString() });
-                        }
-                    }
-                    if (lists.Count > 0)
-                    {
-                        bool anyLeft;
-                        do
-                        {
-                            anyLeft = false;
-                            foreach (var l in lists)
-                            {
-                                if (l.Count == 0) continue;
-                                _specs.Add(new CardSpec(currentSet, l[0], null, false));
-                                fetchList.Add((currentSet, l[0], null, _specs.Count-1));
-                                l.RemoveAt(0);
-                                if (l.Count > 0) anyLeft = true; // still more in at least one list
-                            }
-                            // If after removing first elements some lists still have items, loop continues
-                            anyLeft = lists.Exists(x => x.Count > 0);
-                        } while (anyLeft);
-                        continue; // processed this line fully
-                    }
-                }
-            }
-            // Range with language variant syntax: N-M+lang => for each number k in [N,M] add k and k/lang variant
-            var rangeVariantMatch = Regex.Match(numberPart, @"^(?<start>\d+)-(?:)(?<end>\d+)\+(?<lang>[A-Za-z]{1,8})$", RegexOptions.Compiled);
-            if (rangeVariantMatch.Success)
-            {
-                var startStr = rangeVariantMatch.Groups["start"].Value;
-                var endStr = rangeVariantMatch.Groups["end"].Value;
-                var lang = rangeVariantMatch.Groups["lang"].Value.ToLowerInvariant();
-                if (int.TryParse(startStr, out int rs) && int.TryParse(endStr, out int re) && rs <= re)
-                {
-                    int padWidth = (startStr.StartsWith('0') && startStr.Length == endStr.Length) ? startStr.Length : 0;
-                    for (int k = rs; k <= re; k++)
-                    {
-                        var baseNum = padWidth>0 ? k.ToString().PadLeft(padWidth,'0') : k.ToString();
-                        _specs.Add(new CardSpec(currentSet, baseNum, nameOverride, false));
-                        fetchList.Add((currentSet, baseNum, nameOverride, _specs.Count-1));
-                        var variantNumber = baseNum + "/" + lang;
-                        var variantDisplay = baseNum + " (" + lang + ")";
-                        _specs.Add(new CardSpec(currentSet, variantNumber, nameOverride, false, variantDisplay));
-                        fetchList.Add((currentSet, variantNumber, nameOverride, _specs.Count-1));
-                        try { _pendingExplicitVariantPairs.Add((currentSet, baseNum, variantNumber)); } catch { }
-                    }
-                    continue;
-                }
-            }
-            if (numberPart.Contains('-', StringComparison.Ordinal))
-            {
-                var pieces = numberPart.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-                if (pieces.Length==2 && int.TryParse(pieces[0], out int startNum) && int.TryParse(pieces[1], out int endNum) && startNum<=endNum)
-                {
-                    int padWidth = (pieces[0].StartsWith('0') && pieces[0].Length == pieces[1].Length) ? pieces[0].Length : 0;
-                    for (int n=startNum; n<=endNum; n++)
-                    {
-                        var numStr = padWidth>0 ? n.ToString().PadLeft(padWidth,'0') : n.ToString();
-                        _specs.Add(new CardSpec(currentSet, numStr, null, false));
-                        fetchList.Add((currentSet, numStr, null, _specs.Count-1));
-                    }
-                }
-                continue;
-            }
-            // Variant language/extra path segment syntax: N+xx => two entries: N and N/xx (API path segment variant)
-            var plusVariantMatch = Regex.Match(numberPart, @"^(?<base>[A-Za-z0-9]+)\+(?<seg>[A-Za-z]{1,8})$", RegexOptions.Compiled);
-            if (plusVariantMatch.Success)
-            {
-                var baseNum = plusVariantMatch.Groups["base"].Value;
-                var seg = plusVariantMatch.Groups["seg"].Value.ToLowerInvariant();
-                // Base printing
-                _specs.Add(new CardSpec(currentSet, baseNum, nameOverride, false));
-                fetchList.Add((currentSet, baseNum, nameOverride, _specs.Count-1));
-                // Variant printing uses extra path segment (e.g. 804/ja)
-                var variantNumber = baseNum + "/" + seg;
-                var variantDisplay = baseNum + " (" + seg + ")"; // show language in display number
-                _specs.Add(new CardSpec(currentSet, variantNumber, nameOverride, false, variantDisplay));
-                fetchList.Add((currentSet, variantNumber, nameOverride, _specs.Count-1));
-                // Record explicit pair key (set+baseNum) used later after resolution to enforce pairing
-                try { _pendingExplicitVariantPairs.Add((currentSet, baseNum, variantNumber)); } catch { }
-                continue;
-            }
-            // Single number
-            var num = numberPart.Trim();
-            if (num.Length>0)
-            {
-                _specs.Add(new CardSpec(currentSet, num, nameOverride, false));
-                fetchList.Add((currentSet, num, nameOverride, _specs.Count-1));
-            }
+                Resolved = ps.Resolved
+            };
+            _specs.Add(cs);
         }
-        // Lazy initial fetch: just enough for first two pages (current + lookahead)
-        int neededFaces = SlotsPerPage * 2; // 24
-        var initialSpecIndexes = new HashSet<int>();
-        for (int i = 0; i < _specs.Count && initialSpecIndexes.Count < neededFaces; i++) initialSpecIndexes.Add(i);
-    await ResolveSpecsWithServiceAsync(fetchList, initialSpecIndexes);
+        foreach (var p in parseResult.PendingVariantPairs) _pendingExplicitVariantPairs.Add(p);
+        await ResolveSpecsWithServiceAsync(parseResult.FetchList, parseResult.InitialSpecIndexes);
         RebuildCardListFromSpecs();
-        // Attempt to load local collection DBs (same folder as binder file)
-        var dir = System.IO.Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir))
+        // Load collection DBs
+        if (!string.IsNullOrEmpty(_currentCollectionDir))
         {
-            try
-            {
-                _collection.Load(dir);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[Collection] Load failed (db): {ex.Message}");
-            }
+            try { _collection.Load(_currentCollectionDir); } catch (Exception ex) { Debug.WriteLine($"[Collection] Load failed (db): {ex.Message}"); }
             if (_collection.IsLoaded && _collection.Quantities.Count > 0)
             {
-                try
-                {
-                    EnrichQuantitiesFromCollection();
-                    AdjustMfcQuantities();
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}");
-                }
+                try { EnrichQuantitiesFromCollection(); AdjustMfcQuantities(); } catch (Exception ex) { Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}"); }
             }
         }
         Status = $"Initial load {_cards.Count} faces (placeholders included).";
         BuildOrderedFaces();
-    _nav.ResetIndex();
+        _nav.ResetIndex();
         RebuildViews();
         Refresh();
-        // Background fetch remaining
+        // Background fetch of remaining specs
         _ = Task.Run(async () =>
         {
             var remaining = new HashSet<int>();
-            for (int i = 0; i < _specs.Count; i++) if (!initialSpecIndexes.Contains(i)) remaining.Add(i);
+            for (int i = 0; i < _specs.Count; i++) if (!parseResult.InitialSpecIndexes.Contains(i)) remaining.Add(i);
             if (remaining.Count == 0) return;
-            await ResolveSpecsWithServiceAsync(fetchList, remaining, updateInterval:15);
-    await ResolveSpecsWithServiceAsync(fetchList, remaining, updateInterval:15);
+            await ResolveSpecsWithServiceAsync(parseResult.FetchList, remaining, updateInterval:15);
             Application.Current.Dispatcher.Invoke(() =>
             {
                 RebuildCardListFromSpecs();
@@ -1525,8 +1094,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                 RebuildViews();
                 Refresh();
                 Status = $"All metadata loaded ({_cards.Count} faces).";
-        _metadataResolver.PersistMetadataCache(_currentFileHash, _cards);
-        _metadataResolver.MarkCacheComplete(_currentFileHash);
+                _metadataResolver.PersistMetadataCache(_currentFileHash, _cards);
+                _metadataResolver.MarkCacheComplete(_currentFileHash);
             });
         });
     }
