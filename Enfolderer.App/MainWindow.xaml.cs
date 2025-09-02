@@ -292,11 +292,13 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private IReadOnlyList<NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly CardCollectionData _collection = new(); // collection DB data
     private readonly CardQuantityService _quantityService = new(); // phase 2 extracted quantity logic
+    private readonly QuantityEnrichmentService _quantityEnrichment;
     private readonly CollectionRepository _collectionRepo; // phase 3 collection repo
     private readonly CardBackImageService _backImageService = new();
     private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
     private readonly BinderLoadService _binderLoadService;
     private readonly SpecResolutionService _specResolutionService;
+    private readonly MetadataLoadOrchestrator _metadataOrchestrator;
     private TelemetryService? _telemetry; // extracted telemetry service
     // Expose distinct set codes present in current binder specs/cards
     public HashSet<string> GetCurrentSetCodes()
@@ -426,6 +428,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _telemetry = new TelemetryService(s => UpdatePanel(s), _debugHttpLogging);
     _binderLoadService = new BinderLoadService(_binderTheme, _metadataResolver, _backImageService, IsCacheComplete);
     _specResolutionService = new SpecResolutionService(_metadataResolver);
+    _metadataOrchestrator = new MetadataLoadOrchestrator(_specResolutionService, _quantityService, _metadataResolver);
+    _quantityEnrichment = new QuantityEnrichmentService(_quantityService);
         _nav.ViewChanged += NavOnViewChanged;
         var commandFactory = new CommandFactory(_nav,
             () => PagesPerBinder,
@@ -490,41 +494,25 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             BuildOrderedFaces(); _nav.ResetIndex(); RebuildViews(); Refresh();
             return;
         }
-        foreach (var ps in load.Specs)
-        {
-            var cs = new CardSpec(ps.SetCode, ps.Number, ps.OverrideName, ps.ExplicitEntry, ps.NumberDisplayOverride) { Resolved = ps.Resolved };
-            _specs.Add(cs);
-        }
-        foreach (var p in load.PendingVariantPairs) _pendingExplicitVariantPairs.Add(p);
-        await _specResolutionService.ResolveAsync(load.InitialFetchList, load.InitialSpecIndexes, 5, _specs, _mfcBacks, s => Status = s);
-        RebuildCardListFromSpecs();
-        if (!string.IsNullOrEmpty(_currentCollectionDir))
-        {
-            try { _collection.Load(_currentCollectionDir); } catch (Exception ex) { Debug.WriteLine($"[Collection] Load failed (db): {ex.Message}"); }
-            if (_collection.IsLoaded && _collection.Quantities.Count > 0)
-            {
-                try { _quantityService.EnrichQuantities(_collection, _cards); _quantityService.AdjustMfcQuantities(_cards); } catch (Exception ex) { Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}"); }
-            }
-        }
-        Status = $"Initial load {_cards.Count} faces (placeholders included).";
-        BuildOrderedFaces(); _nav.ResetIndex(); RebuildViews(); Refresh();
-        _ = Task.Run(async () =>
-        {
-            var remaining = new HashSet<int>();
-            for (int i = 0; i < _specs.Count; i++) if (!load.InitialSpecIndexes.Contains(i)) remaining.Add(i);
-            if (remaining.Count == 0) return;
-            await _specResolutionService.ResolveAsync(load.InitialFetchList, remaining, 15, _specs, _mfcBacks, s => Status = s);
-            Application.Current.Dispatcher.Invoke(() =>
-            {
-                RebuildCardListFromSpecs();
-                if (_collection.IsLoaded) _quantityService.EnrichQuantities(_collection, _cards);
-                if (_collection.IsLoaded) _quantityService.AdjustMfcQuantities(_cards);
-                BuildOrderedFaces(); RebuildViews(); Refresh();
-                Status = $"All metadata loaded ({_cards.Count} faces).";
-                _metadataResolver.PersistMetadataCache(_currentFileHash, _cards);
-                _metadataResolver.MarkCacheComplete(_currentFileHash);
-            });
-        });
+        await _metadataOrchestrator.RunInitialAsync(
+            load,
+            _currentCollectionDir,
+            _specs,
+            _mfcBacks,
+            _cards,
+            _orderedFaces,
+            _specs,
+            _pendingExplicitVariantPairs,
+            s => Status = s,
+            () => _collection.IsLoaded,
+            _collection,
+            RebuildCardListFromSpecs,
+            BuildOrderedFaces,
+            () => { _nav.ResetIndex(); RebuildViews(); },
+            Refresh,
+            () => _metadataResolver.PersistMetadataCache(_currentFileHash, _cards),
+            () => _metadataResolver.MarkCacheComplete(_currentFileHash)
+        );
     }
 
     // Quantity enrichment & MFC adjustment moved to CardQuantityService (Phase 2)
