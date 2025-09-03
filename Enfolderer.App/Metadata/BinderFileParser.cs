@@ -57,8 +57,9 @@ public sealed class BinderFileParser
             try
             {
                 string? localBack = _resolveLocalBackImagePath(true);
+                // System.Diagnostics.Debug.WriteLine($"[BinderFileParser] CacheHit back resolve returned: {localBack ?? "<null>"}");
                 bool hasLocalBack = localBack != null && (File.Exists(localBack) || localBack.StartsWith("pack://", StringComparison.OrdinalIgnoreCase));
-                var fallbackPack = "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg";
+                var fallbackPack = CardBackImageService.GetEmbeddedFallback() ?? "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg";
                 foreach (var ce in cachedCards)
                 {
                     if (string.Equals(ce.Set, "__BACK__", StringComparison.OrdinalIgnoreCase) && string.Equals(ce.EffectiveNumber, "BACK", StringComparison.OrdinalIgnoreCase))
@@ -95,12 +96,13 @@ public sealed class BinderFileParser
                     if (localBackImagePath == null)
                         localBackImagePath = _resolveLocalBackImagePath(true);
                     bool hasLocal = localBackImagePath != null && (File.Exists(localBackImagePath) || localBackImagePath.StartsWith("pack://", StringComparison.OrdinalIgnoreCase));
+                    System.Diagnostics.Debug.WriteLine($"[BinderFileParser] Parse path back resolve returned: {localBackImagePath ?? "<null>"} hasLocal={hasLocal}");
                     for (int bi = 0; bi < backCount; bi++)
                     {
                         var spec = new BinderParsedSpec("__BACK__", "BACK", null, true, null, null);
                         parsedSpecs.Add(spec);
                         var entry = new CardEntry("Backface", "BACK", "__BACK__", false, true, null, null, string.Empty);
-                        var frontUrl = hasLocal ? localBackImagePath! : "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg";
+                        var frontUrl = hasLocal ? localBackImagePath! : (CardBackImageService.GetEmbeddedFallback() ?? "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg");
                         // Register image URL mapping for synthetic backface so CardSlot can load embedded/local resource.
                         CardImageUrlStore.Set("__BACK__", "BACK", frontUrl, frontUrl);
                         System.Diagnostics.Debug.WriteLine($"[BinderFileParser] Registered backface mapping front/back={frontUrl}");

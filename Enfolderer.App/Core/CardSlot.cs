@@ -96,11 +96,16 @@ public class CardSlot : INotifyPropertyChanged
             try
             {
                 var (frontUrl, backUrl) = CardImageUrlStore.Get(setCode, number);
+                // System.Diagnostics.Debug.WriteLine($"[CardSlot] Placeholder back fetch mapping front={frontUrl ?? "<null>"} back={backUrl ?? "<null>"}");
                 var chosen = isBackFace ? backUrl : frontUrl;
                 if (string.IsNullOrWhiteSpace(chosen))
                 {
-                    chosen = "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg";
-                    Debug.WriteLine("[CardSlot] Backface mapping missing; using direct pack URI fallback.");
+                    chosen = Enfolderer.App.Imaging.CardBackImageService.GetEmbeddedFallback() ?? "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg";
+                    // Debug.WriteLine("[CardSlot] Backface mapping missing; using dynamic embedded fallback.");
+                }
+                else
+                {
+                    // Debug.WriteLine($"[CardSlot] Using placeholder back image path: {chosen}");
                 }
                 if (!string.IsNullOrWhiteSpace(chosen))
                 {

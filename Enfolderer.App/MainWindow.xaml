@@ -38,19 +38,21 @@
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <Image x:Name="CardImage" Stretch="Uniform" Margin="3" Grid.Row="0">
-                        <Image.Source>
-                            <MultiBinding Converter="{StaticResource QuantityImageConverter}">
-                                <Binding Path="ImageSource" />
-                                <Binding Path="Quantity" />
-                            </MultiBinding>
-                        </Image.Source>
-                    </Image>
+                    <Border x:Name="CardImageContainer" Grid.Row="0" Margin="3" CornerRadius="8" Background="Transparent" SnapsToDevicePixels="True">
+                        <Image x:Name="CardImage" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True">
+                            <Image.Source>
+                                <MultiBinding Converter="{StaticResource QuantityImageConverter}">
+                                    <Binding Path="ImageSource" />
+                                    <Binding Path="Quantity" />
+                                </MultiBinding>
+                            </Image.Source>
+                        </Image>
+                    </Border>
                     <!-- Quantity badge overlay (top-left) -->
                     <Border Style="{StaticResource QtyBadgeStyle}" Grid.Row="0" x:Name="QtyBadge">
                         <TextBlock Text="{Binding QuantityDisplay}" FontSize="11" Foreground="White" FontWeight="Bold" />
                     </Border>
-                    <StackPanel Grid.Row="1" Margin="2">
+                    <StackPanel Grid.Row="1" Margin="2" x:Name="InfoPanel">
                         <TextBlock Text="{Binding Number}" FontSize="11" Foreground="#EEE" HorizontalAlignment="Center"/>
                         <TextBlock Text="{Binding Name}" TextWrapping="Wrap" FontSize="11" 
                                    Foreground="White" HorizontalAlignment="Center" TextAlignment="Center" Margin="1"/>
@@ -60,12 +62,13 @@
             </Border>
             <DataTemplate.Triggers>
         <!-- Placeholder back image (not a real MFC back): suppress qty/outline/click -->
-        <DataTrigger Binding="{Binding IsPlaceholderBack}" Value="True">
+    <DataTrigger Binding="{Binding IsPlaceholderBack}" Value="True">
                     <Setter TargetName="RootBorder" Property="Border.BorderBrush" Value="#444" />
                     <Setter TargetName="RootBorder" Property="Border.BorderThickness" Value="1" />
                     <Setter TargetName="CardImage" Property="UIElement.Opacity" Value="1" />
                     <Setter TargetName="RootBorder" Property="UIElement.IsHitTestVisible" Value="False" />
                     <Setter TargetName="QtyBadge" Property="UIElement.Visibility" Value="Collapsed" />
+            <Setter TargetName="InfoPanel" Property="UIElement.Visibility" Value="Collapsed" />
                 </DataTrigger>
                 <!-- Fallback detection for legacy backface placeholders by Set code -->
                 <DataTrigger Binding="{Binding Set}" Value="__BACK__">
@@ -74,6 +77,7 @@
                     <Setter TargetName="CardImage" Property="UIElement.Opacity" Value="1" />
                     <Setter TargetName="RootBorder" Property="UIElement.IsHitTestVisible" Value="False" />
                     <Setter TargetName="QtyBadge" Property="UIElement.Visibility" Value="Collapsed" />
+            <Setter TargetName="InfoPanel" Property="UIElement.Visibility" Value="Collapsed" />
                 </DataTrigger>
                 <MultiDataTrigger>
                     <MultiDataTrigger.Conditions>
