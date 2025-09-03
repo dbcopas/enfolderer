@@ -170,6 +170,38 @@ public sealed class CardQuantityService
                 if (back.Quantity != backDisplay) cards[backIndex] = back with { Quantity = backDisplay };
             }
         }
+
+        // Fallback pass: some modal DFCs (e.g., certain ZNR lands) may have both faces marked
+        // IsModalDoubleFaced=true but neither flagged IsBackFace. That causes both faces to retain
+        // the same quantity value (e.g., 1) and both render opaque. Detect simple pairs and treat
+        // the second as the back face for display purposes.
+        var modalGroups = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+        for (int gi = 0; gi < cards.Count; gi++)
+        {
+            var c = cards[gi];
+            if (!c.IsModalDoubleFaced) continue;
+            string setKey = c.Set ?? string.Empty;
+            string numKey = c.Number?.Split('/')[0] ?? string.Empty;
+            string composite = setKey + "|" + numKey;
+            if (!modalGroups.TryGetValue(composite, out var list)) { list = new List<int>(); modalGroups[composite] = list; }
+            list.Add(gi);
+        }
+        foreach (var list in modalGroups.Values)
+        {
+            if (list.Count != 2) continue; // only handle simple paired faces
+            var a = cards[list[0]]; var b = cards[list[1]];
+            if (a.IsBackFace || b.IsBackFace) continue; // proper pairing already handled earlier
+            int qLogical = Math.Max(a.Quantity, b.Quantity);
+            int frontDisplay, backDisplay;
+            if (qLogical <= 0) { frontDisplay = 0; backDisplay = 0; }
+            else if (qLogical == 1) { frontDisplay = 1; backDisplay = 0; }
+            else { frontDisplay = 2; backDisplay = 2; }
+            if (a.Quantity != frontDisplay) cards[list[0]] = a with { Quantity = frontDisplay };
+            if (b.Quantity != backDisplay) cards[list[1]] = b with { Quantity = backDisplay };
+            if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                Debug.WriteLine($"[MFC][FallbackAdjust] Applied heuristic split set={a.Set} num={a.Number} q={qLogical} front={frontDisplay} back={backDisplay}");
+        }
+
     }
 
     public int ToggleQuantity(
