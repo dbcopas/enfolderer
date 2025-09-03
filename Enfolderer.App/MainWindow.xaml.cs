@@ -119,6 +119,16 @@ public partial class MainWindow : Window
         }
         _vm = new BinderViewModel();
         DataContext = _vm;
+        // Force collection directory to executable base path so DBs are always resolved there.
+        try
+        {
+            var exeDir = AppDomain.CurrentDomain.BaseDirectory?.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+            if (!string.IsNullOrWhiteSpace(exeDir))
+            {
+                BinderViewModel.WithVm(vm => vm.OverrideCollectionDir(exeDir));
+            }
+        }
+        catch { }
 #if SELF_TESTS
         try
         {
@@ -244,6 +254,18 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     // It now mainly wires services together and exposes observable properties for binding.
     private string? _currentCollectionDir;
     public string? CurrentCollectionDir => _currentCollectionDir;
+    // Explicit override so application can force DB directory to executable base.
+    public void OverrideCollectionDir(string dir)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
+            {
+                _currentCollectionDir = dir;
+            }
+        }
+        catch { }
+    }
     private static BinderViewModel? _singleton;
     private static readonly object _singletonLock = new();
     public static void RegisterInstance(BinderViewModel vm) { lock(_singletonLock) _singleton = vm; }
