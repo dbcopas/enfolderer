@@ -15,7 +15,10 @@
   </ItemGroup>
 
   <!-- Embedded card back image so placeholders never need external file -->
-  <ItemGroup> <Resource Include="Magic_card_back.jpg" /> </ItemGroup>
+  <ItemGroup>
+    <Resource Include="Magic_card_back.jpg" Condition="Exists('Magic_card_back.jpg')" />
+    <Resource Include="Magic_card_back.png" Condition="Exists('Magic_card_back.png')" />
+  </ItemGroup>
 
   <!-- Ship databases from repo root -->
   <ItemGroup>
