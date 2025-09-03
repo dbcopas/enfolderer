@@ -16,8 +16,11 @@ public sealed class AutoImportMissingSetsService
 
     public async Task<AutoImportResult> AutoImportAsync(HashSet<string> binderSetCodes, string dbPath, Func<string,string>? status, bool confirm, Func<string, bool>? confirmPrompt, IStatusSink sink)
     {
-        if (binderSetCodes == null || binderSetCodes.Count == 0) { sink.SetStatus("No set codes in binder."); return new AutoImportResult(0,0,Array.Empty<string>()); }
+    if (binderSetCodes == null || binderSetCodes.Count == 0) { sink.SetStatus("No set codes in binder."); return new AutoImportResult(0,0,Array.Empty<string>()); }
         if (!File.Exists(dbPath)) { sink.SetStatus("mainDb.db not found in collection folder."); return new AutoImportResult(0,0,Array.Empty<string>()); }
+    // Remove synthetic backface placeholder so we never attempt a Scryfall import for it.
+    binderSetCodes.RemoveWhere(s => string.Equals(s, "__BACK__", StringComparison.OrdinalIgnoreCase));
+    if (binderSetCodes.Count == 0) { sink.SetStatus("Only placeholder backface entries present; nothing to import."); return new AutoImportResult(0,0,Array.Empty<string>()); }
 
         // We still identify which sets are totally absent (zero rows) just for reporting, but
         // we now ALWAYS run an import pass for every binder set to supplement partially present sets.
@@ -59,7 +62,7 @@ public sealed class AutoImportMissingSetsService
         int setsWithNewInserts = 0;
         var importer = new ScryfallSetImporter();
         int processed = 0;
-        foreach (var setCode in binderSetCodes.OrderBy(s => s))
+    foreach (var setCode in binderSetCodes.OrderBy(s => s))
         {
             try
             {
