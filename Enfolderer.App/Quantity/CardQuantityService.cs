@@ -184,7 +184,7 @@ public sealed class CardQuantityService
         if (slot == null) { setStatus("No slot"); return -1; }
         if (slot.IsPlaceholderBack) { setStatus("Back face placeholder"); return -1; }
         if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { setStatus("No set/number"); return -1; }
-        if (string.IsNullOrEmpty(currentCollectionDir)) { setStatus("No collection loaded"); return -1; }
+    // Directory is always the executable directory now (enforced by caller); no null check required.
         if (!collection.IsLoaded) { setStatus("Collection not loaded"); return -1; }
 
         string numToken = slot.Number.Split('/')[0];

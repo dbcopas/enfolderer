@@ -47,16 +47,6 @@ public sealed class CardCollectionData
 
     public void Load(string folder)
     {
-        // Force folder to the application base directory so the app always and only
-        // looks for collection databases beside the running executable, regardless
-        // of binder file location passed by callers.
-        try
-        {
-            var exeDir = AppDomain.CurrentDomain.BaseDirectory?.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
-            if (!string.IsNullOrWhiteSpace(exeDir)) folder = exeDir!;
-        }
-        catch { }
-
         if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder)) return;
         if (string.Equals(_loadedFolder, folder, StringComparison.OrdinalIgnoreCase)) return; // already loaded
 

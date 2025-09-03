@@ -119,16 +119,6 @@ public partial class MainWindow : Window
         }
         _vm = new BinderViewModel();
         DataContext = _vm;
-        // Force collection directory to executable base path so DBs are always resolved there.
-        try
-        {
-            var exeDir = AppDomain.CurrentDomain.BaseDirectory?.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
-            if (!string.IsNullOrWhiteSpace(exeDir))
-            {
-                BinderViewModel.WithVm(vm => vm.OverrideCollectionDir(exeDir));
-            }
-        }
-        catch { }
 #if SELF_TESTS
         try
         {
@@ -252,20 +242,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 {
     // BinderViewModel orchestrates UI state: layout config, navigation, metadata & quantity updates, and delegates heavy logic to extracted services.
     // It now mainly wires services together and exposes observable properties for binding.
-    private string? _currentCollectionDir;
+    // Collection directory is now fixed to the executable's directory so the app always
+    // looks beside the running EXE for mainDb.db and mtgstudio.collection.
+    // (Requirement: always & only look in exe directory for the two databases.)
+    private readonly string _currentCollectionDir = AppContext.BaseDirectory.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
     public string? CurrentCollectionDir => _currentCollectionDir;
-    // Explicit override so application can force DB directory to executable base.
-    public void OverrideCollectionDir(string dir)
-    {
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
-            {
-                _currentCollectionDir = dir;
-            }
-        }
-        catch { }
-    }
     private static BinderViewModel? _singleton;
     private static readonly object _singletonLock = new();
     public static void RegisterInstance(BinderViewModel vm) { lock(_singletonLock) _singleton = vm; }
@@ -479,16 +460,14 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     // Auto-load collection databases early (before initial spec build) so enrichment has quantity keys ready
     try
     {
-        if (!string.IsNullOrEmpty(load.CollectionDir))
-        {
-            _collection.Load(load.CollectionDir);
+            // Always load from fixed exe directory now.
+            _collection.Load(_currentCollectionDir);
             if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                Debug.WriteLine($"[Binder] Collection auto-load invoked: loaded={_collection.IsLoaded} qtyKeys={_collection.Quantities.Count}");
-        }
+                Debug.WriteLine($"[Binder] Collection auto-load (exe dir) invoked: loaded={_collection.IsLoaded} qtyKeys={_collection.Quantities.Count} dir={_currentCollectionDir}");
     }
     catch (Exception ex) { Debug.WriteLine($"[Binder] Collection auto-load failed: {ex.Message}"); }
     _session.CurrentFileHash = load.FileHash;
-        _currentCollectionDir = load.CollectionDir;
+        // Ignore binder-derived directory (we always use exe directory now).
         if (load.PagesPerBinderOverride.HasValue) PagesPerBinder = load.PagesPerBinderOverride.Value;
         if (!string.IsNullOrEmpty(load.LayoutModeOverride)) LayoutMode = load.LayoutModeOverride;
         if (load.HttpDebugEnabled) _debugHttpLogging = true;
