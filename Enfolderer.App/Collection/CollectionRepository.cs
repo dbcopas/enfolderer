@@ -14,7 +14,9 @@ public sealed class CollectionRepository
     {
         try
         {
-            if (!_data.IsLoaded && !string.IsNullOrEmpty(folder)) _data.Load(folder);
+        // Ignore provided folder; always use exe directory
+        string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!_data.IsLoaded) _data.Load(exeDir);
         }
         catch (Exception ex)
         { System.Diagnostics.Debug.WriteLine($"[CollectionRepo] Ensure load failed: {ex.Message}"); }
@@ -24,8 +26,8 @@ public sealed class CollectionRepository
     {
         try
         {
-            if (string.IsNullOrEmpty(folder)) return null;
-            string mainDb = Path.Combine(folder, "mainDb.db");
+        string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string mainDb = Path.Combine(exeDir, "mainDb.db");
             if (!File.Exists(mainDb)) return null;
             using var con = new SqliteConnection($"Data Source={mainDb};Mode=ReadOnly");
             con.Open();

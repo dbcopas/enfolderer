@@ -14,7 +14,7 @@ public class QuantityToggleService
     { _quantityService = qty; _collectionRepo = repo; _collection = collection; }
 
     public void Toggle(CardSlot slot,
-        string? currentCollectionDir,
+        string? currentCollectionDir, // retained for signature compatibility but ignored now
         List<CardEntry> cards,
         List<CardEntry> orderedFaces,
         Func<string,string,string,int?> resolveCardId,
@@ -23,9 +23,10 @@ public class QuantityToggleService
         if (slot == null) return;
         if (slot.IsPlaceholderBack) { setStatus("Back face placeholder"); return; }
         if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { setStatus("No set/number"); return; }
-        if (string.IsNullOrEmpty(currentCollectionDir)) { setStatus("No collection loaded"); return; }
-        _collectionRepo.EnsureLoaded(currentCollectionDir);
+        // Always operate on executable directory for databases now.
+        string exeDir = AppContext.BaseDirectory.TrimEnd(System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+        _collectionRepo.EnsureLoaded(exeDir);
         if (!_collection.IsLoaded) { setStatus("Collection not loaded"); return; }
-    _quantityService.ToggleQuantity(slot, currentCollectionDir, _collection, cards, orderedFaces, resolveCardId, setStatus);
+        _quantityService.ToggleQuantity(slot, exeDir, _collection, cards, orderedFaces, resolveCardId, setStatus);
     }
 }
