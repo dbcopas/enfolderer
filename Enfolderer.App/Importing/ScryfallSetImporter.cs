@@ -53,6 +53,36 @@ public sealed class ScryfallSetImporter
         string? gathererCol = cardCols.Contains("gathererId") ? "gathererId" : (cardCols.Contains("gatherer_id") ? "gatherer_id" : null);
         string? nameCol = cardCols.Contains("name") ? "name" : null;
 
+        // Pre-load existing rows for this set so we can add only missing cards (instead of short-circuiting the whole set).
+        var existing = new Dictionary<string,(string? name,string? rarity,int? gatherer)>(StringComparer.OrdinalIgnoreCase);
+        using (var preload = con.CreateCommand())
+        {
+            var selectCols = new List<string>{ collectorCol };
+            if (nameCol != null) selectCols.Add(nameCol + " as __n");
+            if (rarityCol != null) selectCols.Add(rarityCol + " as __r");
+            if (gathererCol != null) selectCols.Add(gathererCol + " as __g");
+            preload.CommandText = $"SELECT {string.Join(",", selectCols)} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE";
+            preload.Parameters.AddWithValue("@e", setCode);
+            try
+            {
+                using var rdr = await preload.ExecuteReaderAsync(ct);
+                while (await rdr.ReadAsync(ct))
+                {
+                    string collectorVal = rdr.GetString(0);
+                    string? exName = null; string? exRarity = null; int? exGatherer = null;
+                    int colIndex = 1;
+                    if (nameCol != null && colIndex < rdr.FieldCount) { try { if (!rdr.IsDBNull(colIndex)) exName = rdr.GetString(colIndex); } catch { } colIndex++; }
+                    if (rarityCol != null && colIndex < rdr.FieldCount) { try { if (!rdr.IsDBNull(colIndex)) exRarity = rdr.GetString(colIndex); } catch { } colIndex++; }
+                    if (gathererCol != null && colIndex < rdr.FieldCount) { try { if (!rdr.IsDBNull(colIndex)) exGatherer = rdr.GetInt32(colIndex); } catch { } colIndex++; }
+                    existing[collectorVal] = (exName, exRarity, exGatherer);
+                }
+            }
+            catch (Exception exPre)
+            {
+                Debug.WriteLine($"[ImportSet] Preload existing failed: {exPre.Message}");
+            }
+        }
+
         if (forceReimport)
         {
             using var del = con.CreateCommand();
@@ -137,69 +167,36 @@ public sealed class ScryfallSetImporter
                 {
                     foreach (var mv in mIds.EnumerateArray()) if (mv.ValueKind == JsonValueKind.Number && mv.TryGetInt32(out var mvId)) { gatherer = mvId; break; }
                 }
-                bool existsRow = false;
-                using (var exists = con.CreateCommand())
+                if (existing.TryGetValue(collector, out var existingData))
                 {
-                    exists.CommandText = $"SELECT {(nameCol ?? "1")} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE AND {collectorCol}=@n LIMIT 1";
-                    exists.Parameters.AddWithValue("@e", cardSetCode);
-                    exists.Parameters.AddWithValue("@n", collector);
-                    using var er = await exists.ExecuteReaderAsync(ct);
-                    if (await er.ReadAsync(ct))
+                    bool needsUpdate = false;
+                    var parts = new List<string>();
+                    using var upd = con.CreateCommand();
+                    if (nameCol != null && !string.IsNullOrWhiteSpace(name) && string.IsNullOrWhiteSpace(existingData.name)) { parts.Add(nameCol + "=@name"); upd.Parameters.AddWithValue("@name", name); needsUpdate = true; }
+                    if (rarityCol != null && !string.IsNullOrWhiteSpace(rarity) && string.IsNullOrWhiteSpace(existingData.rarity)) { parts.Add(rarityCol + "=@rarity"); upd.Parameters.AddWithValue("@rarity", rarity); needsUpdate = true; }
+                    if (gathererCol != null && gatherer.HasValue && !existingData.gatherer.HasValue) { parts.Add(gathererCol + "=@gath"); upd.Parameters.AddWithValue("@gath", gatherer.Value); needsUpdate = true; }
+                    if (needsUpdate && parts.Count > 0)
                     {
-                        existsRow = true;
-                        bool needsUpdate = false;
-                        if (nameCol != null)
-                        {
-                            try { if (!er.IsDBNull(0) && string.IsNullOrWhiteSpace(er.GetString(0)) && !string.IsNullOrWhiteSpace(name)) needsUpdate = true; } catch { }
-                        }
-                        if (!needsUpdate && (rarityCol != null || gathererCol != null))
-                        {
-                            using var chk = con.CreateCommand();
-                            chk.CommandText = $"SELECT {(rarityCol ?? "NULL")},{(gathererCol ?? "NULL")} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE AND {collectorCol}=@n LIMIT 1";
-                            chk.Parameters.AddWithValue("@e", cardSetCode);
-                            chk.Parameters.AddWithValue("@n", collector);
-                            using var cr = await chk.ExecuteReaderAsync(ct);
-                            if (await cr.ReadAsync(ct))
-                            {
-                                if (rarityCol != null) { try { if (cr.IsDBNull(0) && !string.IsNullOrWhiteSpace(rarity)) needsUpdate = true; } catch { } }
-                                if (gathererCol != null && gatherer.HasValue)
-                                {
-                                    int idx = rarityCol != null ? 1 : 0; try { if (cr.IsDBNull(idx)) needsUpdate = true; } catch { }
-                                }
-                            }
-                        }
-                        if (needsUpdate)
-                        {
-                            using var upd = con.CreateCommand();
-                            var parts = new List<string>();
-                            if (nameCol != null && !string.IsNullOrWhiteSpace(name)) { parts.Add(nameCol + "=@name"); upd.Parameters.AddWithValue("@name", name); }
-                            if (rarityCol != null && !string.IsNullOrWhiteSpace(rarity)) { parts.Add(rarityCol + "=@rarity"); upd.Parameters.AddWithValue("@rarity", rarity); }
-                            if (gathererCol != null && gatherer.HasValue) { parts.Add(gathererCol + "=@gath"); upd.Parameters.AddWithValue("@gath", gatherer.Value); }
-                            if (parts.Count > 0)
-                            {
-                                upd.CommandText = $"UPDATE Cards SET {string.Join(",", parts)} WHERE {editionCol}=@e COLLATE NOCASE AND {collectorCol}=@n";
-                                upd.Parameters.AddWithValue("@e", cardSetCode);
-                                upd.Parameters.AddWithValue("@n", collector);
-                                try { if (await upd.ExecuteNonQueryAsync(ct) > 0) updatedExisting++; } catch { }
-                            }
-                        }
+                        upd.CommandText = $"UPDATE Cards SET {string.Join(",", parts)} WHERE {editionCol}=@e COLLATE NOCASE AND {collectorCol}=@n";
+                        upd.Parameters.AddWithValue("@e", cardSetCode);
+                        upd.Parameters.AddWithValue("@n", collector);
+                        try { if (await upd.ExecuteNonQueryAsync(ct) > 0) updatedExisting++; } catch { }
                     }
+                    else { skipped++; }
                 }
-                if (existsRow)
+                else
                 {
-                    skipped++;
-                    continue;
+                    using var ins = con.CreateCommand();
+                    ins.CommandText = "INSERT INTO Cards (id, name, edition, collectorNumberValue, rarity, gathererId, MtgsId) VALUES (@id,@name,@ed,@num,@rar,@gath,NULL)";
+                    ins.Parameters.AddWithValue("@id", nextId++);
+                    ins.Parameters.AddWithValue("@name", name);
+                    ins.Parameters.AddWithValue("@ed", cardSetCode);
+                    ins.Parameters.AddWithValue("@num", collector);
+                    ins.Parameters.AddWithValue("@rar", rarity);
+                    if (gatherer.HasValue) ins.Parameters.AddWithValue("@gath", gatherer.Value); else ins.Parameters.AddWithValue("@gath", DBNull.Value);
+                    await ins.ExecuteNonQueryAsync(ct);
+                    inserted++;
                 }
-                using var ins = con.CreateCommand();
-                ins.CommandText = "INSERT INTO Cards (id, name, edition, collectorNumberValue, rarity, gathererId, MtgsId) VALUES (@id,@name,@ed,@num,@rar,@gath,NULL)";
-                ins.Parameters.AddWithValue("@id", nextId++);
-                ins.Parameters.AddWithValue("@name", name);
-                ins.Parameters.AddWithValue("@ed", cardSetCode);
-                ins.Parameters.AddWithValue("@num", collector);
-                ins.Parameters.AddWithValue("@rar", rarity);
-                if (gatherer.HasValue) ins.Parameters.AddWithValue("@gath", gatherer.Value); else ins.Parameters.AddWithValue("@gath", DBNull.Value);
-                await ins.ExecuteNonQueryAsync(ct);
-                inserted++;
             }
             catch (Exception ex)
             {
