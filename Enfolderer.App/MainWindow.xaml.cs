@@ -142,7 +142,7 @@ public partial class MainWindow : Window
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "Open Collection Text File",
+            Title = "Open Binder Text File",
             Filter = "All Files (*.*)|*.*"
         };
         if (dlg.ShowDialog(this) == true)
