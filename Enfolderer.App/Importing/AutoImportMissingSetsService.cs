@@ -18,7 +18,10 @@ public sealed class AutoImportMissingSetsService
     {
         if (binderSetCodes == null || binderSetCodes.Count == 0) { sink.SetStatus("No set codes in binder."); return new AutoImportResult(0,0,Array.Empty<string>()); }
         if (!File.Exists(dbPath)) { sink.SetStatus("mainDb.db not found in collection folder."); return new AutoImportResult(0,0,Array.Empty<string>()); }
-        var missing = new List<string>();
+
+        // We still identify which sets are totally absent (zero rows) just for reporting, but
+        // we now ALWAYS run an import pass for every binder set to supplement partially present sets.
+        var totallyMissing = new List<string>();
         try
         {
             using var conCheck = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
@@ -31,13 +34,13 @@ public sealed class AutoImportMissingSetsService
                 while (r.Read()) { try { cols.Add(r.GetString(1)); } catch { } }
             }
             string editionCol = cols.Contains("edition") ? "edition" : (cols.Contains("set") ? "set" : "edition");
-            foreach (var sc in binderSetCodes.OrderBy(s => s))
+            foreach (var sc in binderSetCodes)
             {
                 using var cmd = conCheck.CreateCommand();
                 cmd.CommandText = $"SELECT 1 FROM Cards WHERE {editionCol}=@e COLLATE NOCASE LIMIT 1";
                 cmd.Parameters.AddWithValue("@e", sc);
                 var val = cmd.ExecuteScalar();
-                if (val == null || val == DBNull.Value) missing.Add(sc);
+                if (val == null || val == DBNull.Value) totallyMissing.Add(sc);
             }
         }
         catch (Exception ex)
@@ -45,29 +48,31 @@ public sealed class AutoImportMissingSetsService
             sink.SetStatus("Scan failed: " + ex.Message);
             return new AutoImportResult(0,0,Array.Empty<string>());
         }
-        if (missing.Count == 0)
-        {
-            sink.SetStatus("All binder sets already present in mainDb.");
-            return new AutoImportResult(0,0,Array.Empty<string>());
-        }
+
         if (confirm && confirmPrompt != null)
         {
-            if (!confirmPrompt(string.Join(", ", missing))) return new AutoImportResult(missing.Count,0,missing);
+            // Inform the user all listed sets (not only missing) will be contacted via Scryfall.
+            var promptList = string.Join(", ", binderSetCodes.OrderBy(s => s));
+            if (!confirmPrompt(promptList)) return new AutoImportResult(totallyMissing.Count,0,totallyMissing);
         }
-        int imported = 0;
-        foreach (var setCode in missing)
+
+        int setsWithNewInserts = 0;
+        var importer = new ScryfallSetImporter();
+        int processed = 0;
+        foreach (var setCode in binderSetCodes.OrderBy(s => s))
         {
             try
             {
-                var result = await ScryfallImportService.ImportSetAsync(setCode, dbPath, forceReimport:false, sink);
-                if (result.Inserted > 0) imported++;
+                sink.SetStatus($"[{++processed}/{binderSetCodes.Count}] {setCode}: importing (supplement mode)...");
+                var result = await importer.ImportAsync(setCode, forceReimport:false, dbPath, msg => sink.SetStatus($"{setCode}: {msg}"));
+                if (result.Inserted > 0) setsWithNewInserts++;
             }
             catch (Exception exSet)
             {
                 Debug.WriteLine($"[AutoImport] Failed {setCode}: {exSet.Message}");
             }
         }
-        sink.SetStatus($"Auto import complete: {imported}/{missing.Count} sets with new inserts.");
-        return new AutoImportResult(missing.Count, imported, missing);
+        sink.SetStatus($"Auto import complete: new cards inserted in {setsWithNewInserts}/{binderSetCodes.Count} sets.");
+        return new AutoImportResult(totallyMissing.Count, setsWithNewInserts, totallyMissing);
     }
 }
