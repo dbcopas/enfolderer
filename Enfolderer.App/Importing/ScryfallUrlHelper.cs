@@ -2,7 +2,7 @@
 using System;
 using System.Linq;
 
-namespace Enfolderer.App;
+namespace Enfolderer.App.Importing;
 
 internal static class ScryfallUrlHelper
 {

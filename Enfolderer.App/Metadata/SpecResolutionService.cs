@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Text.Json;
 using Enfolderer.App.Core;
 using Enfolderer.App.Infrastructure;
+using Enfolderer.App.Importing;
 
 namespace Enfolderer.App.Metadata;
 

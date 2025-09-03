@@ -1,6 +1,5 @@
-// Moved into AppRoot for organization
 using System;
-using Enfolderer.App.Core;
+using Enfolderer.App.Core; // still needed for CardEntry
 using Enfolderer.App.Imaging;
 using Enfolderer.App.Infrastructure;
 using System.Collections.Concurrent;
@@ -16,8 +15,9 @@ using System.Windows.Media.Imaging;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Enfolderer.App.Binder;
+using Enfolderer.App.Importing;
 
-namespace Enfolderer.App;
+namespace Enfolderer.App.Core;
 
 public static class CardSlotTheme
 {
@@ -247,5 +247,3 @@ public class CardSlot : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
-
-// (Moved full definitions above in structured form)
