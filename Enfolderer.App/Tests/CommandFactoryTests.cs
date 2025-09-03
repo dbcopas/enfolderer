@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Windows.Input;
 using Enfolderer.App.Layout;
 using Enfolderer.App.Core;
+using Enfolderer.App.Binder;
 
 namespace Enfolderer.App.Tests;
 

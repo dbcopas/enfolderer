@@ -4,7 +4,7 @@ using Enfolderer.App.Core;
 using Enfolderer.App.Layout;
 using System.Windows.Input;
 
-namespace Enfolderer.App;
+namespace Enfolderer.App.Binder;
 
 public class CommandFactory
 {
