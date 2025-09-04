@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Diagnostics;
+using Enfolderer.App.Core.Logging;
 using Enfolderer.App.Collection;
 using Enfolderer.App.Core;
 using Microsoft.Data.Sqlite;
@@ -19,8 +20,14 @@ public sealed class CardQuantityService : IQuantityService
     private readonly IRuntimeFlags _flags;
     private readonly IQuantityRepository? _quantityRepo;
     private readonly ILogSink? _log;
-    public CardQuantityService(IRuntimeFlags? flags = null, IQuantityRepository? quantityRepository = null, ILogSink? log = null)
-    { _flags = flags ?? RuntimeFlags.Default; _quantityRepo = quantityRepository; _log = log; }
+    private readonly IMfcQuantityAdjustmentService _mfcAdjust;
+    public CardQuantityService(IRuntimeFlags? flags = null, IQuantityRepository? quantityRepository = null, ILogSink? log = null, IMfcQuantityAdjustmentService? mfcAdjustment = null)
+    {
+        _flags = flags ?? RuntimeFlags.Default;
+        _quantityRepo = quantityRepository;
+        _log = log;
+        _mfcAdjust = mfcAdjustment ?? new MfcQuantityAdjustmentService(_flags, _log);
+    }
 
     public void EnrichQuantities(CardCollectionData collection, List<CardEntry> cards)
     {
@@ -31,7 +38,7 @@ public sealed class CardQuantityService : IQuantityService
             {
                 string reason = collection.IsLoaded ? "loaded-but-empty (no >0 Qty values?)" : "collection-not-loaded";
                 var firstFive = string.Join(", ", cards.Take(5).Select(c => c.Set+":"+c.Number));
-                Debug.WriteLine($"[QtyEnrich] Skip: Quantities empty - {reason}. Sample cards: {firstFive}");
+                _log?.Log($"Skip: Quantities empty - {reason}. Sample cards: {firstFive}", LogCategories.QtyEnrich);
                 Console.WriteLine($"[QtyEnrich] Skip: Quantities empty - {reason}. Sample cards: {firstFive}");
             }
             return;
@@ -49,7 +56,7 @@ public sealed class CardQuantityService : IQuantityService
                     .GroupBy(k => k.Item1)
                     .Take(5)
                     .Select(g => g.Key + ":" + string.Join("|", g.Take(8).Select(t => t.Item2)));
-                Debug.WriteLine("[QtyEnrich][KeysSample] " + string.Join(" || ", firstSets));
+                _log?.Log("KeysSample " + string.Join(" || ", firstSets), LogCategories.QtyEnrich);
             }
             catch { }
         }
@@ -75,9 +82,9 @@ public sealed class CardQuantityService : IQuantityService
                 if (_flags.QtyDebug)
                 {
                     if (variantFound)
-                        System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT] WAR star authoritative {c.Number} -> base={starBaseRaw}/{starTrim} JP qty={qtyVariant}");
+                        _log?.Log($"WAR star authoritative {c.Number} -> base={starBaseRaw}/{starTrim} JP qty={qtyVariant}", LogCategories.QtyVariant);
                     else
-                        System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT-MISS] WAR star authoritative {c.Number} attempted base={starBaseRaw}/{starTrim} JP (flex) defaulting 0");
+                        _log?.Log($"WAR star authoritative {c.Number} attempted base={starBaseRaw}/{starTrim} JP (flex) defaulting 0", LogCategories.QtyVariant);
                 }
                 if (c.Quantity != qtyVariant) { cards[i] = c with { Quantity = qtyVariant }; updated++; }
                 continue;
@@ -112,7 +119,7 @@ public sealed class CardQuantityService : IQuantityService
                     try
                     {
                         var sampleKeys = string.Join(", ", collection.Quantities.Keys.Where(k => k.Item1 == setLower).Take(25).Select(k => k.Item1+":"+k.Item2));
-                        Debug.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found. Sample keys for set: {sampleKeys}");
+                        _log?.Log($"MISS {c.Set} {baseNum} (trim {trimmed}) sampleKeys={sampleKeys}", LogCategories.Collection);
                         Console.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found.");
                         if (unmatchedSamples.Count < 15)
                         {
@@ -138,73 +145,15 @@ public sealed class CardQuantityService : IQuantityService
         }
         if (qtyDebug && unmatchedCount > 0)
         {
-            Debug.WriteLine($"[Collection][MISS-SUMMARY] unmatched={unmatchedCount} firstSamples={string.Join(" | ", unmatchedSamples)}");
+            _log?.Log($"MISS-SUMMARY unmatched={unmatchedCount} firstSamples={string.Join(" | ", unmatchedSamples)}", LogCategories.CollectionDebug);
             Console.WriteLine($"[Collection][MISS-SUMMARY] unmatched={unmatchedCount} (see Debug output for samples)");
         }
     }
 
     public void AdjustMfcQuantities(List<CardEntry> cards)
     {
-        for (int i = 0; i < cards.Count; i++)
-        {
-            var front = cards[i];
-            if (!front.IsModalDoubleFaced || front.IsBackFace) continue;
-            int q = front.Quantity; if (q < 0) continue;
-            int frontDisplay, backDisplay;
-            if (q <= 0) { frontDisplay = 0; backDisplay = 0; }
-            else if (q == 1) { frontDisplay = 1; backDisplay = 0; }
-            else { frontDisplay = 2; backDisplay = 2; }
-            if (front.Quantity != frontDisplay) cards[i] = front with { Quantity = frontDisplay };
-            int backIndex = -1;
-            if (i + 1 < cards.Count)
-            {
-                var candidate = cards[i + 1];
-                if (candidate.IsModalDoubleFaced && candidate.IsBackFace && candidate.Set == front.Set && candidate.Number == front.Number)
-                    backIndex = i + 1;
-            }
-            if (backIndex == -1)
-            {
-                for (int j = i + 1; j < cards.Count; j++)
-                {
-                    var cand = cards[j];
-                    if (cand.IsModalDoubleFaced && cand.IsBackFace && cand.Set == front.Set && cand.Number == front.Number)
-                    { backIndex = j; break; }
-                }
-            }
-            if (backIndex >= 0)
-            {
-                var back = cards[backIndex];
-                if (back.Quantity != backDisplay) cards[backIndex] = back with { Quantity = backDisplay };
-            }
-        }
-
-        var modalGroups = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-        for (int gi = 0; gi < cards.Count; gi++)
-        {
-            var c = cards[gi];
-            bool treatAsModal = c.IsModalDoubleFaced || (!c.IsBackFace && !string.IsNullOrEmpty(c.FrontRaw) && !string.IsNullOrEmpty(c.BackRaw));
-            if (!treatAsModal) continue;
-            string setKey = c.Set ?? string.Empty;
-            string numKey = c.Number?.Split('/')[0] ?? string.Empty;
-            string composite = setKey + "|" + numKey;
-            if (!modalGroups.TryGetValue(composite, out var list)) { list = new List<int>(); modalGroups[composite] = list; }
-            list.Add(gi);
-        }
-        foreach (var list in modalGroups.Values)
-        {
-            if (list.Count != 2) continue;
-            var a = cards[list[0]]; var b = cards[list[1]];
-            if (a.IsBackFace || b.IsBackFace) continue;
-            int qLogical = Math.Max(a.Quantity, b.Quantity);
-            int frontDisplay, backDisplay;
-            if (qLogical <= 0) { frontDisplay = 0; backDisplay = 0; }
-            else if (qLogical == 1) { frontDisplay = 1; backDisplay = 0; }
-            else { frontDisplay = 2; backDisplay = 2; }
-            if (a.Quantity != frontDisplay) cards[list[0]] = a with { Quantity = frontDisplay };
-            if (b.Quantity != backDisplay) cards[list[1]] = b with { Quantity = backDisplay };
-            if (_flags.QtyDebug)
-                Debug.WriteLine($"[MFC][FallbackAdjust] Applied heuristic split (broad) set={a.Set} num={a.Number} q={qLogical} front={frontDisplay} back={backDisplay} flags aMfc={a.IsModalDoubleFaced} bMfc={b.IsModalDoubleFaced}");
-        }
+    // Delegated to injected specialized service (Phase 3 extraction).
+    _mfcAdjust.Adjust(cards);
 
     }
 
@@ -290,13 +239,13 @@ public sealed class CardQuantityService : IQuantityService
             if (realId.HasValue && realId.Value >= 0)
             {
                 if (_flags.QtyDebug)
-                    System.Diagnostics.Debug.WriteLine($"[Quantity][Synthetic->Real] Replaced synthetic cardId {cardId} with real {realId.Value} set={slot.Set} num={slot.Number} base={baseNum}/{trimmed}");
+                    _log?.Log($"Synthetic->Real replaced {cardId} with {realId.Value} set={slot.Set} num={slot.Number} base={baseNum}/{trimmed}", LogCategories.CollectionDebug);
                 cardId = realId.Value;
             }
             else
             {
                 if (_flags.QtyDebug)
-                    System.Diagnostics.Debug.WriteLine($"[Quantity][Synthetic][NoRealId] set={slot.Set} num={slot.Number} base={baseNum}/{trimmed} toggle will not persist.");
+                    _log?.Log($"Synthetic NoRealId set={slot.Set} num={slot.Number} base={baseNum}/{trimmed} toggle will not persist", LogCategories.CollectionWarn);
             }
         }
 
@@ -307,7 +256,7 @@ public sealed class CardQuantityService : IQuantityService
         int newLogicalQty = !isMfcFront ? (logicalQty == 0 ? 1 : 0) : (logicalQty == 0 ? 1 : (logicalQty == 1 ? 2 : 0));
         bool isCustom = collection.CustomCards.Contains(cardId);
         bool qtyDebug = _flags.QtyDebug;
-        if (qtyDebug) System.Diagnostics.Debug.WriteLine($"[Quantity][Toggle] Begin set={slot.Set} num={slot.Number} baseNum={baseNum} targetQty={newLogicalQty} isCustom={isCustom} warStar={warStar}");
+    if (qtyDebug) _log?.Log($"Toggle begin set={slot.Set} num={slot.Number} baseNum={baseNum} targetQty={newLogicalQty} isCustom={isCustom} warStar={warStar}", LogCategories.CollectionDebug);
 
         int? persistedQty = null;
         if (cardId >= 0 && _quantityRepo != null)
@@ -330,12 +279,12 @@ public sealed class CardQuantityService : IQuantityService
 
         if (persistedQty.HasValue && persistedQty.Value != newLogicalQty)
         {
-            if (qtyDebug) System.Diagnostics.Debug.WriteLine($"[Quantity][Mismatch] CardId={cardId} intended={newLogicalQty} persisted={persistedQty.Value} set={slot.Set} num={slot.Number}");
+            if (qtyDebug) _log?.Log($"Toggle mismatch CardId={cardId} intended={newLogicalQty} persisted={persistedQty.Value} set={slot.Set} num={slot.Number}", LogCategories.CollectionWarn);
             newLogicalQty = persistedQty.Value;
         }
         if (slot.Quantity != newLogicalQty) slot.Quantity = newLogicalQty;
         if (cardId < 0 && qtyDebug)
-            System.Diagnostics.Debug.WriteLine($"[Quantity][Warning] Using synthetic cardId for UI-only update; value will revert on refresh set={slot.Set} num={slot.Number}");
+            _log?.Log($"Using synthetic cardId for UI-only update; value will revert on refresh set={slot.Set} num={slot.Number}", LogCategories.CollectionWarn);
 
         if (newLogicalQty > 0) collection.Quantities[(setLower, baseNum)] = newLogicalQty; else collection.Quantities.Remove((setLower, baseNum));
         if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal))

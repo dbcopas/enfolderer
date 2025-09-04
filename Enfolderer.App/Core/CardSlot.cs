@@ -5,6 +5,7 @@ using Enfolderer.App.Infrastructure;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using Enfolderer.App.Core.Logging;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
@@ -123,7 +124,7 @@ public class CardSlot : INotifyPropertyChanged
                             return;
                         }
                         catch (Exception exPack)
-                        { Debug.WriteLine($"[CardSlot] Embedded back image load failed {chosen}: {exPack.Message}"); }
+                        { LogHost.Sink?.Log($"Embedded back image load failed {chosen}: {exPack.Message}", LogCategories.CardSlot); }
                     }
                     else if (File.Exists(chosen))
                     {
@@ -134,7 +135,7 @@ public class CardSlot : INotifyPropertyChanged
                             ImageSource = bmpLocal;
                         }
                         catch (Exception exLocal)
-                        { Debug.WriteLine($"[CardSlot] Placeholder local back image load failed {chosen}: {exLocal.Message}"); }
+                        { LogHost.Sink?.Log($"Placeholder local back image load failed {chosen}: {exLocal.Message}", LogCategories.CardSlot); }
                     }
                     else if (Uri.IsWellFormedUriString(chosen, UriKind.Absolute))
                     {
@@ -146,13 +147,13 @@ public class CardSlot : INotifyPropertyChanged
                             return;
                         }
                         catch (Exception exRemote)
-                        { Debug.WriteLine($"[CardSlot] Placeholder remote back fetch failed {chosen}: {exRemote.Message}"); }
+                        { LogHost.Sink?.Log($"Placeholder remote back fetch failed {chosen}: {exRemote.Message}", LogCategories.CardSlot); }
                     }
                 }
                 else
-                { Debug.WriteLine("[CardSlot] Placeholder back has no cached URL mapping."); }
+                { LogHost.Sink?.Log("Placeholder back has no cached URL mapping.", LogCategories.CardSlot); }
                 if (ImageSource == null)
-                { Debug.WriteLine("[CardSlot] Placeholder back image NOT set (post-attempt)."); }
+                { LogHost.Sink?.Log("Placeholder back image NOT set (post-attempt).", LogCategories.CardSlot); }
             }
             catch { }
             return;
@@ -160,7 +161,7 @@ public class CardSlot : INotifyPropertyChanged
         if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
         if (string.Equals(setCode, "TOKEN", StringComparison.OrdinalIgnoreCase) || string.Equals(number, "TOKEN", StringComparison.OrdinalIgnoreCase))
         {
-            Debug.WriteLine($"[CardSlot] Skip image fetch for token: set={setCode} number={number}");
+            LogHost.Sink?.Log($"Skip image fetch for token: set={setCode} number={number}", LogCategories.CardSlot);
             return;
         }
         try
@@ -172,7 +173,7 @@ public class CardSlot : INotifyPropertyChanged
             {
                 var apiUrl = ScryfallUrlHelper.BuildCardApiUrl(setCode, number);
                 BinderViewModel.WithVm(vm => vm.FlashMetaUrl(apiUrl));
-                Debug.WriteLine($"[CardSlot] API fetch {apiUrl} face={faceIndex} (metadata for image URL)");
+                LogHost.Sink?.Log($"API fetch {apiUrl} face={faceIndex} (metadata for image URL)", LogCategories.CardSlot);
                 await ApiRateLimiter.WaitAsync();
                 await FetchGate.WaitAsync();
                 HttpResponseMessage resp = null!;
@@ -183,7 +184,7 @@ public class CardSlot : INotifyPropertyChanged
                     if (!resp.IsSuccessStatusCode)
                     {
                         string body = string.Empty; try { body = await resp.Content.ReadAsStringAsync(); } catch { }
-                        Debug.WriteLine($"[CardSlot] API status {(int)resp.StatusCode} {resp.ReasonPhrase} Body: {body}");
+                        LogHost.Sink?.Log($"API status {(int)resp.StatusCode} {resp.ReasonPhrase} Body: {body}", LogCategories.CardSlot);
                         return;
                     }
                     await using var stream = await resp.Content.ReadAsStreamAsync();
@@ -202,7 +203,7 @@ public class CardSlot : INotifyPropertyChanged
                     imgUrl = faceIndex == 0 ? front : back;
                 }
             }
-            if (string.IsNullOrWhiteSpace(imgUrl)) { Debug.WriteLine("[CardSlot] No cached or fetched image URL."); return; }
+            if (string.IsNullOrWhiteSpace(imgUrl)) { LogHost.Sink?.Log("No cached or fetched image URL.", LogCategories.CardSlot); return; }
             if (File.Exists(imgUrl))
             {
                 try
@@ -213,7 +214,7 @@ public class CardSlot : INotifyPropertyChanged
                     return;
                 }
                 catch (Exception exLocal)
-                { Debug.WriteLine($"[CardSlot] Local image load failed {imgUrl}: {exLocal.Message}"); }
+                { LogHost.Sink?.Log($"Local image load failed {imgUrl}: {exLocal.Message}", LogCategories.CardSlot); }
             }
             var cacheKey = imgUrl + (isBackFace ? "|back" : "|front");
             if (ImageCacheStore.Cache.TryGetValue(cacheKey, out var cachedBmp)) { ImageSource = cachedBmp; return; }
@@ -230,10 +231,10 @@ public class CardSlot : INotifyPropertyChanged
                 ImageCacheStore.PersistImage(cacheKey, bytes);
             }
             catch (Exception exBmp)
-            { Debug.WriteLine($"[CardSlot] Bitmap create failed: {exBmp.Message}"); }
+            { LogHost.Sink?.Log($"Bitmap create failed: {exBmp.Message}", LogCategories.CardSlot); }
         }
         catch (Exception ex)
-        { Debug.WriteLine($"[CardSlot] Image fetch failed {setCode} {number}: {ex.Message}"); }
+    { LogHost.Sink?.Log($"Image fetch failed {setCode} {number}: {ex.Message}", LogCategories.CardSlot); }
     }
 
     private static BitmapImage CreateFrozenBitmap(byte[] data)
