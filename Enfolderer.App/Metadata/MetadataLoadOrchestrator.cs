@@ -20,10 +20,10 @@ public class MetadataLoadOrchestrator
 {
     private readonly SpecResolutionService _specResolution;
     private readonly CardQuantityService _quantityService;
-    private readonly ICardMetadataResolver _metadataResolver; // reserved for later use (persisting etc.)
+    private readonly IMetadataProvider _metadataProvider; // higher-level abstraction (future cache ops)
 
-    public MetadataLoadOrchestrator(SpecResolutionService specResolution, CardQuantityService quantityService, ICardMetadataResolver metadataResolver)
-    { _specResolution = specResolution; _quantityService = quantityService; _metadataResolver = metadataResolver; }
+    public MetadataLoadOrchestrator(SpecResolutionService specResolution, CardQuantityService quantityService, IMetadataProvider metadataProvider)
+    { _specResolution = specResolution; _quantityService = quantityService; _metadataProvider = metadataProvider; }
 
     public async Task RunInitialAsync(
         BinderLoadResult load,

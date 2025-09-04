@@ -325,8 +325,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly Enfolderer.App.Quantity.QuantityEnrichmentCoordinator _quantityCoordinator = new();
     private readonly Enfolderer.App.Collection.CollectionRepository _collectionRepo; // phase 3 collection repo
     private readonly CardBackImageService _backImageService = new();
-    private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
-    private readonly Enfolderer.App.Core.Abstractions.ICardMetadataResolver _metadataResolverAdapter;
+    // Concrete resolver retained internally by core graph; VM now only holds higher-level provider abstraction.
+    private readonly Enfolderer.App.Core.Abstractions.IMetadataProvider _metadataProvider;
     private readonly Enfolderer.App.Core.Abstractions.IMetadataCachePersistence _cachePersistence;
     private readonly Enfolderer.App.Core.Abstractions.IBinderLoadService _binderLoadService;
     private readonly SpecResolutionService _specResolutionService;
@@ -416,7 +416,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _statusPanel = boot.StatusPanel;
     _telemetry = boot.Telemetry;
     _httpFactory = boot.HttpFactory;
-    _metadataResolverAdapter = boot.CoreGraph.ResolverAdapter;
+    _metadataProvider = boot.MetadataProvider; // currently unused directly; placeholder for future direct calls if needed
     _binderLoadService = boot.CoreGraph.BinderLoad;
     _specResolutionService = boot.CoreGraph.SpecResolution;
     _metadataOrchestrator = boot.CoreGraph.Orchestrator;

@@ -30,7 +30,8 @@ public static class AppBootstrapper
     Enfolderer.App.Layout.PageViewPresenter PagePresenter,
     Enfolderer.App.PageResolutionBatcher PageBatcher,
     Enfolderer.App.Core.Abstractions.ICardArrangementService ArrangementService,
-    Enfolderer.App.Core.Abstractions.IImportService ImportService);
+    Enfolderer.App.Core.Abstractions.IImportService ImportService,
+    Enfolderer.App.Core.Abstractions.IMetadataProvider MetadataProvider);
 
     public static AppRuntimeServices Build(string cacheRoot, BinderThemeService binderTheme, System.Func<string,bool> isMetaComplete)
     {
@@ -51,6 +52,6 @@ public static class AppBootstrapper
     IQuantityToggleService qtyToggle = coreGraph.QuantityToggleService ?? new QuantityToggleService(qtySvc, repo, collection);
     var pagePresenter = new Enfolderer.App.Layout.PageViewPresenter();
     var pageBatcher = new Enfolderer.App.PageResolutionBatcher();
-    return new AppRuntimeServices(collection, repo, qtySvc, qtyEnrichment, qtyCoordinator, qtyToggle, backImg, cachePaths, statusPanel, telemetry, httpFactory, coreGraph, cachePersistence, pagePresenter, pageBatcher, coreGraph.ArrangementService, coreGraph.ImportService);
+    return new AppRuntimeServices(collection, repo, qtySvc, qtyEnrichment, qtyCoordinator, qtyToggle, backImg, cachePaths, statusPanel, telemetry, httpFactory, coreGraph, cachePersistence, pagePresenter, pageBatcher, coreGraph.ArrangementService, coreGraph.ImportService, coreGraph.MetadataProvider);
     }
 }

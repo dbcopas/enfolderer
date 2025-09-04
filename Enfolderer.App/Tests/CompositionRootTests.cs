@@ -30,6 +30,7 @@ public static class CompositionRootTests
             var graph = CompositionRoot.BuildExisting(theme, qtySvc, backImg, resolver, IsMetaComplete, () => new System.Net.Http.HttpClient(new System.Net.Http.HttpClientHandler()), repo, collection);
             Check(graph.BinderLoad != null);
             Check(graph.Orchestrator != null);
+            Check(graph.MetadataProvider != null);
             Check(graph.SpecResolution != null);
             Check(graph.ResolverAdapter != null);
             // Quantity toggle service optional; if absent ensure default instantiation works
