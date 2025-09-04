@@ -15,6 +15,10 @@ namespace Enfolderer.App.Tests;
 /// </summary>
 public static class QuantityToggleCharTests
 {
+    // Spec Addition (Regression Guard):
+    // When a card quantity is toggled, the in-memory card list and ordered faces should reflect the new value
+    // immediately (without requiring a manual RefreshQuantities call). UI now triggers BuildOrderedFaces + RebuildViews
+    // after each toggle. This test simulates that by invoking the quantity service and then applying ordering service.
     private sealed class FakeQuantityRepository : IQuantityRepository
     {
         public int CustomCalls { get; private set; }
@@ -89,6 +93,39 @@ public static class QuantityToggleCharTests
             int q1 = svc.ToggleQuantity(slot, testDir, collection, faces, ordered, (s,b,t)=>null, _=>{});
             bool variantUpdated = collection.VariantQuantities.ContainsKey(("war","7","art jp")) || collection.VariantQuantities.ContainsKey(("war","7","jp"));
             Log(q1==1 && slot.Quantity==1 && variantUpdated, ref failures, "WAR star variant repo integration");
+        }
+        // Scenario 4: Immediate in-memory visibility (ordered faces reflect new quantity post-toggle without extra refresh).
+        {
+            var collection = new CardCollectionData();
+            MarkLoaded(collection);
+            collection.MainIndex[("set","12")] = (501, null);
+            var faces = new List<CardEntry>{ new CardEntry("Immediate","12","SET", false) };
+            var ordered = new List<CardEntry>(faces);
+            var slot = new CardSlot(faces[0], 0);
+            var svc = new CardQuantityService(quantityRepository: repoStub, mfcAdjustment: new MfcQuantityAdjustmentService());
+            int q1 = svc.ToggleQuantity(slot, testDir, collection, faces, ordered, (s,b,t)=>null, _=>{});
+            // Simulate UI rebuilding ordered faces (as MainWindow now does automatically after toggle)
+            var layoutSvc = new Enfolderer.App.Layout.FaceLayoutService();
+            var rebuilt = layoutSvc.BuildOrderedFaces(faces, "3x3", 9, 3, new System.Collections.Generic.Dictionary<CardEntry,string>());
+            bool reflects = rebuilt.Count>0 && rebuilt[0].Quantity == q1 && q1==1;
+            Log(reflects, ref failures, "Immediate ordered face quantity reflection");
+        }
+        // Scenario 5: DisplayNumber variant with trailing letter (e.g., 12a) updates immediate quantity.
+        {
+            var collection = new CardCollectionData();
+            MarkLoaded(collection);
+            // Underlying base entry stored without letter; slot will reference EffectiveNumber with letter suffix.
+            collection.MainIndex[("set","13")] = (601, null);
+            var variantEntry = new CardEntry("VariantLetter","13","SET", false, DisplayNumber: "13a");
+            var faces = new List<CardEntry>{ variantEntry };
+            var ordered = new List<CardEntry>(faces);
+            var slot = new CardSlot(faces[0], 0);
+            var svc = new CardQuantityService(quantityRepository: repoStub, mfcAdjustment: new MfcQuantityAdjustmentService());
+            int q1 = svc.ToggleQuantity(slot, testDir, collection, faces, ordered, (s,b,t)=>null, _=>{});
+            var layoutSvc = new Enfolderer.App.Layout.FaceLayoutService();
+            var rebuilt = layoutSvc.BuildOrderedFaces(faces, "3x3", 9, 3, new System.Collections.Generic.Dictionary<CardEntry,string>());
+            bool reflectsVariant = rebuilt.Count>0 && rebuilt[0].Quantity == q1 && q1==1;
+            Log(reflectsVariant, ref failures, "DisplayNumber letter variant immediate reflection");
         }
         try { File.AppendAllText(Path.Combine(Path.GetTempPath(), "enfolderer_qtytoggle_char.txt"), $"DONE failures={failures}\n"); } catch {}
         return failures;

@@ -349,8 +349,35 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly Enfolderer.App.Quantity.QuantityToggleService _quantityToggleService;
     public void ToggleCardQuantity(CardSlot slot)
     {
-    _quantityToggleService.Toggle(slot, _currentCollectionDir, _cards, _orderedFaces, ResolveCardIdFromDb, SetStatus);
-        Refresh();
+        // Toggle underlying quantity (service returns new logical quantity or -1 on failure)
+        _quantityToggleService.Toggle(slot, _currentCollectionDir, _cards, _orderedFaces, ResolveCardIdFromDb, SetStatus);
+        // Instead of rebuilding immediately (which recreates CardSlot instances and can defer the visual until after async image work),
+        // directly update any existing slot objects bound to the same logical card (matching on Set + Number).
+        int newQty = slot.Quantity;
+        if (newQty >= 0)
+        {
+            void apply(ObservableCollection<CardSlot> slots)
+            {
+                for (int i=0;i<slots.Count;i++)
+                {
+                    var s = slots[i];
+                    if (string.Equals(s.Set, slot.Set, StringComparison.OrdinalIgnoreCase) && string.Equals(s.Number, slot.Number, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (s.Quantity != newQty) s.Quantity = newQty;
+                    }
+                }
+            }
+            apply(LeftSlots);
+            apply(RightSlots);
+        }
+    // We intentionally avoid a full enrichment pass here (previous redundancy removed) because ToggleQuantity already
+    // updated in-memory card entries, orderedFaces, and collection dictionaries. This keeps click latency minimal.
+        // Skip immediate full page refresh to preserve existing CardSlot instances and let binding update in-place.
+        // Schedule a lightweight ordered-face rebuild later so navigation remains consistent (no immediate UI churn).
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+        {
+            BuildOrderedFaces();
+        }), System.Windows.Threading.DispatcherPriority.Background);
     }
 
     private int? ResolveCardIdFromDb(string setOriginal, string baseNum, string trimmed) => _collectionRepo.ResolveCardId(_currentCollectionDir, setOriginal, baseNum, trimmed);
