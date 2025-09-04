@@ -16,9 +16,12 @@ public static class CompositionRoot
     public sealed record AppServiceGraph(
         CardMetadataResolver Resolver,
         ICardMetadataResolver ResolverAdapter,
-        BinderLoadService BinderLoad,
+        IBinderFileParser Parser,
+        IBinderLoadService BinderLoad,
         SpecResolutionService SpecResolution,
-        MetadataLoadOrchestrator Orchestrator);
+        MetadataLoadOrchestrator Orchestrator,
+        IQuantityService QuantityService,
+        IQuantityToggleService? QuantityToggleService);
 
     /// <summary>
     /// Build graph using an existing concrete resolver (so existing readonly field can stay).
@@ -28,12 +31,20 @@ public static class CompositionRoot
         CardQuantityService quantityService,
         CardBackImageService backImageService,
         CardMetadataResolver resolver,
-        Func<string,bool> isCacheComplete)
+        Func<string,bool> isCacheComplete,
+        Enfolderer.App.Collection.CollectionRepository? collectionRepo = null,
+        Enfolderer.App.Collection.CardCollectionData? collectionData = null)
     {
         var adapter = new CardMetadataResolverAdapter(resolver);
-        var binderLoad = new BinderLoadService(binderTheme, adapter, backImageService, isCacheComplete);
+        // Construct concrete parser + adapter stack but expose only IBinderFileParser outward.
+        var concreteParser = new BinderFileParser(binderTheme, resolver, _ => backImageService.Resolve(null, _), isCacheComplete);
+        IBinderFileParser parserAdapter = new BinderFileParserAdapter(concreteParser);
+        var binderLoad = new BinderLoadService(binderTheme, parserAdapter);
         var specResolution = new SpecResolutionService(adapter);
         var orchestrator = new MetadataLoadOrchestrator(specResolution, quantityService, adapter);
-        return new AppServiceGraph(resolver, adapter, binderLoad, specResolution, orchestrator);
+        IQuantityToggleService? qtyToggle = null;
+        if (collectionRepo != null && collectionData != null)
+            qtyToggle = new Enfolderer.App.Quantity.QuantityToggleService(quantityService, collectionRepo, collectionData);
+        return new AppServiceGraph(resolver, adapter, parserAdapter, binderLoad, specResolution, orchestrator, quantityService, qtyToggle);
     }
 }

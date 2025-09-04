@@ -2,10 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Microsoft.Data.Sqlite;
+using Enfolderer.App.Core.Abstractions;
 
 namespace Enfolderer.App.Collection;
 
-public sealed class CollectionRepository
+public sealed class CollectionRepository : ICollectionRepository
 {
     private readonly CardCollectionData _data;
     public CollectionRepository(CardCollectionData data) => _data = data;

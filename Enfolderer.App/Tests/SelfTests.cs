@@ -24,6 +24,8 @@ public static class SelfTests
     suiteFails = PageViewPresenterTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After PageViewPresenter fails={suiteFails}\n"); } catch {}
     suiteFails = CommandFactoryTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After CommandFactory fails={suiteFails}\n"); } catch {}
     suiteFails = QuantityServicesTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After QuantityServices fails={suiteFails}\n"); } catch {}
+    // Quantity toggle characterization
+    try { suiteFails = QuantityToggleCharTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After QuantityToggleChar fails={suiteFails}\n"); } catch { }
     // Binder parsing characterization (now using Task.Run inside test to avoid dispatcher deadlock).
     int binderFails = 0;
     try { binderFails = BinderParsingCharTests.RunAll(); } catch(Exception ex) { binderFails = 1; try { File.AppendAllText(progressLog, "BinderParsing EX: "+ex.GetType().Name+" "+ex.Message+"\n"); } catch {} }
