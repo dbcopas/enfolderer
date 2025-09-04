@@ -164,7 +164,8 @@ public sealed class CardQuantityService : IQuantityService
     public void ApplyAll(CardCollectionData collection, List<CardEntry> cards)
     {
         EnrichQuantities(collection, cards);
-        AdjustMfcQuantities(cards);
+    // Apply MFC display adjustment to the canonical card list first.
+    AdjustMfcQuantities(cards);
     }
 
     public int ToggleQuantity(
@@ -358,7 +359,7 @@ public sealed class CardQuantityService : IQuantityService
             }
         }
         AdjustMfcQuantities(cards);
-        for (int i = 0; i < orderedFaces.Count; i++)
+    for (int i = 0; i < orderedFaces.Count; i++)
         {
             var o = orderedFaces[i];
             if (o.Set != null && string.Equals(o.Set, slot.Set, StringComparison.OrdinalIgnoreCase))
@@ -385,6 +386,12 @@ public sealed class CardQuantityService : IQuantityService
                     var updated = cards.FirstOrDefault(c => c.Set != null && c.Set.Equals(o.Set, StringComparison.OrdinalIgnoreCase) && c.Number == o.Number && c.IsBackFace == o.IsBackFace);
                     if (updated != null && updated.Quantity != o.Quantity) orderedFaces[i] = updated;
                 }
+            }
+            // Synchronize any remaining MFC front/back display split even if not the toggled set (ensures immediate UI correctness)
+            if (o.IsModalDoubleFaced)
+            {
+                var m = cards.FirstOrDefault(c => c.IsModalDoubleFaced == o.IsModalDoubleFaced && c.IsBackFace == o.IsBackFace && c.Set == o.Set && c.Number == o.Number && c.Name == o.Name);
+                if (m != null && m.Quantity != o.Quantity) orderedFaces[i] = m;
             }
         }
         setStatus($"Set {slot.Set} #{slot.Number} => {newLogicalQty}");

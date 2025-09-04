@@ -356,15 +356,17 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         int newQty = slot.Quantity;
         if (newQty >= 0)
         {
+            int logical = newQty;
+        int FrontDisplay(int q) => q <= 0 ? 0 : q == 1 ? 1 : 2;
+        int BackDisplay(int q) => q >= 2 ? 2 : 0; // logical 1 => 0 dim
             void apply(ObservableCollection<CardSlot> slots)
             {
-                for (int i=0;i<slots.Count;i++)
+                for (int i = 0; i < slots.Count; i++)
                 {
                     var s = slots[i];
-                    if (string.Equals(s.Set, slot.Set, StringComparison.OrdinalIgnoreCase) && string.Equals(s.Number, slot.Number, StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (s.Quantity != newQty) s.Quantity = newQty;
-                    }
+                    if (!string.Equals(s.Set, slot.Set, StringComparison.OrdinalIgnoreCase) || !string.Equals(s.Number, slot.Number, StringComparison.OrdinalIgnoreCase)) continue;
+            int target = s.IsBackFace ? BackDisplay(logical) : FrontDisplay(logical);
+                    if (s.Quantity != target) s.Quantity = target;
                 }
             }
             apply(LeftSlots);
