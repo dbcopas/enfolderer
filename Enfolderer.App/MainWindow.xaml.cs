@@ -400,13 +400,12 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public BinderViewModel()
     {
         RegisterInstance(this);
-    _collectionRepo = new CollectionRepository(_collection);
-    _quantityService = new Enfolderer.App.Quantity.CardQuantityService(quantityRepository: _collectionRepo);
-    // Deprecated HTTP debug logging flag removed; RuntimeFlags can gate future diagnostics.
-    // Use bootstrapper to assemble services (single source of wiring truth)
+    // Use bootstrapper exclusively for service construction (eliminate duplicated manual wiring here)
     var localCachePaths = new CachePathService(ImageCacheStore.CacheRoot);
     _cachePaths = localCachePaths;
     var boot = Enfolderer.App.Core.Composition.AppBootstrapper.Build(ImageCacheStore.CacheRoot, _binderTheme, hash => localCachePaths.IsMetaComplete(hash));
+    _collectionRepo = boot.CollectionRepo;
+    _quantityService = boot.QuantityService;
     _statusPanel = boot.StatusPanel;
     _telemetry = boot.Telemetry;
     _httpFactory = boot.HttpFactory;

@@ -33,12 +33,21 @@ public static class AppBootstrapper
     Enfolderer.App.Core.Abstractions.IImportService ImportService,
     Enfolderer.App.Core.Abstractions.IMetadataProvider MetadataProvider);
 
-    public static AppRuntimeServices Build(string cacheRoot, BinderThemeService binderTheme, System.Func<string,bool> isMetaComplete)
+    public static AppRuntimeServices Build(
+        string cacheRoot,
+        BinderThemeService binderTheme,
+        System.Func<string,bool> isMetaComplete,
+        CardCollectionData? existingCollection = null,
+        CollectionRepository? existingRepository = null,
+    Enfolderer.App.Core.Abstractions.ILogSink? existingLog = null,
+        IMfcQuantityAdjustmentService? existingMfcAdjust = null)
     {
-        var collection = new CardCollectionData();
-        var log = new DebugLogSink();
-        var repo = new CollectionRepository(collection, log);
-    var qtySvc = new CardQuantityService(quantityRepository: repo, log: log);
+        var collection = existingCollection ?? new CardCollectionData();
+    var log = existingLog as Enfolderer.App.Core.Abstractions.ILogSink ?? new DebugLogSink();
+        var repo = existingRepository ?? new CollectionRepository(collection, log);
+        Enfolderer.App.Core.Logging.LogHost.Sink = log;
+        var mfcAdjust = existingMfcAdjust ?? new MfcQuantityAdjustmentService(log: log);
+        var qtySvc = new CardQuantityService(quantityRepository: repo, log: log, mfcAdjustment: mfcAdjust);
     var qtyEnrichment = new QuantityEnrichmentService(qtySvc);
     var qtyCoordinator = new QuantityEnrichmentCoordinator();
     var backImg = new CardBackImageService();

@@ -19,11 +19,11 @@ namespace Enfolderer.App.Metadata;
 public class MetadataLoadOrchestrator
 {
     private readonly SpecResolutionService _specResolution;
-    private readonly CardQuantityService _quantityService;
+    private readonly IQuantityService _quantityService;
     private readonly IMetadataProvider _metadataProvider; // higher-level abstraction (future cache ops)
     private readonly Enfolderer.App.Core.Abstractions.ILogSink? _log;
 
-    public MetadataLoadOrchestrator(SpecResolutionService specResolution, CardQuantityService quantityService, IMetadataProvider metadataProvider, Enfolderer.App.Core.Abstractions.ILogSink? log = null)
+    public MetadataLoadOrchestrator(SpecResolutionService specResolution, IQuantityService quantityService, IMetadataProvider metadataProvider, Enfolderer.App.Core.Abstractions.ILogSink? log = null)
     { _specResolution = specResolution; _quantityService = quantityService; _metadataProvider = metadataProvider; _log = log; }
 
     public async Task RunInitialAsync(

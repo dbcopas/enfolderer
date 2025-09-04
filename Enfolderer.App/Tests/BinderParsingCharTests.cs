@@ -134,7 +134,7 @@ public static class BinderParsingCharTests
         Scenario(() => {
             var tempCollection = new Enfolderer.App.Collection.CardCollectionData();
             var tempRepo = new Enfolderer.App.Collection.CollectionRepository(tempCollection);
-            var qtySvc = new CardQuantityService(quantityRepository: tempRepo); // enforce repository wiring even for pure AdjustMfcQuantities logic
+            var qtySvc = new CardQuantityService(quantityRepository: tempRepo, mfcAdjustment: new MfcQuantityAdjustmentService()); // enforce repository wiring even for pure AdjustMfcQuantities logic
             var list = new List<CardEntry>{
                 new CardEntry("Alpha/Beta|MFC","10","SET",true,false,"Alpha","Beta"),
                 new CardEntry("Alpha/Beta|MFC","10","SET",true,false,"Alpha","Beta")

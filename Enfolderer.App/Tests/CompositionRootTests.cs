@@ -22,7 +22,7 @@ public static class CompositionRootTests
         {
             var theme = new BinderThemeService();
             var repo = new Enfolderer.App.Collection.CollectionRepository(new Enfolderer.App.Collection.CardCollectionData());
-            var qtySvc = new CardQuantityService(quantityRepository: repo);
+            var qtySvc = new CardQuantityService(quantityRepository: repo, mfcAdjustment: new MfcQuantityAdjustmentService());
             var backImg = new CardBackImageService();
             var resolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, new[]{"transform"}, 5);
             bool IsMetaComplete(string h) => true; // deterministic stub

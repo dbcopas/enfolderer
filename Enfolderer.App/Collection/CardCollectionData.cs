@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Microsoft.Data.Sqlite;
+using Enfolderer.App.Core.Logging;
 
 namespace Enfolderer.App.Collection;
 
@@ -99,7 +100,7 @@ public sealed class CardCollectionData
 
             if (cardIdCol == null || editionCol == null)
             {
-                System.Diagnostics.Debug.WriteLine("[Collection] Main DB missing required columns (id/edition/collectorNumber). Aborting load.");
+                LogHost.Sink?.Log("Main DB missing required columns (id/edition/collectorNumber). Aborting load.", LogCategories.CollectionWarn);
                 return;
             }
 
@@ -209,16 +210,16 @@ public sealed class CardCollectionData
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[Collection] Main DB load failed: {ex.Message}");
+            LogHost.Sink?.Log($"Main DB load failed: {ex.Message}", LogCategories.CollectionWarn);
             return; // abort silently so UI continues
         }
 
     if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
         {
-            System.Diagnostics.Debug.WriteLine($"[Collection][DEBUG] After mainDb: MainIndex={MainIndex.Count} Quantities(custom/main only)={Quantities.Count}");
+            LogHost.Sink?.Log($"After mainDb: MainIndex={MainIndex.Count} Quantities(custom/main only)={Quantities.Count}", LogCategories.CollectionDebug);
             if (MainIndex.Count == 0)
             {
-                System.Diagnostics.Debug.WriteLine("[Collection][WARN] MainIndex is empty after mainDb load. Collector number columns may not have been detected.");
+                LogHost.Sink?.Log("MainIndex is empty after mainDb load. Collector number columns may not have been detected.", LogCategories.CollectionWarn);
             }
         }
         // 2. Load quantities and map through reverse index
@@ -243,7 +244,7 @@ public sealed class CardCollectionData
             string? qtyCol = FirstExisting(columns, "Qty", "qty", "quantity", "Quantity", "count", "Count");
             if (qtyCardIdCol == null || qtyCol == null)
             {
-                System.Diagnostics.Debug.WriteLine("[Collection] CollectionCards missing CardId/Qty columns.");
+                LogHost.Sink?.Log("CollectionCards missing CardId/Qty columns.", LogCategories.CollectionWarn);
             }
             else
             {
@@ -295,7 +296,7 @@ public sealed class CardCollectionData
                                     VariantCardIds[(rSet, trimmedCollector, modLower)] = cardId.Value;
                                 }
                                 if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug && rSet == "war")
-                                    System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT-ADD] WAR variant collector={rCollector} modifier={modLower} qty={qty.Value} cardId={cardId.Value}");
+                                    LogHost.Sink?.Log($"WAR variant collector={rCollector} modifier={modLower} qty={qty.Value} cardId={cardId.Value}", LogCategories.QtyVariant);
                             }
                         }
                     }
@@ -304,7 +305,7 @@ public sealed class CardCollectionData
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Collection] Quantity DB load failed: {ex.Message}");
+                    LogHost.Sink?.Log($"Quantity DB load failed: {ex.Message}", LogCategories.CollectionWarn);
                 // leave already built MainIndex; quantities may remain only from mainDb custom cards
             }
         }
@@ -318,11 +319,11 @@ public sealed class CardCollectionData
                 MainIndex.TryAdd(k, (synthId--, null));
             }
             if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
-                System.Diagnostics.Debug.WriteLine($"[Collection][SYNTH] Built synthetic MainIndex from Quantities count={MainIndex.Count}");
+                LogHost.Sink?.Log($"Built synthetic MainIndex from Quantities count={MainIndex.Count}", LogCategories.CollectionDebug);
         }
 
         _loadedFolder = folder; // mark loaded even if collection file absent
-        System.Diagnostics.Debug.WriteLine($"[Collection] Loaded: MainIndex={MainIndex.Count} Quantities={Quantities.Count} (collectionFile={(hasCollectionFile?"yes":"no")} mainDbQtyAll={( !hasCollectionFile ? "enabled" : "disabled")})");
+    LogHost.Sink?.Log($"Loaded: MainIndex={MainIndex.Count} Quantities={Quantities.Count} (collectionFile={(hasCollectionFile?"yes":"no")} mainDbQtyAll={( !hasCollectionFile ? "enabled" : "disabled")})", LogCategories.Collection);
     }
 
     private void AddIndexEntry(string set, string collector, int cardId, Dictionary<int, List<(string set,string collector)>> reverse, bool allowOverwrite = true)

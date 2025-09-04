@@ -15,7 +15,7 @@ public static class QuantityServicesTests
     // Repository injected for completeness (even though these scenarios don't hit DB persistence)
     var collection = new CardCollectionData();
     var repo = new CollectionRepository(collection);
-    var qtyService = new CardQuantityService(quantityRepository: repo);
+    var qtyService = new CardQuantityService(quantityRepository: repo, mfcAdjustment: new MfcQuantityAdjustmentService());
         collection.Quantities[("set", "1")] = 3;
         var faces = new List<CardEntry>{ new CardEntry("Alpha","1","SET",false) };
         qtyService.EnrichQuantities(collection, faces);

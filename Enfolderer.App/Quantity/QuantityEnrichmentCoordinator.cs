@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using Enfolderer.App.Core.Logging;
 using System.Linq;
 using Enfolderer.App.Collection;
 using Enfolderer.App.Core;
@@ -12,19 +13,21 @@ public class QuantityEnrichmentCoordinator
     public void EnrichAfterRebuildIfLoaded(CardCollectionData collection, CardQuantityService quantityService, List<CardEntry> cards, Action rebuildOrderedFaces, Action refresh, bool debug)
     {
         if (!collection.IsLoaded) return;
-        try
-        {
+    var logField = typeof(CardQuantityService).GetField("_log", System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+    var sink = logField?.GetValue(quantityService) as Enfolderer.App.Core.Abstractions.ILogSink;
+    try
+    {
             if (debug)
-                Debug.WriteLine($"[QtyCoordinator][Rebuild] Before enrichment: cards={cards.Count} qtyKeys={collection.Quantities.Count} anyPositive={cards.Any(c=>c.Quantity>0)}");
+                sink?.Log($"Before enrichment: cards={cards.Count} qtyKeys={collection.Quantities.Count} anyPositive={cards.Any(c=>c.Quantity>0)}", LogCategories.QtyCoordinator);
             quantityService.EnrichQuantities(collection, cards);
             quantityService.AdjustMfcQuantities(cards);
             rebuildOrderedFaces();
             refresh();
             if (debug)
-                Debug.WriteLine($"[QtyCoordinator][Rebuild] After enrichment: positives={cards.Count(c=>c.Quantity>0)} updatedZeroes={cards.Count(c=>c.Quantity==0)} negatives={cards.Count(c=>c.Quantity<0)}");
+                sink?.Log($"After enrichment: positives={cards.Count(c=>c.Quantity>0)} updatedZeroes={cards.Count(c=>c.Quantity==0)} negatives={cards.Count(c=>c.Quantity<0)}", LogCategories.QtyCoordinator);
         }
         catch (Exception ex)
-        { Debug.WriteLine($"[QtyCoordinator][Rebuild] Enrichment failed: {ex.Message}"); }
+        { sink?.Log($"Enrichment failed: {ex.Message}", LogCategories.QtyCoordinator); }
     }
 
     public void EnrichFallbackIfNeeded(CardCollectionData collection, CardQuantityService quantityService, List<CardEntry> cards, Action rebuildOrderedFaces, bool debug)
@@ -32,17 +35,19 @@ public class QuantityEnrichmentCoordinator
         if (!collection.IsLoaded) return;
         bool needs = false; for (int i=0;i<cards.Count;i++) { if (cards[i].Quantity < 0) { needs = true; break; } }
         if (!needs) return;
-        try
-        {
+    var logField = typeof(CardQuantityService).GetField("_log", System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+    var sink = logField?.GetValue(quantityService) as Enfolderer.App.Core.Abstractions.ILogSink;
+    try
+    {
             if (debug)
-                Debug.WriteLine($"[QtyCoordinator][Fallback] Trigger: cards={cards.Count} qtyKeys={collection.Quantities.Count} positivesPre={cards.Count(c=>c.Quantity>0)}");
+                sink?.Log($"Fallback trigger: cards={cards.Count} qtyKeys={collection.Quantities.Count} positivesPre={cards.Count(c=>c.Quantity>0)}", LogCategories.QtyCoordinator);
             quantityService.EnrichQuantities(collection, cards);
             quantityService.AdjustMfcQuantities(cards);
             rebuildOrderedFaces();
             if (debug)
-                Debug.WriteLine($"[QtyCoordinator][Fallback] After: positives={cards.Count(c=>c.Quantity>0)}");
+                sink?.Log($"Fallback after: positives={cards.Count(c=>c.Quantity>0)}", LogCategories.QtyCoordinator);
         }
         catch (Exception ex)
-        { Debug.WriteLine($"[QtyCoordinator][Fallback] Failed: {ex.Message}"); }
+        { sink?.Log($"Fallback failed: {ex.Message}", LogCategories.QtyCoordinator); }
     }
 }

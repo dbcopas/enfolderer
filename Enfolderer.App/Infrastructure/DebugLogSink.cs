@@ -10,7 +10,9 @@ public sealed class DebugLogSink : ILogSink
 {
     public void Log(string message, string? category = null)
     {
-        if (string.IsNullOrEmpty(category)) Debug.WriteLine(message);
-        else Debug.WriteLine("["+category+"] " + message);
+        var stamp = System.DateTime.UtcNow.ToString("HH:mm:ss.fff");
+        var tid = System.Environment.CurrentManagedThreadId;
+        if (string.IsNullOrEmpty(category)) Debug.WriteLine($"[{stamp} t{tid}] {message}");
+        else Debug.WriteLine($"[{stamp} t{tid}] [{category}] {message}");
     }
 }

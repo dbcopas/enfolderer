@@ -58,7 +58,7 @@ public static class QuantityToggleCharTests
             var faces = new List<CardEntry>{ new CardEntry("Sample","7","SET", false) };
             var ordered = new List<CardEntry>(faces);
             var slot = new CardSlot(faces[0], 0);
-            var svc = new CardQuantityService(quantityRepository: repoStub);
+            var svc = new CardQuantityService(quantityRepository: repoStub, mfcAdjustment: new MfcQuantityAdjustmentService());
             int q1 = svc.ToggleQuantity(slot, testDir, collection, faces, ordered, (s,b,t)=>null, _=>{});
             Log(q1==1 && slot.Quantity==1 && collection.Quantities.ContainsKey(("set","7")) && repoStub.StandardCalls==1 && repoStub.LastStandardQty==1, ref failures, "Standard toggle 0->1 repo call");
             int q2 = svc.ToggleQuantity(slot, testDir, collection, faces, ordered, (s,b,t)=>null, _=>{});
@@ -73,7 +73,7 @@ public static class QuantityToggleCharTests
             var faces = new List<CardEntry>{ new CardEntry("Custom","9","CSET", false) };
             var ordered = new List<CardEntry>(faces);
             var slot = new CardSlot(faces[0],0);
-            var svc = new CardQuantityService(quantityRepository: repoStub);
+            var svc = new CardQuantityService(quantityRepository: repoStub, mfcAdjustment: new MfcQuantityAdjustmentService());
             int q1 = svc.ToggleQuantity(slot, testDir, collection, faces, ordered, (s,b,t)=>null, _=>{});
             Log(q1==1 && repoStub.CustomCalls>=1 && repoStub.LastCustomQty==1, ref failures, "Custom toggle 0->1 custom repo call");
         }
@@ -85,7 +85,7 @@ public static class QuantityToggleCharTests
             var faces = new List<CardEntry>{ new CardEntry("WarStar","7★","WAR", false) };
             var ordered = new List<CardEntry>(faces);
             var slot = new CardSlot(faces[0], 0);
-            var svc = new CardQuantityService(quantityRepository: repoStub);
+            var svc = new CardQuantityService(quantityRepository: repoStub, mfcAdjustment: new MfcQuantityAdjustmentService());
             int q1 = svc.ToggleQuantity(slot, testDir, collection, faces, ordered, (s,b,t)=>null, _=>{});
             bool variantUpdated = collection.VariantQuantities.ContainsKey(("war","7","art jp")) || collection.VariantQuantities.ContainsKey(("war","7","jp"));
             Log(q1==1 && slot.Quantity==1 && variantUpdated, ref failures, "WAR star variant repo integration");
