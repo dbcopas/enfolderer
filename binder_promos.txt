@@ -122,13 +122,17 @@
 T 1-2
 #Store Champion 22.7
 =sch
-1-44
+1-22
+23e
+24-44
 # Regional CHamp Quall 2022
 =prcq
 1-3
 # SLP 23.2
 =SLP
-1-44
+1-34
+1;backface
+36-44
 # Magic Fest 2023 23.7
 =pf23
 2-3

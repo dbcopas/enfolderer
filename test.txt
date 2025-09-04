@@ -1,0 +1,17 @@
+=sld
+379
+=ZNR 
+286
+=BOT
+1
+=rex
+25
+2;backface
+=WAR
+★1-2
+=SPG
+1
+=WOT
+4
+64
+5-7
