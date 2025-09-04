@@ -142,8 +142,8 @@ public partial class MainWindow : Window
     {
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
-            Title = "Open Binder Text File",
-            Filter = "All Files (*.*)|*.*"
+            Title = "Open Binder Text File (ie binder_alt_arts.txt)",
+            Filter = "TXT Files (*.txt)|*.txt"
         };
         if (dlg.ShowDialog(this) == true)
         {
