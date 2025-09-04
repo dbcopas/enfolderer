@@ -181,3 +181,20 @@ J1-2
 # FIN Standard Showdown 25.6
 =PSS5
 1-2
+=DCI
+49
+53
+67
+=pm14
+21★
+141★
+=pm15
+47
+194
+=pbng
+150
+=pm13
+140★
+177★
+=pisd
+13

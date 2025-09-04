@@ -57,6 +57,11 @@ public sealed class CardBackImageService
             "pack://application:,,,/Enfolderer.App;component/Magic_card_back.png",
             "pack://application:,,,/Enfolderer.App;component/Magic_card_back.jpg"
         };
+        // In headless self-test mode Application may not be fully initialized; just return first candidate optimistically.
+        if (System.Windows.Application.Current == null)
+        {
+            return candidates[0];
+        }
         foreach (var c in candidates)
         {
             try

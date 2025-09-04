@@ -2,13 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Microsoft.Data.Sqlite;
+using Enfolderer.App.Core.Abstractions;
 
 namespace Enfolderer.App.Collection;
 
-public sealed class CollectionRepository
+public sealed class CollectionRepository : ICollectionRepository, IQuantityRepository
 {
     private readonly CardCollectionData _data;
-    public CollectionRepository(CardCollectionData data) => _data = data;
+    private readonly Enfolderer.App.Core.Abstractions.ILogSink? _log;
+    public CollectionRepository(CardCollectionData data, Enfolderer.App.Core.Abstractions.ILogSink? log = null) { _data = data; _log = log; }
 
     public void EnsureLoaded(string? folder)
     {
@@ -19,7 +21,7 @@ public sealed class CollectionRepository
         if (!_data.IsLoaded) _data.Load(exeDir);
         }
         catch (Exception ex)
-        { System.Diagnostics.Debug.WriteLine($"[CollectionRepo] Ensure load failed: {ex.Message}"); }
+    { _log?.Log($"Ensure load failed: {ex.Message}", "CollectionRepo"); }
     }
 
     public int? ResolveCardId(string? folder, string setOriginal, string baseNum, string trimmed)
@@ -87,7 +89,78 @@ public sealed class CollectionRepository
                     if (val != null && val != DBNull.Value && int.TryParse(val.ToString(), out int idVal)) return idVal;
                 }
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[CollectionRepo] Direct cardId resolve failed: {ex.Message}"); }
+    catch (Exception ex) { _log?.Log($"Direct cardId resolve failed: {ex.Message}", "CollectionRepo"); }
+        return null;
+    }
+
+    public int? UpdateCustomCardQuantity(string mainDbPath, int cardId, int newQty, bool qtyDebug)
+    {
+        try
+        {
+            if (!File.Exists(mainDbPath)) return null;
+            using var conMain = new SqliteConnection($"Data Source={mainDbPath}");
+            conMain.Open();
+            using (var cmd = conMain.CreateCommand())
+            {
+                cmd.CommandText = "UPDATE Cards SET Qty=@q WHERE id=@id";
+                cmd.Parameters.AddWithValue("@q", newQty);
+                cmd.Parameters.AddWithValue("@id", cardId);
+                cmd.ExecuteNonQuery();
+            }
+            using (var verify = conMain.CreateCommand())
+            {
+                verify.CommandText = "SELECT Qty FROM Cards WHERE id=@id";
+                verify.Parameters.AddWithValue("@id", cardId);
+                var obj = verify.ExecuteScalar();
+                if (obj != null && obj != DBNull.Value) return Convert.ToInt32(obj);
+            }
+        }
+        catch (Exception ex)
+    { _log?.Log($"Custom write failed: {ex.Message}", "QuantityRepo.Custom"); }
+        return null;
+    }
+
+    public int? UpsertStandardCardQuantity(string collectionFilePath, int cardId, int newQty, bool qtyDebug)
+    {
+        try
+        {
+            if (!File.Exists(collectionFilePath)) return null;
+            using var con = new SqliteConnection($"Data Source={collectionFilePath}");
+            con.Open();
+            using (var cmd = con.CreateCommand())
+            {
+                cmd.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
+                cmd.Parameters.AddWithValue("@q", newQty);
+                cmd.Parameters.AddWithValue("@id", cardId);
+                int rows = cmd.ExecuteNonQuery();
+                if (qtyDebug) _log?.Log($"UPDATE rows={rows} cardId={cardId} qty={newQty}", "QuantityRepo.Std");
+                if (rows == 0)
+                {
+                    using var ins = con.CreateCommand();
+                    ins.CommandText = @"INSERT INTO CollectionCards 
+                            (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)
+                            VALUES (@id,@q,0,0.0,0.0,0.0,0,0,0,0,0,'','',0,'',1,0,0,@added)";
+                    ins.Parameters.AddWithValue("@id", cardId);
+                    ins.Parameters.AddWithValue("@q", newQty);
+                    var added = DateTime.Now.ToString("s").Replace('T',' ');
+                    ins.Parameters.AddWithValue("@added", added);
+                    try
+                    {
+                        int insRows = ins.ExecuteNonQuery();
+                        if (qtyDebug) _log?.Log($"INSERT rows={insRows} cardId={cardId} qty={newQty}", "QuantityRepo.Std");
+                    }
+                    catch (Exception exIns)
+                    { _log?.Log($"Insert exception CardId {cardId}: {exIns.Message}", "QuantityRepo.Std"); }
+                }
+                using var verify = con.CreateCommand();
+                verify.CommandText = "SELECT Qty FROM CollectionCards WHERE CardId=@id";
+                verify.Parameters.AddWithValue("@id", cardId);
+                var obj = verify.ExecuteScalar();
+                if (obj != null && obj != DBNull.Value) return Convert.ToInt32(obj);
+            }
+        }
+        catch (Exception ex)
+    { _log?.Log($"Std write failed: {ex.Message}", "QuantityRepo.Std"); }
         return null;
     }
 }

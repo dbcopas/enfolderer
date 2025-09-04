@@ -6,31 +6,25 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Net.Http;
 using System.Runtime.CompilerServices;
-using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
+using System.Windows.Media.Imaging; // may still be used indirectly for image handling
 using Enfolderer.App.Imaging;
 using Enfolderer.App.Infrastructure;
-using Enfolderer.App.Importing;
+using Enfolderer.App.Importing; // import service usage
 using Enfolderer.App.Collection;
 using Enfolderer.App.Quantity;
 using Enfolderer.App.Layout;
 using Enfolderer.App.Binder;
-using Enfolderer.App.Metadata;
+using Enfolderer.App.Metadata; // orchestrator & provider types
 using Enfolderer.App.Core;
+using Enfolderer.App.Core.Abstractions;
 
 namespace Enfolderer.App;
 
@@ -67,8 +61,7 @@ public partial class MainWindow : Window
             string dbPath = System.IO.Path.Combine(_vm.CurrentCollectionDir!, "mainDb.db");
             if (!File.Exists(dbPath)) { MessageBox.Show(this, "mainDb.db not found."); return; }
             bool forceReimport = (Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift));
-            var importer = new ScryfallSetImporter();
-            var summary = await importer.ImportAsync(input.Trim(), forceReimport, dbPath, msg => _vm.SetStatus(msg));
+            var summary = await _vm.ImportService.ImportSetAsync(input.Trim(), forceReimport, dbPath, msg => _vm.SetStatus(msg));
             _vm.SetStatus($"Import {summary.SetCode}: inserted {summary.Inserted}, updated {summary.UpdatedExisting}, skipped {summary.Skipped}. Total fetched {summary.TotalFetched}{(summary.DeclaredCount.HasValue?"/"+summary.DeclaredCount.Value:"")}.");
         }
         catch (Exception ex)
@@ -84,11 +77,10 @@ public partial class MainWindow : Window
         {
             if (_vm == null || string.IsNullOrEmpty(_vm.CurrentCollectionDir)) { _vm?.SetStatus("Open a collection first."); return; }
             string dbPath = System.IO.Path.Combine(_vm.CurrentCollectionDir!, "mainDb.db");
-            var service = new AutoImportMissingSetsService();
             HashSet<string> binderSets = _vm.GetCurrentSetCodes();
             bool confirm = true;
             bool ConfirmPrompt(string list) => MessageBox.Show(this, $"Import missing sets into mainDb?\n\n{list}", "Auto Import", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK;
-            await service.AutoImportAsync(binderSets, dbPath, null, confirm, list => ConfirmPrompt(list), _vm);
+            await _vm.ImportService.AutoImportMissingAsync(binderSets, dbPath, confirm, list => ConfirmPrompt(list), _vm);
         }
         catch (Exception ex)
         {
@@ -262,7 +254,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public string Status { get => _status; private set { if (_status!=value) { _status = value; OnPropertyChanged(); } } }
     public void SetStatus(string message) => Status = message;
 
-    private static bool _debugHttpLogging = true;
     private static readonly object _httpLogLock = new();
     private static readonly ConcurrentDictionary<string,string> _imageUrlNameMap = new(StringComparer.OrdinalIgnoreCase);
     private static string HttpLogPath => System.IO.Path.Combine(ImageCacheStore.CacheRoot, "http-log.txt");
@@ -297,20 +288,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         RebuildViews();
         Refresh();
         
-        // Fallback: if collection loaded and we have quantity keys but no card face got a positive quantity, attempt enrichment again (late specs scenario)
-        try
-        {
-            if (_collection.IsLoaded && _collection.Quantities.Count > 0 && !_cards.Any(c => c.Quantity > 0))
-            {
-                _quantityService.EnrichQuantities(_collection, _cards);
-                _quantityService.AdjustMfcQuantities(_cards);
-                BuildOrderedFaces();
-                RebuildViews();
-                Refresh();
-                Debug.WriteLine("[Collection][Fallback] Post-build enrichment executed (initial pass yielded zero positives).");
-            }
-        }
-        catch (Exception ex) { Debug.WriteLine($"[Collection][Fallback] Enrichment error: {ex.Message}"); }
+    // Delegate fallback enrichment to coordinator (extracted from VM)
+    _quantityCoordinator.LayoutChangeFallback(_collection, _quantityService, _cards, BuildOrderedFaces, RebuildViews, Refresh, debug:false);
     }
     private readonly BinderSession _session = new();
     private List<CardEntry> _cards => _session.Cards;
@@ -322,14 +301,18 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private Enfolderer.App.Binder.NavigationViewBuilder? _navBuilder; // deferred until ctor end
     private IReadOnlyList<Enfolderer.App.Layout.NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly Enfolderer.App.Collection.CardCollectionData _collection = new();
-    private readonly Enfolderer.App.Quantity.CardQuantityService _quantityService = new();
-    private readonly Enfolderer.App.Quantity.QuantityEnrichmentService _quantityEnrichment;
-    private readonly Enfolderer.App.Collection.CollectionRepository _collectionRepo; // phase 3 collection repo
+    private readonly Enfolderer.App.Quantity.CardQuantityService _quantityService; // repository-backed instance created in ctor
+    private readonly Enfolderer.App.Quantity.QuantityEnrichmentCoordinator _quantityCoordinator = new();
+    private readonly Enfolderer.App.Collection.CollectionRepository _collectionRepo; // repository
     private readonly CardBackImageService _backImageService = new();
-    private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
-    private readonly BinderLoadService _binderLoadService;
+    // Concrete resolver retained internally by core graph; VM now only holds higher-level provider abstraction.
+    private readonly Enfolderer.App.Core.Abstractions.IMetadataProvider _metadataProvider;
+    private readonly Enfolderer.App.Core.Abstractions.IMetadataCachePersistence _cachePersistence;
+    private readonly Enfolderer.App.Core.Abstractions.IBinderLoadService _binderLoadService;
     private readonly SpecResolutionService _specResolutionService;
     private readonly Enfolderer.App.Metadata.MetadataLoadOrchestrator _metadataOrchestrator;
+    private readonly Enfolderer.App.Core.Abstractions.ICardArrangementService? _arrangementService; // injected arrangement adapter
+    public IImportService ImportService { get; private set; } = default!; // injected
     private TelemetryService? _telemetry;
     public HashSet<string> GetCurrentSetCodes()
     {
@@ -349,8 +332,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             if (string.IsNullOrEmpty(_currentCollectionDir)) { SetStatus("No collection loaded."); return; }
             _collection.Reload(_currentCollectionDir);
             if (!_collection.IsLoaded) { SetStatus("Collection DBs not found."); return; }
-            _quantityService.EnrichQuantities(_collection, _cards);
-            _quantityService.AdjustMfcQuantities(_cards);
+            // Unified path: service exposes ApplyAll; orchestrator kept for external consumers
+            _quantityService.ApplyAll(_collection, _cards);
             BuildOrderedFaces();
             RebuildViews();
             Refresh();
@@ -366,8 +349,37 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly Enfolderer.App.Quantity.QuantityToggleService _quantityToggleService;
     public void ToggleCardQuantity(CardSlot slot)
     {
-    _quantityToggleService.Toggle(slot, _currentCollectionDir, _cards, _orderedFaces, ResolveCardIdFromDb, SetStatus);
-        Refresh();
+        // Toggle underlying quantity (service returns new logical quantity or -1 on failure)
+        _quantityToggleService.Toggle(slot, _currentCollectionDir, _cards, _orderedFaces, ResolveCardIdFromDb, SetStatus);
+        // Instead of rebuilding immediately (which recreates CardSlot instances and can defer the visual until after async image work),
+        // directly update any existing slot objects bound to the same logical card (matching on Set + Number).
+        int newQty = slot.Quantity;
+        if (newQty >= 0)
+        {
+            int logical = newQty;
+        int FrontDisplay(int q) => q <= 0 ? 0 : q == 1 ? 1 : 2;
+        int BackDisplay(int q) => q >= 2 ? 2 : 0; // logical 1 => 0 dim
+            void apply(ObservableCollection<CardSlot> slots)
+            {
+                for (int i = 0; i < slots.Count; i++)
+                {
+                    var s = slots[i];
+                    if (!string.Equals(s.Set, slot.Set, StringComparison.OrdinalIgnoreCase) || !string.Equals(s.Number, slot.Number, StringComparison.OrdinalIgnoreCase)) continue;
+            int target = s.IsBackFace ? BackDisplay(logical) : FrontDisplay(logical);
+                    if (s.Quantity != target) s.Quantity = target;
+                }
+            }
+            apply(LeftSlots);
+            apply(RightSlots);
+        }
+    // We intentionally avoid a full enrichment pass here (previous redundancy removed) because ToggleQuantity already
+    // updated in-memory card entries, orderedFaces, and collection dictionaries. This keeps click latency minimal.
+        // Skip immediate full page refresh to preserve existing CardSlot instances and let binding update in-place.
+        // Schedule a lightweight ordered-face rebuild later so navigation remains consistent (no immediate UI churn).
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+        {
+            BuildOrderedFaces();
+        }), System.Windows.Threading.DispatcherPriority.Background);
     }
 
     private int? ResolveCardIdFromDb(string setOriginal, string baseNum, string trimmed) => _collectionRepo.ResolveCardId(_currentCollectionDir, setOriginal, baseNum, trimmed);
@@ -375,8 +387,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private System.Collections.Generic.List<(string set,string baseNum,string variantNum)> _pendingExplicitVariantPairs => _session.PendingExplicitVariantPairs;
     private readonly VariantPairingService _variantPairing = new();
     // local back image path lives in session
-    internal static HttpClient Http => _httpFactory?.Client ?? throw new InvalidOperationException("HTTP factory not initialized");
-    private static IHttpClientFactoryService? _httpFactory; // static so slots can reference BinderViewModel.Http
+    private IHttpClientFactoryService? _httpFactory; // instance now
     // Local back image resolution moved to CardBackImageService
     public void FlashImageFetch(string cardName) => _statusFlash.FlashImageFetch(cardName, s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
     public void FlashMetaUrl(string url) => _statusFlash.FlashMetaUrl(url, s => Application.Current?.Dispatcher?.Invoke(() => ApiStatus = s));
@@ -405,17 +416,26 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public BinderViewModel()
     {
         RegisterInstance(this);
-        _collectionRepo = new CollectionRepository(_collection);
-        if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
-    _cachePaths = new CachePathService(ImageCacheStore.CacheRoot);
-    _statusPanel = new StatusPanelService(s => ApiStatus = s);
-    _telemetry = new TelemetryService(s => _statusPanel.Update(s, s2 => ApiStatus = s2), _debugHttpLogging);
-    _httpFactory = new HttpClientFactoryService(_telemetry);
-    _binderLoadService = new BinderLoadService(_binderTheme, _metadataResolver, _backImageService, hash => _cachePaths.IsMetaComplete(hash));
-    _specResolutionService = new SpecResolutionService(_metadataResolver);
-    _metadataOrchestrator = new Enfolderer.App.Metadata.MetadataLoadOrchestrator(_specResolutionService, _quantityService, _metadataResolver);
-    _quantityEnrichment = new QuantityEnrichmentService(_quantityService);
-    _quantityToggleService = new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
+    // Use bootstrapper exclusively for service construction (eliminate duplicated manual wiring here)
+    var localCachePaths = new CachePathService(ImageCacheStore.CacheRoot);
+    _cachePaths = localCachePaths;
+    var boot = Enfolderer.App.Core.Composition.AppBootstrapper.Build(ImageCacheStore.CacheRoot, _binderTheme, hash => localCachePaths.IsMetaComplete(hash));
+    _collectionRepo = boot.CollectionRepo;
+    _quantityService = boot.QuantityService;
+    _statusPanel = boot.StatusPanel;
+    _telemetry = boot.Telemetry;
+    _httpFactory = boot.HttpFactory;
+    _metadataProvider = boot.MetadataProvider; // currently unused directly; placeholder for future direct calls if needed
+    _binderLoadService = boot.CoreGraph.BinderLoad;
+    _specResolutionService = boot.CoreGraph.SpecResolution;
+    _metadataOrchestrator = boot.CoreGraph.Orchestrator;
+    _quantityCoordinator = boot.QuantityCoordinator;
+    _quantityToggleService = boot.QuantityToggle as Enfolderer.App.Quantity.QuantityToggleService ?? new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
+        _cachePersistence = boot.CachePersistence; // ensure existing field assigned
+        _arrangementService = boot.ArrangementService;
+    ImportService = boot.ImportService;
+    _pagePresenter = boot.PagePresenter;
+    _pageBatcher = boot.PageBatcher;
         _nav.ViewChanged += NavOnViewChanged;
         var commandFactory = new CommandFactory(_nav,
             () => PagesPerBinder,
@@ -462,7 +482,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
             // Always load from fixed exe directory now.
             _collection.Load(_currentCollectionDir);
-            if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+            if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
                 Debug.WriteLine($"[Binder] Collection auto-load (exe dir) invoked: loaded={_collection.IsLoaded} qtyKeys={_collection.Quantities.Count} dir={_currentCollectionDir}");
     }
     catch (Exception ex) { Debug.WriteLine($"[Binder] Collection auto-load failed: {ex.Message}"); }
@@ -470,7 +490,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         // Ignore binder-derived directory (we always use exe directory now).
         if (load.PagesPerBinderOverride.HasValue) PagesPerBinder = load.PagesPerBinderOverride.Value;
         if (!string.IsNullOrEmpty(load.LayoutModeOverride)) LayoutMode = load.LayoutModeOverride;
-        if (load.HttpDebugEnabled) _debugHttpLogging = true;
+    // load.HttpDebugEnabled no-op (deprecated debug flag removed).
     _session.LocalBackImagePath = load.LocalBackImagePath;
         _cards.Clear(); _specs.Clear(); _mfcBacks.Clear(); _orderedFaces.Clear(); _pendingExplicitVariantPairs.Clear();
         if (load.CacheHit)
@@ -496,8 +516,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             BuildOrderedFaces,
             () => { _nav.ResetIndex(); RebuildViews(); },
             Refresh,
-            () => _metadataResolver.PersistMetadataCache(_session.CurrentFileHash!, _cards),
-            () => _metadataResolver.MarkCacheComplete(_session.CurrentFileHash!)
+            () => _cachePersistence.Persist(_session.CurrentFileHash!, _cards),
+            () => _cachePersistence.MarkComplete(_session.CurrentFileHash!)
         );
     Debug.WriteLine("[Binder] LoadFromFileAsync complete");
     }
@@ -516,34 +536,12 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private void RebuildCardListFromSpecs()
     {
-        var builder = new CardListBuilder(_variantPairing);
-    var (cards, pairMap) = builder.Build(_specs, _mfcBacks, _pendingExplicitVariantPairs);
+    var arranger = _arrangementService ?? new Enfolderer.App.Core.Arrangement.CardArrangementService(_variantPairing);
+	var (cards, pairMap) = arranger.Build(_specs, _mfcBacks, _pendingExplicitVariantPairs);
         _cards.Clear(); _cards.AddRange(cards);
     _explicitVariantPairKeys.Clear(); foreach (var kv in pairMap) _explicitVariantPairKeys[kv.Key] = kv.Value;
         // Always enrich right after rebuild if collection loaded so UI reflects quantities immediately.
-        if (_collection.IsLoaded)
-        {
-            try
-            {
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                    Debug.WriteLine($"[Binder][Rebuild] Before enrichment: cards={_cards.Count} qtyKeys={_collection.Quantities.Count} anyPositive={_cards.Any(c=>c.Quantity>0)}");
-                _quantityService.EnrichQuantities(_collection, _cards);
-                _quantityService.AdjustMfcQuantities(_cards);
-                // IMPORTANT: _orderedFaces holds references to the pre-enrichment CardEntry record instances.
-                // Enrichment replaces entries in _cards with new record instances (records are immutable),
-                // so the existing _orderedFaces list continues to reference stale instances with Quantity=-1.
-                // Rebuild ordered faces after enrichment so page slots pick up updated quantities.
-                BuildOrderedFaces();
-                // Force an immediate visual refresh so newly enriched quantities appear without user action.
-                Refresh();
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                    Debug.WriteLine($"[Binder][Rebuild] After enrichment: positives={_cards.Count(c=>c.Quantity>0)} updatedZeroes={_cards.Count(c=>c.Quantity==0)} negatives={_cards.Count(c=>c.Quantity<0)}");
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[Collection] Auto enrichment failed: {ex.Message}");
-            }
-        }
+    _quantityCoordinator.EnrichAfterRebuildIfLoaded(_collection, _quantityService, _cards, BuildOrderedFaces, Refresh, Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug);
     }
     private readonly FaceOrderingService _faceOrdering = new();
     private void BuildOrderedFaces()
@@ -556,32 +554,9 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 
     private void Refresh()
     {
-        // Fallback: if any card still has unset quantity (-1) but collection is loaded, attempt enrichment again before presenting.
-        if (_collection.IsLoaded)
-        {
-            bool needs = false;
-            for (int i=0;i<_cards.Count;i++) { if (_cards[i].Quantity < 0) { needs = true; break; } }
-            if (needs)
-            {
-                try
-                {
-                    if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                        Debug.WriteLine($"[Binder][Refresh] Fallback enrichment triggered: cards={_cards.Count} qtyKeys={_collection.Quantities.Count} positivesPre={_cards.Count(c=>c.Quantity>0)}");
-                    _quantityService.EnrichQuantities(_collection, _cards);
-                    _quantityService.AdjustMfcQuantities(_cards);
-                    // Rebuild ordered faces so newly enriched quantities propagate to UI slots.
-                    BuildOrderedFaces();
-                    if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                        Debug.WriteLine($"[Binder][Refresh] After fallback enrichment: positives={_cards.Count(c=>c.Quantity>0)}");
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"[Collection] Fallback enrichment failed: {ex.Message}");
-                }
-            }
-        }
-        var presenter = new PageViewPresenter();
-        var result = presenter.Present(_nav, LeftSlots, RightSlots, _orderedFaces, SlotsPerPage, PagesPerBinder, Http, _binderTheme);
+    // Coordinator handles fallback enrichment if any -1 quantities remain.
+    _quantityCoordinator.EnrichFallbackIfNeeded(_collection, _quantityService, _cards, BuildOrderedFaces, Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug);
+    var result = _pagePresenter.Present(_nav, LeftSlots, RightSlots, _orderedFaces, SlotsPerPage, PagesPerBinder, _httpFactory!.Client, _binderTheme);
         PageDisplay = result.PageDisplay; OnPropertyChanged(nameof(PageDisplay));
         BinderBackground = result.BinderBackground; OnPropertyChanged(nameof(BinderBackground));
         if (_nav.Views.Count>0)
@@ -600,10 +575,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
-    private readonly PageResolutionBatcher _pageBatcher = new();
+    private readonly PageResolutionBatcher _pageBatcher; // injected
+    private readonly PageViewPresenter _pagePresenter; // injected
     private void TriggerPageResolution(params int[] pageNumbers)
     {
-        _pageBatcher.Trigger(pageNumbers, SlotsPerPage, _specs, _mfcBacks, _orderedFaces, _explicitVariantPairKeys,
+            _pageBatcher.Trigger(pageNumbers, SlotsPerPage, _specs, _mfcBacks, _orderedFaces, _explicitVariantPairKeys,
             _specResolutionService,
             () => Status,
             s => Status = s,
@@ -613,7 +589,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             _nav,
             _views,
             LeftSlots,
-            RightSlots);
+            RightSlots,
+            _httpFactory!.Client);
     }
 }
 
