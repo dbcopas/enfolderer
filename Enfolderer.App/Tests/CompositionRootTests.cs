@@ -21,11 +21,11 @@ public static class CompositionRootTests
         try
         {
             var theme = new BinderThemeService();
-            var qtySvc = new CardQuantityService();
+            var repo = new Enfolderer.App.Collection.CollectionRepository(new Enfolderer.App.Collection.CardCollectionData());
+            var qtySvc = new CardQuantityService(quantityRepository: repo);
             var backImg = new CardBackImageService();
             var resolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, new[]{"transform"}, 5);
             bool IsMetaComplete(string h) => true; // deterministic stub
-            var repo = new Enfolderer.App.Collection.CollectionRepository(new Enfolderer.App.Collection.CardCollectionData());
             var collection = new Enfolderer.App.Collection.CardCollectionData();
             var graph = CompositionRoot.BuildExisting(theme, qtySvc, backImg, resolver, IsMetaComplete, () => new System.Net.Http.HttpClient(new System.Net.Http.HttpClientHandler()), repo, collection);
             Check(graph.BinderLoad != null);

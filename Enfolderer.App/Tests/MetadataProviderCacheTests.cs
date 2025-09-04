@@ -21,7 +21,7 @@ public static class MetadataProviderCacheTests
             var cacheRoot = Path.Combine(Path.GetTempPath(), "enfolderer_provider_test_cache");
             Directory.CreateDirectory(cacheRoot);
             var resolver = new CardMetadataResolver(cacheRoot, new[]{"transform"}, 5);
-            var adapter = new CardMetadataResolverAdapter(resolver);
+            var adapter = new CardMetadataResolverLowLevelAdapter(resolver);
             IMetadataProvider provider = new MetadataProviderAdapter(adapter);
             var hash = Guid.NewGuid().ToString("N");
             var metaDir = Path.Combine(cacheRoot, "meta");

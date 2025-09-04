@@ -36,8 +36,9 @@ public static class AppBootstrapper
     public static AppRuntimeServices Build(string cacheRoot, BinderThemeService binderTheme, System.Func<string,bool> isMetaComplete)
     {
         var collection = new CardCollectionData();
-        var repo = new CollectionRepository(collection);
-        var qtySvc = new CardQuantityService();
+        var log = new DebugLogSink();
+        var repo = new CollectionRepository(collection, log);
+    var qtySvc = new CardQuantityService(quantityRepository: repo, log: log);
     var qtyEnrichment = new QuantityEnrichmentService(qtySvc);
     var qtyCoordinator = new QuantityEnrichmentCoordinator();
     var backImg = new CardBackImageService();
@@ -46,7 +47,7 @@ public static class AppBootstrapper
     var telemetry = new TelemetryService(s => { }, debugEnabled:false);
     var httpFactory = new HttpClientFactoryService(telemetry);
     // Inline constants (keep in sync with MainWindow): schemaVersion=5, physically two-sided layouts list
-    var resolver = new CardMetadataResolver(cacheRoot, new[]{"transform","modal_dfc","battle","double_faced_token","double_faced_card","prototype","reversible_card"}, 5);
+    var resolver = new CardMetadataResolver(cacheRoot, new[]{"transform","modal_dfc","battle","double_faced_token","double_faced_card","prototype","reversible_card"}, 5, log);
     var coreGraph = CompositionRoot.BuildExisting(binderTheme, qtySvc, backImg, resolver, isMetaComplete, () => httpFactory.Client, repo, collection);
     var cachePersistence = new MetadataCachePersistenceAdapter(coreGraph.ResolverAdapter);
     IQuantityToggleService qtyToggle = coreGraph.QuantityToggleService ?? new QuantityToggleService(qtySvc, repo, collection);

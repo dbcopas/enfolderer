@@ -17,7 +17,10 @@ namespace Enfolderer.App.Quantity;
 public sealed class CardQuantityService : IQuantityService
 {
     private readonly IRuntimeFlags _flags;
-    public CardQuantityService(IRuntimeFlags? flags = null) { _flags = flags ?? RuntimeFlags.Default; }
+    private readonly IQuantityRepository? _quantityRepo;
+    private readonly ILogSink? _log;
+    public CardQuantityService(IRuntimeFlags? flags = null, IQuantityRepository? quantityRepository = null, ILogSink? log = null)
+    { _flags = flags ?? RuntimeFlags.Default; _quantityRepo = quantityRepository; _log = log; }
 
     public void EnrichQuantities(CardCollectionData collection, List<CardEntry> cards)
     {
@@ -38,7 +41,7 @@ public sealed class CardQuantityService : IQuantityService
         List<string> unmatchedSamples = new();
         if (qtyDebug)
         {
-            Debug.WriteLine($"[QtyEnrich] Start: quantityKeys={collection.Quantities.Count} cards={cards.Count}");
+            _log?.Log($"Start: quantityKeys={collection.Quantities.Count} cards={cards.Count}", "QtyEnrich");
             Console.WriteLine($"[QtyEnrich] Start: quantityKeys={collection.Quantities.Count} cards={cards.Count}");
             try
             {
@@ -87,7 +90,7 @@ public sealed class CardQuantityService : IQuantityService
             var setLower = c.Set.ToLowerInvariant();
             if (qtyDebug && i < 50)
             {
-                Debug.WriteLine($"[QtyEnrich][Trace] Card[{i}] set={c.Set} rawNum={c.Number} base={baseNum} trimmed={trimmed}");
+                        _log?.Log($"Card[{i}] set={c.Set} rawNum={c.Number} base={baseNum} trimmed={trimmed}", "QtyEnrich.Trace");
             }
             int qty; bool found = collection.Quantities.TryGetValue((setLower, baseNum), out qty);
             if (!found && !string.Equals(trimmed, baseNum, StringComparison.Ordinal))
@@ -126,7 +129,7 @@ public sealed class CardQuantityService : IQuantityService
         }
         if (updated > 0)
         {
-            Debug.WriteLine($"[Collection] Quantities applied to {updated} faces");
+            _log?.Log($"Quantities applied to {updated} faces", "Collection");
             if (qtyDebug) Console.WriteLine($"[Collection] Quantities applied to {updated} faces");
         }
         else if (qtyDebug)
@@ -307,75 +310,22 @@ public sealed class CardQuantityService : IQuantityService
         if (qtyDebug) System.Diagnostics.Debug.WriteLine($"[Quantity][Toggle] Begin set={slot.Set} num={slot.Number} baseNum={baseNum} targetQty={newLogicalQty} isCustom={isCustom} warStar={warStar}");
 
         int? persistedQty = null;
-        if (cardId >= 0 && isCustom)
+        if (cardId >= 0 && _quantityRepo != null)
         {
-            string mainDbPath = Path.Combine(currentCollectionDir, "mainDb.db");
-            if (!File.Exists(mainDbPath)) { setStatus("mainDb missing"); return -1; }
-            try
+            if (isCustom)
             {
-                using var conMain = new SqliteConnection($"Data Source={mainDbPath}");
-                conMain.Open();
-                using var cmd = conMain.CreateCommand();
-                cmd.CommandText = "UPDATE Cards SET Qty=@q WHERE id=@id";
-                cmd.Parameters.AddWithValue("@q", newLogicalQty);
-                cmd.Parameters.AddWithValue("@id", cardId);
-                cmd.ExecuteNonQuery();
-                using var verify = conMain.CreateCommand();
-                verify.CommandText = "SELECT Qty FROM Cards WHERE id=@id";
-                verify.Parameters.AddWithValue("@id", cardId);
-                var obj = verify.ExecuteScalar();
-                if (obj != null && obj != DBNull.Value) persistedQty = Convert.ToInt32(obj);
+                string mainDbPath = Path.Combine(currentCollectionDir, "mainDb.db");
+                if (!File.Exists(mainDbPath)) { setStatus("mainDb missing"); return -1; }
+                persistedQty = _quantityRepo.UpdateCustomCardQuantity(mainDbPath, cardId, newLogicalQty, _flags.QtyDebug);
+                if (persistedQty == null) { setStatus("Write failed"); return -1; }
             }
-            catch (Exception ex)
-            { System.Diagnostics.Debug.WriteLine($"[CustomQty] mainDb write failed: {ex.Message}"); setStatus("Write failed"); return -1; }
-        }
-        else if (cardId >= 0 && !isCustom)
-        {
-            string collectionPath = Path.Combine(currentCollectionDir, "mtgstudio.collection");
-            if (!File.Exists(collectionPath)) { setStatus("Collection file missing"); return -1; }
-            try
+            else
             {
-                using var con = new SqliteConnection($"Data Source={collectionPath}");
-                con.Open();
-                using (var cmd = con.CreateCommand())
-                {
-                    cmd.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
-                    cmd.Parameters.AddWithValue("@q", newLogicalQty);
-                    cmd.Parameters.AddWithValue("@id", cardId);
-                    int rows = cmd.ExecuteNonQuery();
-                    if (_flags.QtyDebug)
-                        System.Diagnostics.Debug.WriteLine($"[Quantity][DB] UPDATE rows={rows} cardId={cardId} qty={newLogicalQty}");
-                    if (rows == 0)
-                    {
-                        using var ins = con.CreateCommand();
-                        ins.CommandText = @"INSERT INTO CollectionCards 
-                            (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)
-                            VALUES (@id,@q,0,0.0,0.0,0.0,0,0,0,0,0,'','',0,'',1,0,0,@added)";
-                        ins.Parameters.AddWithValue("@id", cardId);
-                        ins.Parameters.AddWithValue("@q", newLogicalQty);
-                        var added = DateTime.Now.ToString("s").Replace('T',' ');
-                        ins.Parameters.AddWithValue("@added", added);
-                        try 
-                        { 
-                            int insRows = ins.ExecuteNonQuery();
-                            if (insRows == 0) System.Diagnostics.Debug.WriteLine($"[Collection] Insert failed for CardId {cardId}");
-                            else if (_flags.QtyDebug)
-                                System.Diagnostics.Debug.WriteLine($"[Quantity][DB] INSERT rows={insRows} cardId={cardId} qty={newLogicalQty}");
-                        } 
-                        catch (Exception exIns) 
-                        { 
-                            System.Diagnostics.Debug.WriteLine($"[Collection] Insert exception for CardId {cardId}: {exIns.Message}");
-                        }
-                    }
-                    using var verify = con.CreateCommand();
-                    verify.CommandText = "SELECT Qty FROM CollectionCards WHERE CardId=@id";
-                    verify.Parameters.AddWithValue("@id", cardId);
-                    var obj = verify.ExecuteScalar();
-                    if (obj != null && obj != DBNull.Value) persistedQty = Convert.ToInt32(obj);
-                }
+                string collectionPath = Path.Combine(currentCollectionDir, "mtgstudio.collection");
+                if (!File.Exists(collectionPath)) { setStatus("Collection file missing"); return -1; }
+                persistedQty = _quantityRepo.UpsertStandardCardQuantity(collectionPath, cardId, newLogicalQty, _flags.QtyDebug);
+                if (persistedQty == null) { setStatus("Write failed"); return -1; }
             }
-            catch (Exception ex)
-            { System.Diagnostics.Debug.WriteLine($"[Collection] Toggle write failed: {ex.Message}"); setStatus("Write failed"); return -1; }
         }
 
         if (persistedQty.HasValue && persistedQty.Value != newLogicalQty)

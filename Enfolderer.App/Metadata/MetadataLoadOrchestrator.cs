@@ -21,9 +21,10 @@ public class MetadataLoadOrchestrator
     private readonly SpecResolutionService _specResolution;
     private readonly CardQuantityService _quantityService;
     private readonly IMetadataProvider _metadataProvider; // higher-level abstraction (future cache ops)
+    private readonly Enfolderer.App.Core.Abstractions.ILogSink? _log;
 
-    public MetadataLoadOrchestrator(SpecResolutionService specResolution, CardQuantityService quantityService, IMetadataProvider metadataProvider)
-    { _specResolution = specResolution; _quantityService = quantityService; _metadataProvider = metadataProvider; }
+    public MetadataLoadOrchestrator(SpecResolutionService specResolution, CardQuantityService quantityService, IMetadataProvider metadataProvider, Enfolderer.App.Core.Abstractions.ILogSink? log = null)
+    { _specResolution = specResolution; _quantityService = quantityService; _metadataProvider = metadataProvider; _log = log; }
 
     public async Task RunInitialAsync(
         BinderLoadResult load,
@@ -52,12 +53,12 @@ public class MetadataLoadOrchestrator
         // Load collection BEFORE first card list build so automatic initial enrichment (custom/mainDb-only quantities) can occur immediately.
         if (!string.IsNullOrEmpty(collectionDir))
         {
-            try { collection.Load(collectionDir); } catch (Exception ex) { Debug.WriteLine($"[Collection] Load failed (db): {ex.Message}"); }
+            try { collection.Load(collectionDir); } catch (Exception ex) { _log?.Log($"Load failed (db): {ex.Message}", "Collection"); }
         }
         rebuildCardList();
         if (collection.IsLoaded)
         {
-            try { _quantityService.EnrichQuantities(collection, cards); _quantityService.AdjustMfcQuantities(cards); } catch (Exception ex) { Debug.WriteLine($"[Collection] Enrichment failed: {ex.Message}"); }
+            try { _quantityService.EnrichQuantities(collection, cards); _quantityService.AdjustMfcQuantities(cards); } catch (Exception ex) { _log?.Log($"Enrichment failed: {ex.Message}", "Collection"); }
         }
         setStatus($"Initial load {cards.Count} faces (placeholders included).");
         buildOrderedFaces(); rebuildViews(); refresh();

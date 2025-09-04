@@ -6,30 +6,23 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Net.Http;
 using System.Runtime.CompilerServices;
-using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
+using System.Windows.Media.Imaging; // may still be used indirectly for image handling
 using Enfolderer.App.Imaging;
 using Enfolderer.App.Infrastructure;
-using Enfolderer.App.Importing;
+using Enfolderer.App.Importing; // import service usage
 using Enfolderer.App.Collection;
 using Enfolderer.App.Quantity;
 using Enfolderer.App.Layout;
 using Enfolderer.App.Binder;
-using Enfolderer.App.Metadata;
+using Enfolderer.App.Metadata; // orchestrator & provider types
 using Enfolderer.App.Core;
 using Enfolderer.App.Core.Abstractions;
 
@@ -320,7 +313,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private Enfolderer.App.Binder.NavigationViewBuilder? _navBuilder; // deferred until ctor end
     private IReadOnlyList<Enfolderer.App.Layout.NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly Enfolderer.App.Collection.CardCollectionData _collection = new();
-    private readonly Enfolderer.App.Quantity.CardQuantityService _quantityService = new();
+    private readonly Enfolderer.App.Quantity.CardQuantityService _quantityService; // repository-backed instance created in ctor
     private readonly Enfolderer.App.Quantity.QuantityEnrichmentService _quantityEnrichment;
     private readonly Enfolderer.App.Quantity.QuantityEnrichmentCoordinator _quantityCoordinator = new();
     private readonly Enfolderer.App.Collection.CollectionRepository _collectionRepo; // phase 3 collection repo
@@ -408,6 +401,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
         RegisterInstance(this);
     _collectionRepo = new CollectionRepository(_collection);
+    _quantityService = new Enfolderer.App.Quantity.CardQuantityService(quantityRepository: _collectionRepo);
     // Deprecated HTTP debug logging flag removed; RuntimeFlags can gate future diagnostics.
     // Use bootstrapper to assemble services (single source of wiring truth)
     var localCachePaths = new CachePathService(ImageCacheStore.CacheRoot);
