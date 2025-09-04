@@ -16,7 +16,7 @@ public class CardMetadataResolver
     private readonly HashSet<string> _physicallyTwoSidedLayouts;
     private readonly string _cacheRoot;
     private readonly int _schemaVersion;
-    private static readonly bool CacheDebug = Environment.GetEnvironmentVariable("ENFOLDERER_CACHE_DEBUG") == "1";
+    private static readonly bool CacheDebug = Enfolderer.App.Core.RuntimeFlags.Default.CacheDebug;
     private static void CacheLog(string msg) { if (CacheDebug) Debug.WriteLine("[Cache][Diag] " + msg); }
 
     public CardMetadataResolver(string cacheRoot, IEnumerable<string> physicallyTwoSidedLayouts, int schemaVersion)

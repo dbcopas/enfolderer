@@ -20,7 +20,7 @@ public partial class App : Application
 		};
 			AppDomain.CurrentDomain.FirstChanceException += (s, args) =>
 			{
-				if (args.Exception is ArgumentException && Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+				if (args.Exception is ArgumentException && Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
 				{
 					System.Diagnostics.Debug.WriteLine("[FirstChance][ArgumentException] " + args.Exception.Message + "\n" + args.Exception.StackTrace);
 				}
