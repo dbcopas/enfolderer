@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Diagnostics;
+using Enfolderer.App.Core.Logging;
 using Enfolderer.App.Collection;
 using Enfolderer.App.Core;
 using Microsoft.Data.Sqlite;
+using Enfolderer.App.Core.Abstractions;
 
 namespace Enfolderer.App.Quantity;
 
@@ -13,28 +15,44 @@ namespace Enfolderer.App.Quantity;
 /// Encapsulates quantity enrichment, MFC display adjustment, and toggle persistence logic.
 /// Extracted from MainWindow.xaml.cs (Phase 2 refactor).
 /// </summary>
-public sealed class CardQuantityService
+public sealed class CardQuantityService : IQuantityService
 {
+    private readonly IRuntimeFlags _flags;
+    private readonly IRuntimeFlagService? _flagService;
+    private readonly IQuantityRepository? _quantityRepo;
+    private readonly ILogSink? _log;
+    private readonly IMfcQuantityAdjustmentService _mfcAdjust;
+    public CardQuantityService(IRuntimeFlags? flags = null, IQuantityRepository? quantityRepository = null, ILogSink? log = null, IMfcQuantityAdjustmentService? mfcAdjustment = null, IRuntimeFlagService? flagService = null)
+    {
+        _flags = flags ?? RuntimeFlags.Default;
+        _quantityRepo = quantityRepository;
+        _log = log;
+        _mfcAdjust = mfcAdjustment ?? new MfcQuantityAdjustmentService(_flags, _log);
+        _flagService = flagService;
+    }
+
+    public ILogSink? LogSink => _log;
+
     public void EnrichQuantities(CardCollectionData collection, List<CardEntry> cards)
     {
-        bool qtyDebug = Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1";
+    bool qtyDebug = _flagService?.QtyDebug ?? _flags.QtyDebug;
         if (collection.Quantities.Count == 0)
         {
             if (qtyDebug)
             {
                 string reason = collection.IsLoaded ? "loaded-but-empty (no >0 Qty values?)" : "collection-not-loaded";
                 var firstFive = string.Join(", ", cards.Take(5).Select(c => c.Set+":"+c.Number));
-                Debug.WriteLine($"[QtyEnrich] Skip: Quantities empty - {reason}. Sample cards: {firstFive}");
+                _log?.Log($"Skip: Quantities empty - {reason}. Sample cards: {firstFive}", LogCategories.QtyEnrich);
                 Console.WriteLine($"[QtyEnrich] Skip: Quantities empty - {reason}. Sample cards: {firstFive}");
             }
             return;
         }
         int updated = 0;
-    int unmatchedCount = 0;
-    List<string> unmatchedSamples = new();
+        int unmatchedCount = 0;
+        List<string> unmatchedSamples = new();
         if (qtyDebug)
         {
-            Debug.WriteLine($"[QtyEnrich] Start: quantityKeys={collection.Quantities.Count} cards={cards.Count}");
+            _log?.Log($"Start: quantityKeys={collection.Quantities.Count} cards={cards.Count}", "QtyEnrich");
             Console.WriteLine($"[QtyEnrich] Start: quantityKeys={collection.Quantities.Count} cards={cards.Count}");
             try
             {
@@ -42,7 +60,7 @@ public sealed class CardQuantityService
                     .GroupBy(k => k.Item1)
                     .Take(5)
                     .Select(g => g.Key + ":" + string.Join("|", g.Take(8).Select(t => t.Item2)));
-                Debug.WriteLine("[QtyEnrich][KeysSample] " + string.Join(" || ", firstSets));
+                _log?.Log("KeysSample " + string.Join(" || ", firstSets), LogCategories.QtyEnrich);
             }
             catch { }
         }
@@ -65,12 +83,12 @@ public sealed class CardQuantityService
                         collection.TryGetVariantQuantityFlexible(c.Set, starTrim, "JP", out artQty))
                     { qtyVariant = artQty; variantFound = true; }
                 }
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                if (_flags.QtyDebug)
                 {
                     if (variantFound)
-                        System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT] WAR star authoritative {c.Number} -> base={starBaseRaw}/{starTrim} JP qty={qtyVariant}");
+                        _log?.Log($"WAR star authoritative {c.Number} -> base={starBaseRaw}/{starTrim} JP qty={qtyVariant}", LogCategories.QtyVariant);
                     else
-                        System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT-MISS] WAR star authoritative {c.Number} attempted base={starBaseRaw}/{starTrim} JP (flex) defaulting 0");
+                        _log?.Log($"WAR star authoritative {c.Number} attempted base={starBaseRaw}/{starTrim} JP (flex) defaulting 0", LogCategories.QtyVariant);
                 }
                 if (c.Quantity != qtyVariant) { cards[i] = c with { Quantity = qtyVariant }; updated++; }
                 continue;
@@ -83,7 +101,7 @@ public sealed class CardQuantityService
             var setLower = c.Set.ToLowerInvariant();
             if (qtyDebug && i < 50)
             {
-                Debug.WriteLine($"[QtyEnrich][Trace] Card[{i}] set={c.Set} rawNum={c.Number} base={baseNum} trimmed={trimmed}");
+                        _log?.Log($"Card[{i}] set={c.Set} rawNum={c.Number} base={baseNum} trimmed={trimmed}", "QtyEnrich.Trace");
             }
             int qty; bool found = collection.Quantities.TryGetValue((setLower, baseNum), out qty);
             if (!found && !string.Equals(trimmed, baseNum, StringComparison.Ordinal))
@@ -100,13 +118,13 @@ public sealed class CardQuantityService
             }
             if (!found)
             {
-        if (qtyDebug)
+                if (qtyDebug)
                 {
                     try
                     {
                         var sampleKeys = string.Join(", ", collection.Quantities.Keys.Where(k => k.Item1 == setLower).Take(25).Select(k => k.Item1+":"+k.Item2));
-            Debug.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found. Sample keys for set: {sampleKeys}");
-            Console.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found.");
+                        _log?.Log($"MISS {c.Set} {baseNum} (trim {trimmed}) sampleKeys={sampleKeys}", LogCategories.Collection);
+                        Console.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found.");
                         if (unmatchedSamples.Count < 15)
                         {
                             unmatchedSamples.Add($"{c.Set}:{baseNum} trim={trimmed} raw='{c.Number}'");
@@ -122,7 +140,7 @@ public sealed class CardQuantityService
         }
         if (updated > 0)
         {
-            Debug.WriteLine($"[Collection] Quantities applied to {updated} faces");
+            _log?.Log($"Quantities applied to {updated} faces", "Collection");
             if (qtyDebug) Console.WriteLine($"[Collection] Quantities applied to {updated} faces");
         }
         else if (qtyDebug)
@@ -131,79 +149,23 @@ public sealed class CardQuantityService
         }
         if (qtyDebug && unmatchedCount > 0)
         {
-            Debug.WriteLine($"[Collection][MISS-SUMMARY] unmatched={unmatchedCount} firstSamples={string.Join(" | ", unmatchedSamples)}");
+            _log?.Log($"MISS-SUMMARY unmatched={unmatchedCount} firstSamples={string.Join(" | ", unmatchedSamples)}", LogCategories.CollectionDebug);
             Console.WriteLine($"[Collection][MISS-SUMMARY] unmatched={unmatchedCount} (see Debug output for samples)");
         }
     }
 
     public void AdjustMfcQuantities(List<CardEntry> cards)
     {
-        for (int i = 0; i < cards.Count; i++)
-        {
-            var front = cards[i];
-            if (!front.IsModalDoubleFaced || front.IsBackFace) continue;
-            int q = front.Quantity; if (q < 0) continue;
-            int frontDisplay, backDisplay;
-            if (q <= 0) { frontDisplay = 0; backDisplay = 0; }
-            else if (q == 1) { frontDisplay = 1; backDisplay = 0; }
-            else { frontDisplay = 2; backDisplay = 2; }
-            if (front.Quantity != frontDisplay) cards[i] = front with { Quantity = frontDisplay };
-            int backIndex = -1;
-            if (i + 1 < cards.Count)
-            {
-                var candidate = cards[i + 1];
-                if (candidate.IsModalDoubleFaced && candidate.IsBackFace && candidate.Set == front.Set && candidate.Number == front.Number)
-                    backIndex = i + 1;
-            }
-            if (backIndex == -1)
-            {
-                for (int j = i + 1; j < cards.Count; j++)
-                {
-                    var cand = cards[j];
-                    if (cand.IsModalDoubleFaced && cand.IsBackFace && cand.Set == front.Set && cand.Number == front.Number)
-                    { backIndex = j; break; }
-                }
-            }
-            if (backIndex >= 0)
-            {
-                var back = cards[backIndex];
-                if (back.Quantity != backDisplay) cards[backIndex] = back with { Quantity = backDisplay };
-            }
-        }
+    // Delegated to injected specialized service.
+        _mfcAdjust.Adjust(cards);
+    }
 
-        // Fallback pass: some modal DFCs (e.g., certain ZNR lands) may have both faces marked
-        // IsModalDoubleFaced=true but neither flagged IsBackFace. That causes both faces to retain
-        // the same quantity value (e.g., 1) and both render opaque. Detect simple pairs and treat
-        // the second as the back face for display purposes.
-        var modalGroups = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-        for (int gi = 0; gi < cards.Count; gi++)
-        {
-            var c = cards[gi];
-            // Broaden detection: include classic modal_dfc OR entries that have both front/back raw text even if IsModalDoubleFaced flag wasn't set (regression cases like SLD 379, ZNR 286).
-            bool treatAsModal = c.IsModalDoubleFaced || (!c.IsBackFace && !string.IsNullOrEmpty(c.FrontRaw) && !string.IsNullOrEmpty(c.BackRaw));
-            if (!treatAsModal) continue;
-            string setKey = c.Set ?? string.Empty;
-            string numKey = c.Number?.Split('/')[0] ?? string.Empty;
-            string composite = setKey + "|" + numKey;
-            if (!modalGroups.TryGetValue(composite, out var list)) { list = new List<int>(); modalGroups[composite] = list; }
-            list.Add(gi);
-        }
-        foreach (var list in modalGroups.Values)
-        {
-            if (list.Count != 2) continue; // only handle simple paired faces
-            var a = cards[list[0]]; var b = cards[list[1]];
-            if (a.IsBackFace || b.IsBackFace) continue; // proper pairing already handled earlier
-            int qLogical = Math.Max(a.Quantity, b.Quantity);
-            int frontDisplay, backDisplay;
-            if (qLogical <= 0) { frontDisplay = 0; backDisplay = 0; }
-            else if (qLogical == 1) { frontDisplay = 1; backDisplay = 0; }
-            else { frontDisplay = 2; backDisplay = 2; }
-            if (a.Quantity != frontDisplay) cards[list[0]] = a with { Quantity = frontDisplay };
-            if (b.Quantity != backDisplay) cards[list[1]] = b with { Quantity = backDisplay };
-            if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                Debug.WriteLine($"[MFC][FallbackAdjust] Applied heuristic split (broad) set={a.Set} num={a.Number} q={qLogical} front={frontDisplay} back={backDisplay} flags aMfc={a.IsModalDoubleFaced} bMfc={b.IsModalDoubleFaced}");
-        }
-
+    // Convenience combined operation
+    public void ApplyAll(CardCollectionData collection, List<CardEntry> cards)
+    {
+        EnrichQuantities(collection, cards);
+    // Apply MFC display adjustment to the canonical card list first.
+    AdjustMfcQuantities(cards);
     }
 
     public int ToggleQuantity(
@@ -218,7 +180,6 @@ public sealed class CardQuantityService
         if (slot == null) { setStatus("No slot"); return -1; }
         if (slot.IsPlaceholderBack) { setStatus("Back face placeholder"); return -1; }
         if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { setStatus("No set/number"); return -1; }
-    // Directory is always the executable directory now (enforced by caller); no null check required.
         if (!collection.IsLoaded) { setStatus("Collection not loaded"); return -1; }
 
         string numToken = slot.Number.Split('/')[0];
@@ -228,7 +189,7 @@ public sealed class CardQuantityService
         string setLower = slot.Set.ToLowerInvariant();
         (int cardId, int? gatherer) foundEntry = default; bool indexFound = false;
         bool warStar = slot.Set.Equals("WAR", StringComparison.OrdinalIgnoreCase) && slot.Number.IndexOf('★') >= 0;
-    string originalNumberWithStar = slot.Number; // preserve exact displayed number for direct orderedFaces match
+        string originalNumberWithStar = slot.Number;
         bool variantAttemptedEarly = false;
         if (warStar)
         {
@@ -283,22 +244,19 @@ public sealed class CardQuantityService
         }
         int cardId = foundEntry.cardId;
 
-        // Synthetic negative cardIds (built from quantities when MainIndex empty) are not stable across reloads.
-        // Attempt to resolve a real persistent cardId from the DB so the toggle will survive refresh.
         if (cardId < 0)
         {
             int? realId = resolveCardIdFromDb(slot.Set, baseNum, trimmed);
             if (realId.HasValue && realId.Value >= 0)
             {
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                    System.Diagnostics.Debug.WriteLine($"[Quantity][Synthetic->Real] Replaced synthetic cardId {cardId} with real {realId.Value} set={slot.Set} num={slot.Number} base={baseNum}/{trimmed}");
+                if (_flags.QtyDebug)
+                    _log?.Log($"Synthetic->Real replaced {cardId} with {realId.Value} set={slot.Set} num={slot.Number} base={baseNum}/{trimmed}", LogCategories.CollectionDebug);
                 cardId = realId.Value;
             }
             else
             {
-                // We can't persist reliably; still update in-memory/UI but warn.
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                    System.Diagnostics.Debug.WriteLine($"[Quantity][Synthetic][NoRealId] set={slot.Set} num={slot.Number} base={baseNum}/{trimmed} toggle will not persist.");
+                if (_flags.QtyDebug)
+                    _log?.Log($"Synthetic NoRealId set={slot.Set} num={slot.Number} base={baseNum}/{trimmed} toggle will not persist", LogCategories.CollectionWarn);
             }
         }
 
@@ -306,102 +264,50 @@ public sealed class CardQuantityService
         bool isMfcFront = false;
         var entry = cards.FirstOrDefault(c => c.Set != null && string.Equals(c.Set, slot.Set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number.Split('/')[0], baseNum.Split('/')[0], StringComparison.OrdinalIgnoreCase) && c.Name == slot.Name);
         if (entry != null && entry.IsModalDoubleFaced && !entry.IsBackFace) { isMfcFront = true; logicalQty = slot.Quantity; }
-    int newLogicalQty = !isMfcFront ? (logicalQty == 0 ? 1 : 0) : (logicalQty == 0 ? 1 : (logicalQty == 1 ? 2 : 0));
-    bool isCustom = collection.CustomCards.Contains(cardId);
-    bool qtyDebug = Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1";
-    if (qtyDebug) System.Diagnostics.Debug.WriteLine($"[Quantity][Toggle] Begin set={slot.Set} num={slot.Number} baseNum={baseNum} targetQty={newLogicalQty} isCustom={isCustom} warStar={warStar}");
+        int newLogicalQty = !isMfcFront ? (logicalQty == 0 ? 1 : 0) : (logicalQty == 0 ? 1 : (logicalQty == 1 ? 2 : 0));
+        bool isCustom = collection.CustomCards.Contains(cardId);
+        bool qtyDebug = _flags.QtyDebug;
+    if (qtyDebug) _log?.Log($"Toggle begin set={slot.Set} num={slot.Number} baseNum={baseNum} targetQty={newLogicalQty} isCustom={isCustom} warStar={warStar}", LogCategories.CollectionDebug);
 
-        int? persistedQty = null; // will be populated for verification
-    if (cardId >= 0 && isCustom)
+        int? persistedQty = null;
+        if (cardId >= 0 && _quantityRepo != null)
         {
-            string mainDbPath = Path.Combine(currentCollectionDir, "mainDb.db");
-            if (!File.Exists(mainDbPath)) { setStatus("mainDb missing"); return -1; }
-            try
+            if (isCustom)
             {
-                using var conMain = new SqliteConnection($"Data Source={mainDbPath}");
-                conMain.Open();
-                using var cmd = conMain.CreateCommand();
-                cmd.CommandText = "UPDATE Cards SET Qty=@q WHERE id=@id";
-                cmd.Parameters.AddWithValue("@q", newLogicalQty);
-                cmd.Parameters.AddWithValue("@id", cardId);
-                cmd.ExecuteNonQuery();
-                // Read back
-                using var verify = conMain.CreateCommand();
-                verify.CommandText = "SELECT Qty FROM Cards WHERE id=@id";
-                verify.Parameters.AddWithValue("@id", cardId);
-                var obj = verify.ExecuteScalar();
-                if (obj != null && obj != DBNull.Value) persistedQty = Convert.ToInt32(obj);
+                string mainDbPath = Path.Combine(currentCollectionDir, "mainDb.db");
+                if (!File.Exists(mainDbPath)) { setStatus("mainDb missing"); return -1; }
+                persistedQty = _quantityRepo.UpdateCustomCardQuantity(mainDbPath, cardId, newLogicalQty, _flags.QtyDebug);
+                if (persistedQty == null) { setStatus("Write failed"); return -1; }
             }
-            catch (Exception ex)
-            { System.Diagnostics.Debug.WriteLine($"[CustomQty] mainDb write failed: {ex.Message}"); setStatus("Write failed"); return -1; }
-        }
-        else if (cardId >= 0 && !isCustom)
-        {
-            string collectionPath = Path.Combine(currentCollectionDir, "mtgstudio.collection");
-            if (!File.Exists(collectionPath)) { setStatus("Collection file missing"); return -1; }
-            try
+            else
             {
-                using var con = new SqliteConnection($"Data Source={collectionPath}");
-                con.Open();
-                using (var cmd = con.CreateCommand())
-                {
-                    cmd.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
-                    cmd.Parameters.AddWithValue("@q", newLogicalQty);
-                    cmd.Parameters.AddWithValue("@id", cardId);
-                    int rows = cmd.ExecuteNonQuery();
-                    if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                        System.Diagnostics.Debug.WriteLine($"[Quantity][DB] UPDATE rows={rows} cardId={cardId} qty={newLogicalQty}");
-                    if (rows == 0)
-                    {
-                        // No existing row in mtgstudio.collection for this MtgsId-backed card: insert full record.
-                        // Columns (legacy schema): CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added
-                        using var ins = con.CreateCommand();
-                        ins.CommandText = @"INSERT INTO CollectionCards 
-                            (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)
-                            VALUES (@id,@q,0,0.0,0.0,0.0,0,0,0,0,0,'','',0,'',1,0,0,@added)";
-                        ins.Parameters.AddWithValue("@id", cardId);
-                        ins.Parameters.AddWithValue("@q", newLogicalQty);
-                        var added = DateTime.Now.ToString("s").Replace('T',' ');
-                        ins.Parameters.AddWithValue("@added", added);
-                        try 
-                        { 
-                            int insRows = ins.ExecuteNonQuery();
-                            if (insRows == 0) System.Diagnostics.Debug.WriteLine($"[Collection] Insert failed for CardId {cardId}");
-                            else if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                                System.Diagnostics.Debug.WriteLine($"[Quantity][DB] INSERT rows={insRows} cardId={cardId} qty={newLogicalQty}");
-                        } 
-                        catch (Exception exIns) 
-                        { 
-                            System.Diagnostics.Debug.WriteLine($"[Collection] Insert exception for CardId {cardId}: {exIns.Message}");
-                        }
-                    }
-                    // Read back persisted value (whether update or insert)
-                    using var verify = con.CreateCommand();
-                    verify.CommandText = "SELECT Qty FROM CollectionCards WHERE CardId=@id";
-                    verify.Parameters.AddWithValue("@id", cardId);
-                    var obj = verify.ExecuteScalar();
-                    if (obj != null && obj != DBNull.Value) persistedQty = Convert.ToInt32(obj);
-                }
+                string collectionPath = Path.Combine(currentCollectionDir, "mtgstudio.collection");
+                if (!File.Exists(collectionPath)) { setStatus("Collection file missing"); return -1; }
+                persistedQty = _quantityRepo.UpsertStandardCardQuantity(collectionPath, cardId, newLogicalQty, _flags.QtyDebug);
+                if (persistedQty == null) { setStatus("Write failed"); return -1; }
             }
-            catch (Exception ex)
-            { System.Diagnostics.Debug.WriteLine($"[Collection] Toggle write failed: {ex.Message}"); setStatus("Write failed"); return -1; }
         }
 
-        // Verification & reconciliation: if DB value differs, trust DB and adjust UI/in-memory.
         if (persistedQty.HasValue && persistedQty.Value != newLogicalQty)
         {
-            if (qtyDebug) System.Diagnostics.Debug.WriteLine($"[Quantity][Mismatch] CardId={cardId} intended={newLogicalQty} persisted={persistedQty.Value} set={slot.Set} num={slot.Number}");
+            if (qtyDebug) _log?.Log($"Toggle mismatch CardId={cardId} intended={newLogicalQty} persisted={persistedQty.Value} set={slot.Set} num={slot.Number}", LogCategories.CollectionWarn);
             newLogicalQty = persistedQty.Value;
         }
-        // Only now update the slot (after persistence) so UI reflects stored value.
         if (slot.Quantity != newLogicalQty) slot.Quantity = newLogicalQty;
         if (cardId < 0 && qtyDebug)
-            System.Diagnostics.Debug.WriteLine($"[Quantity][Warning] Using synthetic cardId for UI-only update; value will revert on refresh set={slot.Set} num={slot.Number}");
+            _log?.Log($"Using synthetic cardId for UI-only update; value will revert on refresh set={slot.Set} num={slot.Number}", LogCategories.CollectionWarn);
 
         if (newLogicalQty > 0) collection.Quantities[(setLower, baseNum)] = newLogicalQty; else collection.Quantities.Remove((setLower, baseNum));
         if (!string.Equals(trimmed, baseNum, StringComparison.Ordinal))
         {
             if (newLogicalQty > 0) collection.Quantities[(setLower, trimmed)] = newLogicalQty; else collection.Quantities.Remove((setLower, trimmed));
+        }
+        // If baseNum contains trailing non-digit variant letters (e.g., 13a), also update the pure numeric base so enrichment maps future rebuilds.
+        string numericBaseOnly = baseNum;
+        while (numericBaseOnly.Length > 0 && !char.IsDigit(numericBaseOnly[^1])) numericBaseOnly = numericBaseOnly.Substring(0, numericBaseOnly.Length - 1);
+        if (numericBaseOnly.Length > 0 && !string.Equals(numericBaseOnly, baseNum, StringComparison.OrdinalIgnoreCase))
+        {
+            if (newLogicalQty > 0) collection.Quantities[(setLower, numericBaseOnly)] = newLogicalQty; else collection.Quantities.Remove((setLower, numericBaseOnly));
         }
         // For WAR star variant cards, also update VariantQuantities so subsequent enrichment passes reflect new value without a full DB reload.
         if (warStar)
@@ -429,10 +335,23 @@ public sealed class CardQuantityService
             {
                 string cBase = c.Number.Split('/')[0];
                 string cBaseStarless = cBase.IndexOf('★') >= 0 ? cBase.Replace("★", string.Empty) : cBase;
-                if (string.Equals(cBase, baseNum, StringComparison.OrdinalIgnoreCase) ||
+                string slotBaseForCompare = baseNum;
+                // If the slot base (from DisplayNumber/EffectiveNumber) has trailing non-digits but the card's underlying number does not,
+                // trim trailing non-digit characters for comparison (mirrors enrichment fallback logic).
+                if (!string.Equals(cBase, slotBaseForCompare, StringComparison.OrdinalIgnoreCase))
+                {
+                    string trimmedVariant = slotBaseForCompare;
+                    while (trimmedVariant.Length > 0 && !char.IsDigit(trimmedVariant[^1])) trimmedVariant = trimmedVariant.Substring(0, trimmedVariant.Length - 1);
+                    if (trimmedVariant.Length > 0) slotBaseForCompare = trimmedVariant;
+                }
+                bool matches =
+                    string.Equals(cBase, baseNum, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(cBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(cBaseStarless, baseNum, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(cBaseStarless.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase))
+                    string.Equals(cBaseStarless.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cBase, slotBaseForCompare, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cBase.TrimStart('0'), slotBaseForCompare.TrimStart('0'), StringComparison.OrdinalIgnoreCase);
+                if (matches)
                 {
                     if (c.Quantity != newLogicalQty)
                         cards[i] = c with { Quantity = newLogicalQty };
@@ -440,23 +359,39 @@ public sealed class CardQuantityService
             }
         }
         AdjustMfcQuantities(cards);
-        for (int i = 0; i < orderedFaces.Count; i++)
+    for (int i = 0; i < orderedFaces.Count; i++)
         {
             var o = orderedFaces[i];
             if (o.Set != null && string.Equals(o.Set, slot.Set, StringComparison.OrdinalIgnoreCase))
             {
                 string oBase = o.Number.Split('/')[0];
                 string oBaseStarless = oBase.IndexOf('★') >= 0 ? oBase.Replace("★", string.Empty) : oBase;
-                if (string.Equals(oBase, baseNum, StringComparison.OrdinalIgnoreCase) ||
+                string slotBaseForCompare = baseNum;
+                if (!string.Equals(oBase, slotBaseForCompare, StringComparison.OrdinalIgnoreCase))
+                {
+                    string trimmedVariant = slotBaseForCompare;
+                    while (trimmedVariant.Length > 0 && !char.IsDigit(trimmedVariant[^1])) trimmedVariant = trimmedVariant.Substring(0, trimmedVariant.Length - 1);
+                    if (trimmedVariant.Length > 0) slotBaseForCompare = trimmedVariant;
+                }
+                bool matches =
+                    string.Equals(oBase, baseNum, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(oBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(oBaseStarless, baseNum, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(oBaseStarless.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase) ||
-                    // Direct match on original star number ensures replacement when only resolution differed
-                    string.Equals(o.Number, originalNumberWithStar, StringComparison.OrdinalIgnoreCase))
+                    string.Equals(oBase, slotBaseForCompare, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(oBase.TrimStart('0'), slotBaseForCompare.TrimStart('0'), StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(o.Number, originalNumberWithStar, StringComparison.OrdinalIgnoreCase);
+                if (matches)
                 {
                     var updated = cards.FirstOrDefault(c => c.Set != null && c.Set.Equals(o.Set, StringComparison.OrdinalIgnoreCase) && c.Number == o.Number && c.IsBackFace == o.IsBackFace);
                     if (updated != null && updated.Quantity != o.Quantity) orderedFaces[i] = updated;
                 }
+            }
+            // Synchronize any remaining MFC front/back display split even if not the toggled set (ensures immediate UI correctness)
+            if (o.IsModalDoubleFaced)
+            {
+                var m = cards.FirstOrDefault(c => c.IsModalDoubleFaced == o.IsModalDoubleFaced && c.IsBackFace == o.IsBackFace && c.Set == o.Set && c.Number == o.Number && c.Name == o.Name);
+                if (m != null && m.Quantity != o.Quantity) orderedFaces[i] = m;
             }
         }
         setStatus($"Set {slot.Set} #{slot.Number} => {newLogicalQty}");

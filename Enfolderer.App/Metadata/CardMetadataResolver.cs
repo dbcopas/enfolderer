@@ -16,14 +16,20 @@ public class CardMetadataResolver
     private readonly HashSet<string> _physicallyTwoSidedLayouts;
     private readonly string _cacheRoot;
     private readonly int _schemaVersion;
-    private static readonly bool CacheDebug = Environment.GetEnvironmentVariable("ENFOLDERER_CACHE_DEBUG") == "1";
-    private static void CacheLog(string msg) { if (CacheDebug) Debug.WriteLine("[Cache][Diag] " + msg); }
+    private static readonly bool CacheDebug = Enfolderer.App.Core.RuntimeFlags.Default.CacheDebug;
+    private readonly Enfolderer.App.Core.Abstractions.ILogSink? _log;
+    private void CacheLog(string msg)
+    {
+        if (!CacheDebug) return;
+        if (_log != null) _log.Log(msg, "Cache.Diag"); else Debug.WriteLine("[Cache][Diag] " + msg);
+    }
 
-    public CardMetadataResolver(string cacheRoot, IEnumerable<string> physicallyTwoSidedLayouts, int schemaVersion)
+    public CardMetadataResolver(string cacheRoot, IEnumerable<string> physicallyTwoSidedLayouts, int schemaVersion, Enfolderer.App.Core.Abstractions.ILogSink? log = null)
     {
         _cacheRoot = cacheRoot;
         _physicallyTwoSidedLayouts = new HashSet<string>(physicallyTwoSidedLayouts, StringComparer.OrdinalIgnoreCase);
         _schemaVersion = schemaVersion;
+        _log = log;
     }
 
     private string MetaCacheDir => Path.Combine(_cacheRoot, "meta");
@@ -61,7 +67,7 @@ public class CardMetadataResolver
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[PerCardCache] Failed to load {setCode} {number}: {ex.Message}");
+            _log?.Log($"Failed to load per-card cache {setCode} {number}: {ex.Message}", "Cache.Card");
             return false;
         }
     }
@@ -83,7 +89,7 @@ public class CardMetadataResolver
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[PerCardCache] Persist failed {ce.Set} {ce.Number}: {ex.Message}");
+            _log?.Log($"Persist per-card cache failed {ce.Set} {ce.Number}: {ex.Message}", "Cache.Card");
         }
     }
 
@@ -124,7 +130,7 @@ public class CardMetadataResolver
             CacheLog($"HIT hash={hash} faces={faces.Count} schema={firstVersion}");
             return true;
         }
-        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to load metadata cache: {ex.Message}"); return false; }
+    catch (Exception ex) { _log?.Log($"Failed to load metadata cache: {ex.Message}", "Cache"); return false; }
     }
 
     public void PersistMetadataCache(string? hash, List<CardEntry> cards)
@@ -150,13 +156,13 @@ public class CardMetadataResolver
             File.WriteAllText(path, json);
             if (CacheDebug)
             {
-                Debug.WriteLine($"[Cache][Diag] Persist hash={hash} faces={list.Count} overwrite={existed}");
                 var missingLayout = list.Where(f => string.IsNullOrEmpty(f.Layout)).Take(5).ToList();
-                if (missingLayout.Count>0) Debug.WriteLine($"[Cache][Diag] Persist missing_layout count={missingLayout.Count} sample=" + string.Join(',', missingLayout.Select(f => (f.Set??"?")+":"+f.Number)));
+                _log?.Log($"Persist hash={hash} faces={list.Count} overwrite={existed}", "Cache.Diag");
+                if (missingLayout.Count>0) _log?.Log($"Persist missing_layout count={missingLayout.Count} sample=" + string.Join(',', missingLayout.Select(f => (f.Set??"?")+":"+f.Number)), "Cache.Diag");
             }
-            Debug.WriteLine($"[Cache] Wrote metadata cache {hash} faces={list.Count}");
+            _log?.Log($"Wrote metadata cache {hash} faces={list.Count}", "Cache");
         }
-        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to write metadata cache: {ex.Message}"); }
+        catch (Exception ex) { _log?.Log($"Failed to write metadata cache: {ex.Message}", "Cache"); }
     }
 
     public void MarkCacheComplete(string? hash)
@@ -166,64 +172,113 @@ public class CardMetadataResolver
         {
             File.WriteAllText(MetaCacheDonePath(hash), DateTime.UtcNow.ToString("O"));
         }
-        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to mark cache complete: {ex.Message}"); }
+    catch (Exception ex) { _log?.Log($"Failed to mark cache complete: {ex.Message}", "Cache"); }
     }
 
     public async Task ResolveSpecsAsync(
-        List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList,
+        List<FetchSpec> fetchList,
         HashSet<int> targetIndexes,
         Func<int,int> updateCallback,
         Func<int,CardEntry?,(CardEntry? backFace,bool persist)> onCardResolved,
         Func<string,string,string?,Task<CardEntry?>> fetchCard)
     {
-        int total = targetIndexes.Count;
-        int done = 0;
-        var concurrency = new SemaphoreSlim(6);
-        var tasks = new List<Task>();
+        // Deduplicate (SetCode, Number, NameOverride) entries so we don't refetch the same card multiple times.
+        // Many binder specs can reference identical cards (especially with variant display differences).
+        var keyComparer = StringComparer.OrdinalIgnoreCase;
+        var canonicalByKey = new Dictionary<(string set,string number,string? name), int>(capacity: fetchList.Count);
+        var dupSpecIndexesByCanonical = new Dictionary<int, List<int>>();
+        var unique = new List<FetchSpec>(fetchList.Count);
+        var canonicalTargetIndexes = new HashSet<int>();
         foreach (var f in fetchList)
         {
-            if (!targetIndexes.Contains(f.specIndex)) continue;
+            var key = (f.SetCode, f.Number, f.NameOverride);
+            if (!canonicalByKey.TryGetValue(key, out int canonicalSpecIndex))
+            {
+                canonicalByKey[key] = f.SpecIndex;
+                unique.Add(f);
+                if (targetIndexes.Contains(f.SpecIndex)) canonicalTargetIndexes.Add(f.SpecIndex);
+            }
+            else
+            {
+                // Record duplicate mapping if duplicate index is in the target set
+                if (targetIndexes.Contains(f.SpecIndex))
+                {
+                    if (!dupSpecIndexesByCanonical.TryGetValue(canonicalSpecIndex, out var list))
+                    {
+                        list = new List<int>(2);
+                        dupSpecIndexesByCanonical[canonicalSpecIndex] = list;
+                    }
+                    list.Add(f.SpecIndex);
+                }
+            }
+        }
+
+        // Sort unique list by SetCode to improve locality (cache, potential future batch endpoints)
+        unique.Sort((a,b) => string.Compare(a.SetCode, b.SetCode, StringComparison.OrdinalIgnoreCase));
+
+        int total = targetIndexes.Count; // still report original target count
+        int done = 0;
+        var concurrency = new SemaphoreSlim(6);
+        var tasks = new List<Task>(unique.Count);
+        foreach (var f in unique)
+        {
+            if (!canonicalTargetIndexes.Contains(f.SpecIndex)) continue; // skip if canonical not needed
             await concurrency.WaitAsync();
             tasks.Add(Task.Run(async () =>
             {
+                int newlyResolvedCount = 0; // number of spec indexes satisfied by this fetch (canonical + dups in target set)
                 try
                 {
                     CardEntry? resolved = null;
-                    // Try per-card cache first
-                    if (!TryLoadCardFromCache(f.setCode, f.number, out resolved) || resolved == null)
+                    if (!TryLoadCardFromCache(f.SetCode, f.Number, out resolved) || resolved == null)
                     {
-                        resolved = await fetchCard(f.setCode, f.number, f.nameOverride);
-                        if (resolved != null)
-                        {
-                            PersistCardToCache(resolved);
-                        }
+                        resolved = await fetchCard(f.SetCode, f.Number, f.NameOverride);
+                        if (resolved != null) PersistCardToCache(resolved);
                     }
+                    CardEntry? backFace = null;
                     if (resolved != null)
                     {
-                        // If MFC and has both faces, synthesize back entry for persistence
-                        CardEntry? backFace = null;
                         if (resolved.IsModalDoubleFaced && !string.IsNullOrEmpty(resolved.FrontRaw) && !string.IsNullOrEmpty(resolved.BackRaw))
                         {
                             var backDisplay = $"{resolved.BackRaw} ({resolved.FrontRaw})";
                             backFace = new CardEntry(backDisplay, resolved.Number, resolved.Set, true, true, resolved.FrontRaw, resolved.BackRaw);
                             PersistCardToCache(backFace);
                         }
-                        onCardResolved(f.specIndex, resolved);
-                        if (backFace != null) onCardResolved(f.specIndex, backFace);
+                        onCardResolved(f.SpecIndex, resolved); newlyResolvedCount++;
+                        if (backFace != null) { onCardResolved(f.SpecIndex, backFace); }
+                        // Propagate to duplicates
+                        if (dupSpecIndexesByCanonical.TryGetValue(f.SpecIndex, out var dups))
+                        {
+                            foreach (var di in dups)
+                            {
+                                onCardResolved(di, resolved);
+                                if (backFace != null) onCardResolved(di, backFace);
+                                newlyResolvedCount++;
+                            }
+                        }
                     }
                     else
                     {
-                        onCardResolved(f.specIndex, null);
+                        onCardResolved(f.SpecIndex, null); newlyResolvedCount++;
+                        if (dupSpecIndexesByCanonical.TryGetValue(f.SpecIndex, out var dups))
+                        {
+                            foreach (var di in dups)
+                            {
+                                onCardResolved(di, null);
+                                newlyResolvedCount++;
+                            }
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[ResolveSpecs] Failed {f.setCode} {f.number}: {ex.Message}");
+                    _log?.Log($"ResolveSpecs failure {f.SetCode} {f.Number}: {ex.Message}", "ResolveSpecs");
                 }
                 finally
                 {
-                    Interlocked.Increment(ref done);
-                    updateCallback(done);
+                    if (newlyResolvedCount == 0) newlyResolvedCount = 1; // safety fallback
+                    int newDone = Interlocked.Add(ref done, newlyResolvedCount);
+                    updateCallback(Math.Min(newDone, total));
                     concurrency.Release();
                 }
             }));

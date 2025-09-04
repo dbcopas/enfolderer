@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Text.Json;
 using Enfolderer.App.Core;
 using Enfolderer.App.Infrastructure;
+using Enfolderer.App.Core.Abstractions;
 using Enfolderer.App.Importing;
 
 namespace Enfolderer.App.Metadata;
@@ -15,13 +16,15 @@ namespace Enfolderer.App.Metadata;
 /// </summary>
 public class SpecResolutionService
 {
-    private readonly CardMetadataResolver _resolver;
+    private readonly ICardMetadataResolver _resolver;
+    private readonly Func<System.Net.Http.HttpClient> _httpClientProvider;
+    private readonly Enfolderer.App.Core.Abstractions.ILogSink? _log;
 
-    public SpecResolutionService(CardMetadataResolver resolver)
-    { _resolver = resolver; }
+    public SpecResolutionService(ICardMetadataResolver resolver, Func<System.Net.Http.HttpClient> httpClientProvider, Enfolderer.App.Core.Abstractions.ILogSink? log = null)
+    { _resolver = resolver; _httpClientProvider = httpClientProvider; _log = log; }
 
     public async Task ResolveAsync(
-        List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList,
+        List<FetchSpec> fetchList,
         HashSet<int> targetIndexes,
         int updateInterval,
         List<CardSpec> specs,
@@ -49,21 +52,22 @@ public class SpecResolutionService
                 }
                 return (null,false);
             },
-            async (set, num, nameOverride) => await FetchViaHttpAsync(set, num, nameOverride)
+        async (set, num, nameOverride) => await FetchViaHttpAsync(set, num, nameOverride)
         );
     }
 
     // Lightweight HTTP fetch replicating prior inline logic (kept here to isolate from VM).
-    private static async Task<CardEntry?> FetchViaHttpAsync(string setCode, string number, string? overrideName)
+    private async Task<CardEntry?> FetchViaHttpAsync(string setCode, string number, string? overrideName)
     {
         try {
             await ApiRateLimiter.WaitAsync();
             var url = ScryfallUrlHelper.BuildCardApiUrl(setCode, number);
-            var resp = await BinderViewModel.Http.GetAsync(url);
+        var client = _httpClientProvider();
+        var resp = await client.GetAsync(url);
             if (!resp.IsSuccessStatusCode) return null;
             await using var stream = await resp.Content.ReadAsStreamAsync();
             using var doc = await JsonDocument.ParseAsync(stream);
             return CardJsonTranslator.Translate(doc.RootElement, setCode, number, overrideName);
-        } catch { return null; }
+    } catch (Exception ex) { _log?.Log($"HTTP fetch failed set={setCode} num={number}: {ex.Message}", "SpecFetch"); return null; }
     }
 }
