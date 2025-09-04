@@ -22,9 +22,10 @@ public static class CompositionRoot
         MetadataLoadOrchestrator Orchestrator,
         IQuantityService QuantityService,
 	IQuantityToggleService? QuantityToggleService,
-	IMetadataCachePersistence CachePersistence,
+    IMetadataCachePersistence CachePersistence,
         Enfolderer.App.Core.Abstractions.ICardArrangementService ArrangementService,
-        Enfolderer.App.Core.Abstractions.IImportService ImportService);
+        Enfolderer.App.Core.Abstractions.IImportService ImportService,
+        Enfolderer.App.Core.Abstractions.IMetadataProvider MetadataProvider);
 
     /// <summary>
     /// Build graph using an existing concrete resolver (so existing readonly field can stay).
@@ -45,13 +46,15 @@ public static class CompositionRoot
         IBinderFileParser parserAdapter = new BinderFileParserAdapter(concreteParser);
         var binderLoad = new BinderLoadService(binderTheme, parserAdapter);
     var specResolution = new SpecResolutionService(adapter, httpClientProvider ?? (() => new System.Net.Http.HttpClient()));
-        var orchestrator = new MetadataLoadOrchestrator(specResolution, quantityService, adapter);
+        var providerForOrchestrator = new Enfolderer.App.Metadata.MetadataProviderAdapter(adapter);
+        var orchestrator = new MetadataLoadOrchestrator(specResolution, quantityService, providerForOrchestrator);
         IQuantityToggleService? qtyToggle = null;
         if (collectionRepo != null && collectionData != null)
             qtyToggle = new Enfolderer.App.Quantity.QuantityToggleService(quantityService, collectionRepo, collectionData);
     var cachePersistence = new MetadataCachePersistenceAdapter(adapter);
         var arrangement = new Enfolderer.App.Core.Arrangement.CardArrangementService(new VariantPairingService());
     var importService = new Enfolderer.App.Importing.ImportService();
-    return new AppServiceGraph(resolver, adapter, parserAdapter, binderLoad, specResolution, orchestrator, quantityService, qtyToggle, cachePersistence, arrangement, importService);
+    var provider = providerForOrchestrator; // reuse same adapter instance
+    return new AppServiceGraph(resolver, adapter, parserAdapter, binderLoad, specResolution, orchestrator, quantityService, qtyToggle, cachePersistence, arrangement, importService, provider);
     }
 }

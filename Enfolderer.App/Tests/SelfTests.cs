@@ -29,6 +29,8 @@ public static class SelfTests
     try { suiteFails = QuantityToggleCharTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After QuantityToggleChar fails={suiteFails}\n"); } catch { }
     // Composition root wiring smoke
     try { suiteFails = CompositionRootTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After CompositionRootTests fails={suiteFails}\n"); } catch { }
+    // Metadata provider cache load characterization
+    try { suiteFails = MetadataProviderCacheTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After MetadataProviderCacheTests fails={suiteFails}\n"); } catch { }
     // Binder parsing characterization (now using Task.Run inside test to avoid dispatcher deadlock).
     int binderFails = 0;
     try { binderFails = BinderParsingCharTests.RunAll(); } catch(Exception ex) { binderFails = 1; try { File.AppendAllText(progressLog, "BinderParsing EX: "+ex.GetType().Name+" "+ex.Message+"\n"); } catch {} }
