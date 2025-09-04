@@ -16,8 +16,7 @@ public static class AppBootstrapper
     public sealed record AppRuntimeServices(
         CardCollectionData Collection,
         CollectionRepository CollectionRepo,
-        CardQuantityService QuantityService,
-    IQuantityOrchestrator QuantityOrchestrator,
+    CardQuantityService QuantityService,
         QuantityEnrichmentCoordinator QuantityCoordinator,
         IQuantityToggleService QuantityToggle,
         CardBackImageService BackImageService,
@@ -62,7 +61,6 @@ public static class AppBootstrapper
     IQuantityToggleService qtyToggle = coreGraph.QuantityToggleService ?? new QuantityToggleService(qtySvc, repo, collection);
     var pagePresenter = new Enfolderer.App.Layout.PageViewPresenter();
     var pageBatcher = new Enfolderer.App.PageResolutionBatcher();
-    var orchestrator = new QuantityOrchestrator(qtySvc);
-    return new AppRuntimeServices(collection, repo, qtySvc, orchestrator, qtyCoordinator, qtyToggle, backImg, cachePaths, statusPanel, telemetry, httpFactory, coreGraph, cachePersistence, pagePresenter, pageBatcher, coreGraph.ArrangementService, coreGraph.ImportService, coreGraph.MetadataProvider);
+    return new AppRuntimeServices(collection, repo, qtySvc, qtyCoordinator, qtyToggle, backImg, cachePaths, statusPanel, telemetry, httpFactory, coreGraph, cachePersistence, pagePresenter, pageBatcher, coreGraph.ArrangementService, coreGraph.ImportService, coreGraph.MetadataProvider);
     }
 }

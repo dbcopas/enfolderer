@@ -16,7 +16,7 @@ public interface ICardMetadataResolver
     bool TryLoadCardFromCache(string setCode, string number, out CardEntry? entry);
     void PersistCardToCache(CardEntry ce);
     Task ResolveSpecsAsync(
-        List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList,
+        List<Enfolderer.App.Metadata.FetchSpec> fetchList,
         System.Collections.Generic.HashSet<int> targetIndexes,
         System.Func<int,int> updateCallback,
         System.Func<int,CardEntry?,(CardEntry? backFace,bool persist)> onCardResolved,

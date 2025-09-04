@@ -156,11 +156,11 @@ public sealed class CardQuantityService : IQuantityService
 
     public void AdjustMfcQuantities(List<CardEntry> cards)
     {
-        // Delegated to injected specialized service (Phase 3 extraction).
+    // Delegated to injected specialized service.
         _mfcAdjust.Adjust(cards);
     }
 
-    // Convenience combined operation (Phase 3 consolidation)
+    // Convenience combined operation
     public void ApplyAll(CardCollectionData collection, List<CardEntry> cards)
     {
         EnrichQuantities(collection, cards);

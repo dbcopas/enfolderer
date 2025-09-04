@@ -16,6 +16,10 @@ public sealed class MetadataProviderAdapter : IMetadataProvider
     public bool TryLoadMetadata(string hash, List<CardEntry> intoCards) => _resolver.TryLoadMetadataCache(hash, intoCards);
     public void PersistMetadata(string? hash, List<CardEntry> cards) => _resolver.PersistMetadataCache(hash, cards);
     public void MarkComplete(string? hash) => _resolver.MarkCacheComplete(hash);
-    public Task ResolveSpecsAsync(List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList, HashSet<int> targetIndexes, Func<int,int> updateCallback, Func<int,CardEntry?,(CardEntry? backFace,bool persist)> onCardResolved, Func<string,string,string?,Task<CardEntry?>> fetchCard)
+    public Task ResolveSpecsAsync(List<FetchSpec> fetchList, HashSet<int> targetIndexes, Func<int,int> updateCallback, Func<int,CardEntry?,(CardEntry? backFace,bool persist)> onCardResolved, Func<string,string,string?,Task<CardEntry?>> fetchCard)
+        => _resolver.ResolveSpecsAsync(fetchList, targetIndexes, updateCallback, onCardResolved, fetchCard);
+
+    // Explicit interface implementation to ensure signature match after refactor
+    Task IMetadataProvider.ResolveSpecsAsync(List<FetchSpec> fetchList, HashSet<int> targetIndexes, Func<int, int> updateCallback, Func<int, CardEntry?, (CardEntry? backFace, bool persist)> onCardResolved, Func<string, string, string?, Task<CardEntry?>> fetchCard)
         => _resolver.ResolveSpecsAsync(fetchList, targetIndexes, updateCallback, onCardResolved, fetchCard);
 }

@@ -302,9 +302,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private IReadOnlyList<Enfolderer.App.Layout.NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly Enfolderer.App.Collection.CardCollectionData _collection = new();
     private readonly Enfolderer.App.Quantity.CardQuantityService _quantityService; // repository-backed instance created in ctor
-    private readonly Enfolderer.App.Quantity.IQuantityOrchestrator _quantityOrchestrator; // combined enrichment+adjust
     private readonly Enfolderer.App.Quantity.QuantityEnrichmentCoordinator _quantityCoordinator = new();
-    private readonly Enfolderer.App.Collection.CollectionRepository _collectionRepo; // phase 3 collection repo
+    private readonly Enfolderer.App.Collection.CollectionRepository _collectionRepo; // repository
     private readonly CardBackImageService _backImageService = new();
     // Concrete resolver retained internally by core graph; VM now only holds higher-level provider abstraction.
     private readonly Enfolderer.App.Core.Abstractions.IMetadataProvider _metadataProvider;
@@ -333,8 +332,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             if (string.IsNullOrEmpty(_currentCollectionDir)) { SetStatus("No collection loaded."); return; }
             _collection.Reload(_currentCollectionDir);
             if (!_collection.IsLoaded) { SetStatus("Collection DBs not found."); return; }
-            // Unified path: orchestrator handles enrichment + MFC adjustment
-            _quantityOrchestrator.ApplyAll(_collection, _cards);
+            // Unified path: service exposes ApplyAll; orchestrator kept for external consumers
+            _quantityService.ApplyAll(_collection, _cards);
             BuildOrderedFaces();
             RebuildViews();
             Refresh();
@@ -401,7 +400,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _binderLoadService = boot.CoreGraph.BinderLoad;
     _specResolutionService = boot.CoreGraph.SpecResolution;
     _metadataOrchestrator = boot.CoreGraph.Orchestrator;
-    _quantityOrchestrator = boot.QuantityOrchestrator;
     _quantityCoordinator = boot.QuantityCoordinator;
     _quantityToggleService = boot.QuantityToggle as Enfolderer.App.Quantity.QuantityToggleService ?? new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
         _cachePersistence = boot.CachePersistence; // ensure existing field assigned

@@ -50,11 +50,11 @@ public class PageResolutionBatcher
             }
         }
         if (neededSpecs.Count == 0) return;
-        var quickList = new List<(string setCode,string number,string? nameOverride,int specIndex)>();
+    var quickList = new List<FetchSpec>();
         foreach (var si in neededSpecs)
         {
             var s = specs[si];
-            quickList.Add((s.setCode, s.number, s.overrideName, si));
+            quickList.Add(new FetchSpec(s.setCode, s.number, s.overrideName, si));
         }
         _ = Task.Run(async () =>
         {

@@ -1,7 +1,9 @@
 ﻿using System.Configuration;
 using System.Data;
 using System.Windows;
+using System.IO;
 using Enfolderer.App.Tests;
+using Enfolderer.App.Profiling;
 
 namespace Enfolderer.App;
 
@@ -49,6 +51,20 @@ public partial class App : Application
 			return; // unreachable
 		}
 		base.OnStartup(e);
+		// Optional parse performance profiling (Phase 4). Trigger with PERF_PARSE=1 env var.
+		var perfVar = Environment.GetEnvironmentVariable("PERF_PARSE");
+		if (!string.IsNullOrEmpty(perfVar))
+		{
+			try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "profiler_flag_seen.txt"), "PERF_PARSE=" + perfVar); } catch { }
+			if (perfVar == "1") { RunProfilerAndExit(); return; }
+		}
+	}
+
+	private async void RunProfilerAndExit()
+	{
+		try { await ParserProfiler.RunAsync(); }
+		catch (Exception ex) { Console.WriteLine("[Profiler] Error: " + ex.Message); }
+		finally { Application.Current.Shutdown(); }
 	}
 }
 

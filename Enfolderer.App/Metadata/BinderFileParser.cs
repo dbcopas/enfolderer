@@ -10,6 +10,7 @@ using Enfolderer.App.Core;
 using System.Threading;
 using System.Threading.Tasks;
 using Enfolderer.App.Binder;
+using Enfolderer.App.Metadata; // for FetchSpec
 namespace Enfolderer.App.Metadata;
 
 public sealed class BinderFileParser
@@ -30,6 +31,17 @@ public sealed class BinderFileParser
         _isCacheComplete = isCacheComplete;
     }
 
+    // Precompiled regex patterns to avoid reparsing on large binder files (Phase 4 perf pass)
+    private static readonly Regex BackfaceLineRegex = new(@"^(?<count>\d+)\s*;\s*backface$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex PrefixRangeRegex = new(@"^(?<pfx>[A-Za-z]{1,8})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+    private static readonly Regex AttachedPrefixRegex = new(@"^(?<pfx>(?=.*[A-Za-z])[A-Za-z0-9\-]{1,24}?)(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+    private static readonly Regex SpacedPrefixRegex = new(@"^(?<pfx>[A-Za-z0-9\-]{1,24})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+    private static readonly Regex RangeSuffixRegex = new(@"^(?<start>\d+)-(?: (?<endSpace>\d+)|(?<end>\d+))(?<suffix>[A-Za-z][A-Za-z0-9\-]+)$", RegexOptions.Compiled);
+    private static readonly Regex PureNumericRangeRegex = new(@"^\d+-\d+$", RegexOptions.Compiled);
+    private static readonly Regex SingleSuffixRegex = new(@"^(?<num>\d+)(?<suffix>[A-Za-z][A-Za-z0-9\-]+)$", RegexOptions.Compiled);
+    private static readonly Regex RangeVariantRegex = new(@"^(?<start>\d+)-(?:)(?<end>\d+)\+(?<lang>[A-Za-z]{1,8})$", RegexOptions.Compiled);
+    private static readonly Regex PlusVariantRegex = new(@"^(?<base>[A-Za-z0-9]+)\+(?<seg>[A-Za-z]{1,8})$", RegexOptions.Compiled);
+
     public async Task<BinderParseResult> ParseAsync(string path, int slotsPerPage, CancellationToken ct = default)
     {
         var lines = await File.ReadAllLinesAsync(path, ct);
@@ -48,7 +60,7 @@ public sealed class BinderFileParser
             if (dr.EnableHttpDebug) enableHttpDebug = true;
             break;
         }
-        string fileHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", lines))));
+    string fileHash = ComputeJoinedLineHash(lines);
         var cachedCards = new List<CardEntry>();
         if (_isCacheComplete(fileHash) && _metadataResolver.TryLoadMetadataCache(fileHash, cachedCards))
         {
@@ -76,9 +88,11 @@ public sealed class BinderFileParser
             }
             return BinderParseResult.CacheHitResult(fileHash, cachedCards, pagesPerBinderOverride, layoutModeOverride, enableHttpDebug, Path.GetDirectoryName(path));
         }
-        var parsedSpecs = new List<BinderParsedSpec>();
-        var fetchList = new List<(string setCode,string number,string? nameOverride,int specIndex)>();
-        var pendingVariantPairs = new List<(string set,string baseNum,string variantNum)>();
+    // Pre-size lists heuristically (spec lines often expand; choose 2x line count budget)
+    int capacity = lines.Length * 2;
+    var parsedSpecs = new List<BinderParsedSpec>(capacity);
+    var fetchList = new List<FetchSpec>(capacity / 2);
+    var pendingVariantPairs = new List<(string set,string baseNum,string variantNum)>(32);
         string? localBackImagePath = null;
         string? currentSet = null;
 
@@ -88,7 +102,7 @@ public sealed class BinderFileParser
             var line = raw.Trim();
             if (line.StartsWith("**")) continue;
             if (line.StartsWith('#')) continue;
-            var backfaceMatch = Regex.Match(line, @"^(?<count>\d+)\s*;\s*backface$", RegexOptions.IgnoreCase);
+            var backfaceMatch = BackfaceLineRegex.Match(line);
             if (backfaceMatch.Success)
             {
                 if (int.TryParse(backfaceMatch.Groups["count"].Value, out int backCount) && backCount > 0)
@@ -141,7 +155,7 @@ public sealed class BinderFileParser
                 nameOverride = line[(semiIdx+1)..].Trim();
                 if (string.IsNullOrEmpty(nameOverride)) nameOverride = null;
             }
-            var prefixRangeMatch = Regex.Match(numberPart, @"^(?<pfx>[A-Za-z]{1,8})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+            var prefixRangeMatch = PrefixRangeRegex.Match(numberPart);
             if (prefixRangeMatch.Success)
             {
                 var pfx = prefixRangeMatch.Groups["pfx"].Value.Trim();
@@ -153,7 +167,7 @@ public sealed class BinderFileParser
                     {
                         var fullNum = pfx + n.ToString();
                         parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, null, false, null, null));
-                        fetchList.Add((currentSet, fullNum, null, parsedSpecs.Count-1));
+                        fetchList.Add(new FetchSpec(currentSet, fullNum, null, parsedSpecs.Count-1));
                     }
                     continue;
                 }
@@ -161,7 +175,7 @@ public sealed class BinderFileParser
                 {
                     var fullNum = pfx + startStr;
                     parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, nameOverride, false, null, null));
-                    fetchList.Add((currentSet, fullNum, nameOverride, parsedSpecs.Count-1));
+                    fetchList.Add(new FetchSpec(currentSet, fullNum, nameOverride, parsedSpecs.Count-1));
                     continue;
                 }
             }
@@ -194,16 +208,16 @@ public sealed class BinderFileParser
                             var sec = secondaryList[i];
                             var numberDisplay = prim + "(" + sec + ")";
                             parsedSpecs.Add(new BinderParsedSpec(currentSet, prim, null, false, numberDisplay, null));
-                            fetchList.Add((currentSet, prim, null, parsedSpecs.Count -1));
+                            fetchList.Add(new FetchSpec(currentSet, prim, null, parsedSpecs.Count -1));
                         }
                         continue;
                     }
                 }
             }
-            bool isPureNumericRange = Regex.IsMatch(numberPart, @"^\d+-\d+$");
+            bool isPureNumericRange = PureNumericRangeRegex.IsMatch(numberPart);
             if (!isPureNumericRange)
             {
-                var attachedPrefixMatch = Regex.Match(numberPart, @"^(?<pfx>(?=.*[A-Za-z])[A-Za-z0-9\-]{1,24}?)(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+                var attachedPrefixMatch = AttachedPrefixRegex.Match(numberPart);
                 if (attachedPrefixMatch.Success)
                 {
                     var pfx = attachedPrefixMatch.Groups["pfx"].Value;
@@ -216,7 +230,7 @@ public sealed class BinderFileParser
                         {
                             var fullNum = pfx + n.ToString().PadLeft(width,'0');
                             parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, null, false, null, null));
-                            fetchList.Add((currentSet, fullNum, null, parsedSpecs.Count -1));
+                            fetchList.Add(new FetchSpec(currentSet, fullNum, null, parsedSpecs.Count -1));
                         }
                         continue;
                     }
@@ -224,12 +238,12 @@ public sealed class BinderFileParser
                     {
                         var fullNum = pfx + startStr;
                         parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, nameOverride, false, null, null));
-                        fetchList.Add((currentSet, fullNum, nameOverride, parsedSpecs.Count -1));
+                        fetchList.Add(new FetchSpec(currentSet, fullNum, nameOverride, parsedSpecs.Count -1));
                         continue;
                     }
                 }
             }
-            var spacedPrefixMatch = Regex.Match(numberPart, @"^(?<pfx>[A-Za-z0-9\-]{1,24})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+            var spacedPrefixMatch = SpacedPrefixRegex.Match(numberPart);
             if (spacedPrefixMatch.Success)
             {
                 var pfx = spacedPrefixMatch.Groups["pfx"].Value;
@@ -242,7 +256,7 @@ public sealed class BinderFileParser
                     {
                         var fullNum = pfx + n.ToString().PadLeft(width,'0');
                         parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, null, false, null, null));
-                        fetchList.Add((currentSet, fullNum, null, parsedSpecs.Count-1));
+                        fetchList.Add(new FetchSpec(currentSet, fullNum, null, parsedSpecs.Count-1));
                     }
                     continue;
                 }
@@ -250,11 +264,11 @@ public sealed class BinderFileParser
                 {
                     var fullNum = pfx + startStr;
                     parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, nameOverride, false, null, null));
-                    fetchList.Add((currentSet, fullNum, nameOverride, parsedSpecs.Count-1));
+                    fetchList.Add(new FetchSpec(currentSet, fullNum, nameOverride, parsedSpecs.Count-1));
                     continue;
                 }
             }
-            var rangeSuffixMatch = Regex.Match(numberPart, @"^(?<start>\d+)-(?: (?<endSpace>\d+)|(?<end>\d+))(?<suffix>[A-Za-z][A-Za-z0-9\-]+)$", RegexOptions.Compiled);
+            var rangeSuffixMatch = RangeSuffixRegex.Match(numberPart);
             if (rangeSuffixMatch.Success)
             {
                 string startStr = rangeSuffixMatch.Groups["start"].Value;
@@ -267,19 +281,19 @@ public sealed class BinderFileParser
                     {
                         var fullNum = n.ToString().PadLeft(width,'0') + suffix;
                         parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, null, false, null, null));
-                        fetchList.Add((currentSet, fullNum, null, parsedSpecs.Count -1));
+                            fetchList.Add(new FetchSpec(currentSet, fullNum, null, parsedSpecs.Count -1));
                     }
                     continue;
                 }
             }
-            var singleSuffixMatch = Regex.Match(numberPart, @"^(?<num>\d+)(?<suffix>[A-Za-z][A-Za-z0-9\-]+)$", RegexOptions.Compiled);
+            var singleSuffixMatch = SingleSuffixRegex.Match(numberPart);
             if (singleSuffixMatch.Success)
             {
                 var numStr = singleSuffixMatch.Groups["num"].Value;
                 var suffix = singleSuffixMatch.Groups["suffix"].Value;
                 var fullNum = numStr + suffix;
                 parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, nameOverride, false, null, null));
-                fetchList.Add((currentSet, fullNum, nameOverride, parsedSpecs.Count -1));
+                fetchList.Add(new FetchSpec(currentSet, fullNum, nameOverride, parsedSpecs.Count -1));
                 continue;
             }
             if (numberPart.StartsWith('★'))
@@ -287,23 +301,28 @@ public sealed class BinderFileParser
                 var starBody = numberPart[1..].Trim();
                 if (starBody.Contains('-'))
                 {
-                    var pieces = starBody.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-                    if (pieces.Length == 2 && int.TryParse(pieces[0], out int s) && int.TryParse(pieces[1], out int e) && s <= e)
+                    var dashIdx = starBody.IndexOf('-');
+                    if (dashIdx > 0 && dashIdx < starBody.Length - 1)
                     {
-                        for (int n=s; n<=e; n++)
+                        var leftStr = starBody.Substring(0, dashIdx).Trim();
+                        var rightStr = starBody.Substring(dashIdx + 1).Trim();
+                        if (int.TryParse(leftStr, out int s) && int.TryParse(rightStr, out int e) && s <= e)
                         {
-                            var fullNum = n.ToString() + '★';
-                            parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, null, false, null, null));
-                            fetchList.Add((currentSet, fullNum, null, parsedSpecs.Count-1));
+                            for (int n = s; n <= e; n++)
+                            {
+                                var fullNum = n.ToString() + '★';
+                                parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, null, false, null, null));
+                                fetchList.Add(new FetchSpec(currentSet, fullNum, null, parsedSpecs.Count - 1));
+                            }
+                            continue;
                         }
-                        continue;
                     }
                 }
                 if (int.TryParse(starBody, out int singleStar))
                 {
                     var fullNum = singleStar.ToString() + '★';
                     parsedSpecs.Add(new BinderParsedSpec(currentSet, fullNum, nameOverride, false, null, null));
-                    fetchList.Add((currentSet, fullNum, nameOverride, parsedSpecs.Count-1));
+                    fetchList.Add(new FetchSpec(currentSet, fullNum, nameOverride, parsedSpecs.Count-1));
                     continue;
                 }
             }
@@ -315,7 +334,7 @@ public sealed class BinderFileParser
                     var lists = new List<List<string>>();
                     foreach (var seg in segments)
                     {
-                        var segPrefixMatch = Regex.Match(seg, @"^(?<pfx>[A-Za-z]{1,8})\s+(?<start>\d+)(?:-(?<end>\d+))?$", RegexOptions.Compiled);
+                        var segPrefixMatch = PrefixRangeRegex.Match(seg);
                         if (segPrefixMatch.Success)
                         {
                             var pfx = segPrefixMatch.Groups["pfx"].Value;
@@ -358,7 +377,7 @@ public sealed class BinderFileParser
                                 if (l.Count == 0) continue;
                                 var firstVal = l[0];
                                 parsedSpecs.Add(new BinderParsedSpec(currentSet, firstVal, null, false, null, null));
-                                fetchList.Add((currentSet, firstVal, null, parsedSpecs.Count-1));
+                                fetchList.Add(new FetchSpec(currentSet, firstVal, null, parsedSpecs.Count-1));
                                 l.RemoveAt(0);
                                 if (l.Count > 0) anyLeft = true;
                             }
@@ -368,7 +387,7 @@ public sealed class BinderFileParser
                     }
                 }
             }
-            var rangeVariantMatch = Regex.Match(numberPart, @"^(?<start>\d+)-(?:)(?<end>\d+)\+(?<lang>[A-Za-z]{1,8})$", RegexOptions.Compiled);
+            var rangeVariantMatch = RangeVariantRegex.Match(numberPart);
             if (rangeVariantMatch.Success)
             {
                 var startStr = rangeVariantMatch.Groups["start"].Value;
@@ -381,42 +400,37 @@ public sealed class BinderFileParser
                     {
                         var baseNum = padWidth>0 ? k.ToString().PadLeft(padWidth,'0') : k.ToString();
                         parsedSpecs.Add(new BinderParsedSpec(currentSet, baseNum, nameOverride, false, null, null));
-                        fetchList.Add((currentSet, baseNum, nameOverride, parsedSpecs.Count-1));
+                        fetchList.Add(new FetchSpec(currentSet, baseNum, nameOverride, parsedSpecs.Count-1));
                         var variantNumber = baseNum + "/" + lang;
                         var variantDisplay = baseNum + " (" + lang + ")";
                         parsedSpecs.Add(new BinderParsedSpec(currentSet, variantNumber, nameOverride, false, variantDisplay, null));
-                        fetchList.Add((currentSet, variantNumber, nameOverride, parsedSpecs.Count-1));
+                        fetchList.Add(new FetchSpec(currentSet, variantNumber, nameOverride, parsedSpecs.Count-1));
                         try { pendingVariantPairs.Add((currentSet, baseNum, variantNumber)); } catch { }
                     }
                     continue;
                 }
             }
-            if (numberPart.Contains('-', StringComparison.Ordinal))
+            if (TryParseSimpleNumericRange(numberPart, out int rStart, out int rEnd, out int rPad))
             {
-                var pieces = numberPart.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-                if (pieces.Length==2 && int.TryParse(pieces[0], out int startNum) && int.TryParse(pieces[1], out int endNum) && startNum<=endNum)
+                for (int n = rStart; n <= rEnd; n++)
                 {
-                    int padWidth = (pieces[0].StartsWith('0') && pieces[0].Length == pieces[1].Length) ? pieces[0].Length : 0;
-                    for (int n=startNum; n<=endNum; n++)
-                    {
-                        var numStr = padWidth>0 ? n.ToString().PadLeft(padWidth,'0') : n.ToString();
-                        parsedSpecs.Add(new BinderParsedSpec(currentSet, numStr, null, false, null, null));
-                        fetchList.Add((currentSet, numStr, null, parsedSpecs.Count-1));
-                    }
+                    var numStr = rPad > 0 ? n.ToString().PadLeft(rPad, '0') : n.ToString();
+                    parsedSpecs.Add(new BinderParsedSpec(currentSet, numStr, null, false, null, null));
+                    fetchList.Add(new FetchSpec(currentSet, numStr, null, parsedSpecs.Count - 1));
                 }
                 continue;
             }
-            var plusVariantMatch = Regex.Match(numberPart, @"^(?<base>[A-Za-z0-9]+)\+(?<seg>[A-Za-z]{1,8})$", RegexOptions.Compiled);
+            var plusVariantMatch = PlusVariantRegex.Match(numberPart);
             if (plusVariantMatch.Success)
             {
                 var baseNum = plusVariantMatch.Groups["base"].Value;
                 var seg = plusVariantMatch.Groups["seg"].Value.ToLowerInvariant();
                 parsedSpecs.Add(new BinderParsedSpec(currentSet, baseNum, nameOverride, false, null, null));
-                fetchList.Add((currentSet, baseNum, nameOverride, parsedSpecs.Count-1));
+                fetchList.Add(new FetchSpec(currentSet, baseNum, nameOverride, parsedSpecs.Count-1));
                 var variantNumber = baseNum + "/" + seg;
                 var variantDisplay = baseNum + " (" + seg + ")";
                 parsedSpecs.Add(new BinderParsedSpec(currentSet, variantNumber, nameOverride, false, variantDisplay, null));
-                fetchList.Add((currentSet, variantNumber, nameOverride, parsedSpecs.Count-1));
+                fetchList.Add(new FetchSpec(currentSet, variantNumber, nameOverride, parsedSpecs.Count-1));
                 try { pendingVariantPairs.Add((currentSet, baseNum, variantNumber)); } catch { }
                 continue;
             }
@@ -424,13 +438,99 @@ public sealed class BinderFileParser
             if (numFinal.Length>0)
             {
                 parsedSpecs.Add(new BinderParsedSpec(currentSet, numFinal, nameOverride, false, null, null));
-                fetchList.Add((currentSet, numFinal, nameOverride, parsedSpecs.Count-1));
+                fetchList.Add(new FetchSpec(currentSet, numFinal, nameOverride, parsedSpecs.Count-1));
             }
         }
         int needed = slotsPerPage * 2;
         var initialIndexes = new HashSet<int>();
         for (int i = 0; i < parsedSpecs.Count && initialIndexes.Count < needed; i++) initialIndexes.Add(i);
         return BinderParseResult.Success(fileHash, parsedSpecs, fetchList, initialIndexes, pendingVariantPairs, Path.GetDirectoryName(path), localBackImagePath, pagesPerBinderOverride, layoutModeOverride, enableHttpDebug);
+    }
+
+    private static string ComputeJoinedLineHash(string[] lines)
+    {
+        // Avoid allocating one giant concatenated string; stream into SHA256
+        using var sha = SHA256.Create();
+        // Reuse newline bytes rather than allocate each iteration
+        Span<byte> newline = stackalloc byte[1];
+        newline[0] = (byte)'\n';
+    // Single reusable stack buffer for short lines
+    Span<byte> smallBuffer = stackalloc byte[512];
+
+        foreach (var line in lines)
+        {
+            // Fast-path: for short lines allocate on stack (UTF8 max 4 bytes per char; for ASCII typical binder lines this is safe)
+            if (line.Length <= 128)
+            {
+                int written = Encoding.UTF8.GetBytes(line.AsSpan(), smallBuffer);
+                // Rent array once per line (avoid ToArray allocation) then return.
+                var rented = System.Buffers.ArrayPool<byte>.Shared.Rent(written);
+                smallBuffer.Slice(0, written).CopyTo(rented);
+                sha.TransformBlock(rented, 0, written, null, 0);
+                System.Buffers.ArrayPool<byte>.Shared.Return(rented, clearArray: false);
+            }
+            else
+            {
+                var bytes = Encoding.UTF8.GetBytes(line);
+                sha.TransformBlock(bytes, 0, bytes.Length, null, 0);
+            }
+        sha.TransformBlock(newline.ToArray(), 0, 1, null, 0); // Append normalized newline
+        }
+        sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+        return Convert.ToHexString(sha.Hash!);
+    }
+
+    // Lightweight parser for pattern: Name;Set;Number[;...]
+    private static bool TryParseSemicolonTriple(string line, out string name, out string set, out string number)
+    {
+        name = set = number = string.Empty;
+        int first = line.IndexOf(';'); if (first <= 0) return false;
+        int second = line.IndexOf(';', first + 1); if (second <= first + 1) return false;
+        int third = line.IndexOf(';', second + 1); // may be -1 (we only need first three tokens)
+        name = line.Substring(0, first).Trim();
+        set = line.Substring(first + 1, second - first - 1).Trim();
+        int numEnd = third >= 0 ? third : line.Length;
+        number = line.Substring(second + 1, numEnd - second - 1).Trim();
+        if (name.Length == 0 || set.Length == 0 || number.Length == 0) return false;
+        return true;
+    }
+
+    private static bool TryParseSemicolonTripleFast(string line, out string name, out string set, out string number)
+    {
+        name = set = number = string.Empty;
+        int len = line.Length;
+        int first = -1; int second = -1; int found = 0;
+        for (int i = 0; i < len && found < 2; i++)
+        {
+            if (line[i] == ';')
+            {
+                if (first < 0) first = i; else { second = i; break; }
+                found++;
+            }
+        }
+        if (first <= 0 || second <= first + 1) return false;
+        // quick scan for third only if present
+        int third = -1;
+        for (int i = second + 1; i < len; i++) { if (line[i] == ';') { third = i; break; } }
+        name = line.AsSpan(0, first).Trim().ToString();
+        set = line.AsSpan(first + 1, second - first - 1).Trim().ToString();
+        int numEnd = third >= 0 ? third : len;
+        number = line.AsSpan(second + 1, numEnd - second - 1).Trim().ToString();
+        return name.Length > 0 && set.Length > 0 && number.Length > 0;
+    }
+
+    private static bool TryParseSimpleNumericRange(string text, out int start, out int end, out int padWidth)
+    {
+        start = end = 0; padWidth = 0;
+        int dash = text.IndexOf('-');
+        if (dash <= 0 || dash >= text.Length - 1) return false;
+        // reject if extra dash present (avoid mis-parsing more complex forms)
+        if (text.IndexOf('-', dash + 1) >= 0) return false;
+        var left = text.AsSpan(0, dash).Trim();
+        var right = text.AsSpan(dash + 1).Trim();
+        if (!int.TryParse(left, out start) || !int.TryParse(right, out end) || start > end) return false;
+        padWidth = (left.Length == right.Length && left.Length > 1 && left[0] == '0') ? left.Length : 0;
+        return true;
     }
 }
 
@@ -439,7 +539,7 @@ public sealed record BinderParseResult(
     bool CacheHit,
     List<CardEntry> CachedCards,
     List<BinderParsedSpec> Specs,
-    List<(string setCode,string number,string? nameOverride,int specIndex)> FetchList,
+    List<FetchSpec> FetchList,
     HashSet<int> InitialSpecIndexes,
     List<(string set,string baseNum,string variantNum)> PendingVariantPairs,
     string? CollectionDir,
@@ -449,8 +549,8 @@ public sealed record BinderParseResult(
     bool HttpDebugEnabled)
 {
     public static BinderParseResult CacheHitResult(string hash, List<CardEntry> cached, int? pagesOverride, string? layoutOverride, bool httpDebug, string? dir) =>
-        new BinderParseResult(hash, true, cached, new List<BinderParsedSpec>(), new List<(string setCode,string number,string? nameOverride,int specIndex)>(), new HashSet<int>(), new List<(string set,string baseNum,string variantNum)>(), dir, null, pagesOverride, layoutOverride, httpDebug);
-    public static BinderParseResult Success(string hash, List<BinderParsedSpec> specs, List<(string setCode,string number,string? nameOverride,int specIndex)> fetch, HashSet<int> initial, List<(string set,string baseNum,string variantNum)> pendingPairs, string? dir, string? backImage, int? pagesOverride, string? layoutOverride, bool httpDebug) =>
+        new BinderParseResult(hash, true, cached, new List<BinderParsedSpec>(), new List<FetchSpec>(), new HashSet<int>(), new List<(string set,string baseNum,string variantNum)>(), dir, null, pagesOverride, layoutOverride, httpDebug);
+    public static BinderParseResult Success(string hash, List<BinderParsedSpec> specs, List<FetchSpec> fetch, HashSet<int> initial, List<(string set,string baseNum,string variantNum)> pendingPairs, string? dir, string? backImage, int? pagesOverride, string? layoutOverride, bool httpDebug) =>
         new BinderParseResult(hash, false, new List<CardEntry>(), specs, fetch, initial, pendingPairs, dir, backImage, pagesOverride, layoutOverride, httpDebug);
 }
 
