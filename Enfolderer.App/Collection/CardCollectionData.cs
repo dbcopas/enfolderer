@@ -213,7 +213,7 @@ public sealed class CardCollectionData
             return; // abort silently so UI continues
         }
 
-        if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+    if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
         {
             System.Diagnostics.Debug.WriteLine($"[Collection][DEBUG] After mainDb: MainIndex={MainIndex.Count} Quantities(custom/main only)={Quantities.Count}");
             if (MainIndex.Count == 0)
@@ -294,7 +294,7 @@ public sealed class CardCollectionData
                                     VariantQuantities[(rSet, trimmedCollector, modLower)] = qty.Value;
                                     VariantCardIds[(rSet, trimmedCollector, modLower)] = cardId.Value;
                                 }
-                                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1" && rSet == "war")
+                                if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug && rSet == "war")
                                     System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT-ADD] WAR variant collector={rCollector} modifier={modLower} qty={qty.Value} cardId={cardId.Value}");
                             }
                         }
@@ -317,7 +317,7 @@ public sealed class CardCollectionData
             {
                 MainIndex.TryAdd(k, (synthId--, null));
             }
-            if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+            if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
                 System.Diagnostics.Debug.WriteLine($"[Collection][SYNTH] Built synthetic MainIndex from Quantities count={MainIndex.Count}");
         }
 

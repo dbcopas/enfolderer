@@ -21,7 +21,8 @@ public static class CompositionRoot
         SpecResolutionService SpecResolution,
         MetadataLoadOrchestrator Orchestrator,
         IQuantityService QuantityService,
-        IQuantityToggleService? QuantityToggleService);
+    IQuantityToggleService? QuantityToggleService,
+    IMetadataCachePersistence CachePersistence);
 
     /// <summary>
     /// Build graph using an existing concrete resolver (so existing readonly field can stay).
@@ -45,6 +46,7 @@ public static class CompositionRoot
         IQuantityToggleService? qtyToggle = null;
         if (collectionRepo != null && collectionData != null)
             qtyToggle = new Enfolderer.App.Quantity.QuantityToggleService(quantityService, collectionRepo, collectionData);
-        return new AppServiceGraph(resolver, adapter, parserAdapter, binderLoad, specResolution, orchestrator, quantityService, qtyToggle);
+    var cachePersistence = new MetadataCachePersistenceAdapter(adapter);
+    return new AppServiceGraph(resolver, adapter, parserAdapter, binderLoad, specResolution, orchestrator, quantityService, qtyToggle, cachePersistence);
     }
 }

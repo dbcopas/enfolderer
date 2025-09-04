@@ -328,6 +328,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly CardBackImageService _backImageService = new();
     private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
     private readonly Enfolderer.App.Core.Abstractions.ICardMetadataResolver _metadataResolverAdapter;
+    private readonly Enfolderer.App.Core.Abstractions.IMetadataCachePersistence _cachePersistence;
     private readonly Enfolderer.App.Core.Abstractions.IBinderLoadService _binderLoadService;
     private readonly SpecResolutionService _specResolutionService;
     private readonly Enfolderer.App.Metadata.MetadataLoadOrchestrator _metadataOrchestrator;
@@ -406,19 +407,22 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public BinderViewModel()
     {
         RegisterInstance(this);
-        _collectionRepo = new CollectionRepository(_collection);
-        if (Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
-    _cachePaths = new CachePathService(ImageCacheStore.CacheRoot);
-    _statusPanel = new StatusPanelService(s => ApiStatus = s);
-    _telemetry = new TelemetryService(s => _statusPanel.Update(s, s2 => ApiStatus = s2), _debugHttpLogging);
-    _httpFactory = new HttpClientFactoryService(_telemetry);
-    var svcGraph = Enfolderer.App.Core.Composition.CompositionRoot.BuildExisting(_binderTheme, _quantityService, _backImageService, _metadataResolver, hash => _cachePaths.IsMetaComplete(hash), _collectionRepo, _collection);
-    _metadataResolverAdapter = svcGraph.ResolverAdapter;
-    _binderLoadService = svcGraph.BinderLoad;
-    _specResolutionService = svcGraph.SpecResolution;
-    _metadataOrchestrator = svcGraph.Orchestrator;
+    _collectionRepo = new CollectionRepository(_collection);
+    if (Enfolderer.App.Core.RuntimeFlags.Default.CacheDebug && Environment.GetEnvironmentVariable("ENFOLDERER_HTTP_DEBUG") == "1") _debugHttpLogging = true;
+    // Use bootstrapper to assemble services (single source of wiring truth)
+    var localCachePaths = new CachePathService(ImageCacheStore.CacheRoot);
+    _cachePaths = localCachePaths;
+    var boot = Enfolderer.App.Core.Composition.AppBootstrapper.Build(ImageCacheStore.CacheRoot, _binderTheme, hash => localCachePaths.IsMetaComplete(hash));
+    _statusPanel = boot.StatusPanel;
+    _telemetry = boot.Telemetry;
+    _httpFactory = boot.HttpFactory;
+    _metadataResolverAdapter = boot.CoreGraph.ResolverAdapter;
+    _binderLoadService = boot.CoreGraph.BinderLoad;
+    _specResolutionService = boot.CoreGraph.SpecResolution;
+    _metadataOrchestrator = boot.CoreGraph.Orchestrator;
     _quantityEnrichment = new QuantityEnrichmentService(_quantityService);
-    _quantityToggleService = svcGraph.QuantityToggleService is Enfolderer.App.Quantity.QuantityToggleService qts ? qts : new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
+    _quantityToggleService = boot.QuantityToggle as Enfolderer.App.Quantity.QuantityToggleService ?? new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
+    _cachePersistence = boot.CachePersistence;
         _nav.ViewChanged += NavOnViewChanged;
         var commandFactory = new CommandFactory(_nav,
             () => PagesPerBinder,
@@ -465,7 +469,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
             // Always load from fixed exe directory now.
             _collection.Load(_currentCollectionDir);
-            if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+            if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
                 Debug.WriteLine($"[Binder] Collection auto-load (exe dir) invoked: loaded={_collection.IsLoaded} qtyKeys={_collection.Quantities.Count} dir={_currentCollectionDir}");
     }
     catch (Exception ex) { Debug.WriteLine($"[Binder] Collection auto-load failed: {ex.Message}"); }
@@ -499,8 +503,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             BuildOrderedFaces,
             () => { _nav.ResetIndex(); RebuildViews(); },
             Refresh,
-            () => _metadataResolverAdapter.PersistMetadataCache(_session.CurrentFileHash!, _cards),
-            () => _metadataResolverAdapter.MarkCacheComplete(_session.CurrentFileHash!)
+            () => _cachePersistence.Persist(_session.CurrentFileHash!, _cards),
+            () => _cachePersistence.MarkComplete(_session.CurrentFileHash!)
         );
     Debug.WriteLine("[Binder] LoadFromFileAsync complete");
     }
@@ -528,7 +532,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         {
             try
             {
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
                     Debug.WriteLine($"[Binder][Rebuild] Before enrichment: cards={_cards.Count} qtyKeys={_collection.Quantities.Count} anyPositive={_cards.Any(c=>c.Quantity>0)}");
                 _quantityService.EnrichQuantities(_collection, _cards);
                 _quantityService.AdjustMfcQuantities(_cards);
@@ -539,7 +543,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                 BuildOrderedFaces();
                 // Force an immediate visual refresh so newly enriched quantities appear without user action.
                 Refresh();
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
                     Debug.WriteLine($"[Binder][Rebuild] After enrichment: positives={_cards.Count(c=>c.Quantity>0)} updatedZeroes={_cards.Count(c=>c.Quantity==0)} negatives={_cards.Count(c=>c.Quantity<0)}");
             }
             catch (Exception ex)
@@ -568,13 +572,13 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             {
                 try
                 {
-                    if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                    if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
                         Debug.WriteLine($"[Binder][Refresh] Fallback enrichment triggered: cards={_cards.Count} qtyKeys={_collection.Quantities.Count} positivesPre={_cards.Count(c=>c.Quantity>0)}");
                     _quantityService.EnrichQuantities(_collection, _cards);
                     _quantityService.AdjustMfcQuantities(_cards);
                     // Rebuild ordered faces so newly enriched quantities propagate to UI slots.
                     BuildOrderedFaces();
-                    if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                    if (Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug)
                         Debug.WriteLine($"[Binder][Refresh] After fallback enrichment: positives={_cards.Count(c=>c.Quantity>0)}");
                 }
                 catch (Exception ex)

@@ -34,7 +34,7 @@ public static class CardJsonTranslator
                     if (f0.TryGetProperty("illustration_id", out var ill0) && f1.TryGetProperty("illustration_id", out var ill1) && ill0.ValueKind==JsonValueKind.String && ill1.ValueKind==JsonValueKind.String && ill0.GetString()!=ill1.GetString())
                         facesDistinctArt = true;
                 } catch { }
-                bool forceAllTwo = Environment.GetEnvironmentVariable("ENFOLDERER_FORCE_TWO_SIDED_ALL_FACES") == "1";
+                bool forceAllTwo = Enfolderer.App.Core.RuntimeFlags.Default.QtyDebug && Environment.GetEnvironmentVariable("ENFOLDERER_FORCE_TWO_SIDED_ALL_FACES") == "1"; // keep env flag but gate through runtime flags for testability
                 bool heuristicTwo = !forcedSingle && (physTwoSided || (!hasRootImageUris) || facesDistinctArt || (layout==null && faceCount==2));
                 bool treatTwo = physTwoSided || forceAllTwo || heuristicTwo;
                 if (!treatTwo && !forcedSingle)
