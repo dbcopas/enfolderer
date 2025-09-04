@@ -327,6 +327,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly Enfolderer.App.Collection.CollectionRepository _collectionRepo; // phase 3 collection repo
     private readonly CardBackImageService _backImageService = new();
     private readonly CardMetadataResolver _metadataResolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, PhysicallyTwoSidedLayouts, CacheSchemaVersion);
+    private readonly Enfolderer.App.Core.Abstractions.ICardMetadataResolver _metadataResolverAdapter;
     private readonly BinderLoadService _binderLoadService;
     private readonly SpecResolutionService _specResolutionService;
     private readonly Enfolderer.App.Metadata.MetadataLoadOrchestrator _metadataOrchestrator;
@@ -411,9 +412,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _statusPanel = new StatusPanelService(s => ApiStatus = s);
     _telemetry = new TelemetryService(s => _statusPanel.Update(s, s2 => ApiStatus = s2), _debugHttpLogging);
     _httpFactory = new HttpClientFactoryService(_telemetry);
-    _binderLoadService = new BinderLoadService(_binderTheme, _metadataResolver, _backImageService, hash => _cachePaths.IsMetaComplete(hash));
-    _specResolutionService = new SpecResolutionService(_metadataResolver);
-    _metadataOrchestrator = new Enfolderer.App.Metadata.MetadataLoadOrchestrator(_specResolutionService, _quantityService, _metadataResolver);
+    var svcGraph = Enfolderer.App.Core.Composition.CompositionRoot.BuildExisting(_binderTheme, _quantityService, _backImageService, _metadataResolver, hash => _cachePaths.IsMetaComplete(hash));
+    _metadataResolverAdapter = svcGraph.ResolverAdapter;
+    _binderLoadService = svcGraph.BinderLoad;
+    _specResolutionService = svcGraph.SpecResolution;
+    _metadataOrchestrator = svcGraph.Orchestrator;
     _quantityEnrichment = new QuantityEnrichmentService(_quantityService);
     _quantityToggleService = new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
         _nav.ViewChanged += NavOnViewChanged;
