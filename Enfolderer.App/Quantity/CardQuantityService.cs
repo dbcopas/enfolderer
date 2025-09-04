@@ -6,6 +6,7 @@ using System.Diagnostics;
 using Enfolderer.App.Collection;
 using Enfolderer.App.Core;
 using Microsoft.Data.Sqlite;
+using Enfolderer.App.Core.Abstractions;
 
 namespace Enfolderer.App.Quantity;
 
@@ -15,9 +16,12 @@ namespace Enfolderer.App.Quantity;
 /// </summary>
 public sealed class CardQuantityService
 {
+    private readonly IRuntimeFlags _flags;
+    public CardQuantityService(IRuntimeFlags? flags = null) { _flags = flags ?? RuntimeFlags.Default; }
+
     public void EnrichQuantities(CardCollectionData collection, List<CardEntry> cards)
     {
-        bool qtyDebug = Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1";
+        bool qtyDebug = _flags.QtyDebug;
         if (collection.Quantities.Count == 0)
         {
             if (qtyDebug)
@@ -30,8 +34,8 @@ public sealed class CardQuantityService
             return;
         }
         int updated = 0;
-    int unmatchedCount = 0;
-    List<string> unmatchedSamples = new();
+        int unmatchedCount = 0;
+        List<string> unmatchedSamples = new();
         if (qtyDebug)
         {
             Debug.WriteLine($"[QtyEnrich] Start: quantityKeys={collection.Quantities.Count} cards={cards.Count}");
@@ -65,7 +69,7 @@ public sealed class CardQuantityService
                         collection.TryGetVariantQuantityFlexible(c.Set, starTrim, "JP", out artQty))
                     { qtyVariant = artQty; variantFound = true; }
                 }
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                if (_flags.QtyDebug)
                 {
                     if (variantFound)
                         System.Diagnostics.Debug.WriteLine($"[Collection][VARIANT] WAR star authoritative {c.Number} -> base={starBaseRaw}/{starTrim} JP qty={qtyVariant}");
@@ -100,13 +104,13 @@ public sealed class CardQuantityService
             }
             if (!found)
             {
-        if (qtyDebug)
+                if (qtyDebug)
                 {
                     try
                     {
                         var sampleKeys = string.Join(", ", collection.Quantities.Keys.Where(k => k.Item1 == setLower).Take(25).Select(k => k.Item1+":"+k.Item2));
-            Debug.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found. Sample keys for set: {sampleKeys}");
-            Console.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found.");
+                        Debug.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found. Sample keys for set: {sampleKeys}");
+                        Console.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found.");
                         if (unmatchedSamples.Count < 15)
                         {
                             unmatchedSamples.Add($"{c.Set}:{baseNum} trim={trimmed} raw='{c.Number}'");
@@ -171,15 +175,10 @@ public sealed class CardQuantityService
             }
         }
 
-        // Fallback pass: some modal DFCs (e.g., certain ZNR lands) may have both faces marked
-        // IsModalDoubleFaced=true but neither flagged IsBackFace. That causes both faces to retain
-        // the same quantity value (e.g., 1) and both render opaque. Detect simple pairs and treat
-        // the second as the back face for display purposes.
         var modalGroups = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
         for (int gi = 0; gi < cards.Count; gi++)
         {
             var c = cards[gi];
-            // Broaden detection: include classic modal_dfc OR entries that have both front/back raw text even if IsModalDoubleFaced flag wasn't set (regression cases like SLD 379, ZNR 286).
             bool treatAsModal = c.IsModalDoubleFaced || (!c.IsBackFace && !string.IsNullOrEmpty(c.FrontRaw) && !string.IsNullOrEmpty(c.BackRaw));
             if (!treatAsModal) continue;
             string setKey = c.Set ?? string.Empty;
@@ -190,9 +189,9 @@ public sealed class CardQuantityService
         }
         foreach (var list in modalGroups.Values)
         {
-            if (list.Count != 2) continue; // only handle simple paired faces
+            if (list.Count != 2) continue;
             var a = cards[list[0]]; var b = cards[list[1]];
-            if (a.IsBackFace || b.IsBackFace) continue; // proper pairing already handled earlier
+            if (a.IsBackFace || b.IsBackFace) continue;
             int qLogical = Math.Max(a.Quantity, b.Quantity);
             int frontDisplay, backDisplay;
             if (qLogical <= 0) { frontDisplay = 0; backDisplay = 0; }
@@ -200,7 +199,7 @@ public sealed class CardQuantityService
             else { frontDisplay = 2; backDisplay = 2; }
             if (a.Quantity != frontDisplay) cards[list[0]] = a with { Quantity = frontDisplay };
             if (b.Quantity != backDisplay) cards[list[1]] = b with { Quantity = backDisplay };
-            if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+            if (_flags.QtyDebug)
                 Debug.WriteLine($"[MFC][FallbackAdjust] Applied heuristic split (broad) set={a.Set} num={a.Number} q={qLogical} front={frontDisplay} back={backDisplay} flags aMfc={a.IsModalDoubleFaced} bMfc={b.IsModalDoubleFaced}");
         }
 
@@ -218,7 +217,6 @@ public sealed class CardQuantityService
         if (slot == null) { setStatus("No slot"); return -1; }
         if (slot.IsPlaceholderBack) { setStatus("Back face placeholder"); return -1; }
         if (string.IsNullOrEmpty(slot.Set) || string.IsNullOrEmpty(slot.Number)) { setStatus("No set/number"); return -1; }
-    // Directory is always the executable directory now (enforced by caller); no null check required.
         if (!collection.IsLoaded) { setStatus("Collection not loaded"); return -1; }
 
         string numToken = slot.Number.Split('/')[0];
@@ -228,7 +226,7 @@ public sealed class CardQuantityService
         string setLower = slot.Set.ToLowerInvariant();
         (int cardId, int? gatherer) foundEntry = default; bool indexFound = false;
         bool warStar = slot.Set.Equals("WAR", StringComparison.OrdinalIgnoreCase) && slot.Number.IndexOf('★') >= 0;
-    string originalNumberWithStar = slot.Number; // preserve exact displayed number for direct orderedFaces match
+        string originalNumberWithStar = slot.Number;
         bool variantAttemptedEarly = false;
         if (warStar)
         {
@@ -283,21 +281,18 @@ public sealed class CardQuantityService
         }
         int cardId = foundEntry.cardId;
 
-        // Synthetic negative cardIds (built from quantities when MainIndex empty) are not stable across reloads.
-        // Attempt to resolve a real persistent cardId from the DB so the toggle will survive refresh.
         if (cardId < 0)
         {
             int? realId = resolveCardIdFromDb(slot.Set, baseNum, trimmed);
             if (realId.HasValue && realId.Value >= 0)
             {
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                if (_flags.QtyDebug)
                     System.Diagnostics.Debug.WriteLine($"[Quantity][Synthetic->Real] Replaced synthetic cardId {cardId} with real {realId.Value} set={slot.Set} num={slot.Number} base={baseNum}/{trimmed}");
                 cardId = realId.Value;
             }
             else
             {
-                // We can't persist reliably; still update in-memory/UI but warn.
-                if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                if (_flags.QtyDebug)
                     System.Diagnostics.Debug.WriteLine($"[Quantity][Synthetic][NoRealId] set={slot.Set} num={slot.Number} base={baseNum}/{trimmed} toggle will not persist.");
             }
         }
@@ -306,13 +301,13 @@ public sealed class CardQuantityService
         bool isMfcFront = false;
         var entry = cards.FirstOrDefault(c => c.Set != null && string.Equals(c.Set, slot.Set, StringComparison.OrdinalIgnoreCase) && string.Equals(c.Number.Split('/')[0], baseNum.Split('/')[0], StringComparison.OrdinalIgnoreCase) && c.Name == slot.Name);
         if (entry != null && entry.IsModalDoubleFaced && !entry.IsBackFace) { isMfcFront = true; logicalQty = slot.Quantity; }
-    int newLogicalQty = !isMfcFront ? (logicalQty == 0 ? 1 : 0) : (logicalQty == 0 ? 1 : (logicalQty == 1 ? 2 : 0));
-    bool isCustom = collection.CustomCards.Contains(cardId);
-    bool qtyDebug = Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1";
-    if (qtyDebug) System.Diagnostics.Debug.WriteLine($"[Quantity][Toggle] Begin set={slot.Set} num={slot.Number} baseNum={baseNum} targetQty={newLogicalQty} isCustom={isCustom} warStar={warStar}");
+        int newLogicalQty = !isMfcFront ? (logicalQty == 0 ? 1 : 0) : (logicalQty == 0 ? 1 : (logicalQty == 1 ? 2 : 0));
+        bool isCustom = collection.CustomCards.Contains(cardId);
+        bool qtyDebug = _flags.QtyDebug;
+        if (qtyDebug) System.Diagnostics.Debug.WriteLine($"[Quantity][Toggle] Begin set={slot.Set} num={slot.Number} baseNum={baseNum} targetQty={newLogicalQty} isCustom={isCustom} warStar={warStar}");
 
-        int? persistedQty = null; // will be populated for verification
-    if (cardId >= 0 && isCustom)
+        int? persistedQty = null;
+        if (cardId >= 0 && isCustom)
         {
             string mainDbPath = Path.Combine(currentCollectionDir, "mainDb.db");
             if (!File.Exists(mainDbPath)) { setStatus("mainDb missing"); return -1; }
@@ -325,7 +320,6 @@ public sealed class CardQuantityService
                 cmd.Parameters.AddWithValue("@q", newLogicalQty);
                 cmd.Parameters.AddWithValue("@id", cardId);
                 cmd.ExecuteNonQuery();
-                // Read back
                 using var verify = conMain.CreateCommand();
                 verify.CommandText = "SELECT Qty FROM Cards WHERE id=@id";
                 verify.Parameters.AddWithValue("@id", cardId);
@@ -349,12 +343,10 @@ public sealed class CardQuantityService
                     cmd.Parameters.AddWithValue("@q", newLogicalQty);
                     cmd.Parameters.AddWithValue("@id", cardId);
                     int rows = cmd.ExecuteNonQuery();
-                    if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                    if (_flags.QtyDebug)
                         System.Diagnostics.Debug.WriteLine($"[Quantity][DB] UPDATE rows={rows} cardId={cardId} qty={newLogicalQty}");
                     if (rows == 0)
                     {
-                        // No existing row in mtgstudio.collection for this MtgsId-backed card: insert full record.
-                        // Columns (legacy schema): CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added
                         using var ins = con.CreateCommand();
                         ins.CommandText = @"INSERT INTO CollectionCards 
                             (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)
@@ -367,7 +359,7 @@ public sealed class CardQuantityService
                         { 
                             int insRows = ins.ExecuteNonQuery();
                             if (insRows == 0) System.Diagnostics.Debug.WriteLine($"[Collection] Insert failed for CardId {cardId}");
-                            else if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
+                            else if (_flags.QtyDebug)
                                 System.Diagnostics.Debug.WriteLine($"[Quantity][DB] INSERT rows={insRows} cardId={cardId} qty={newLogicalQty}");
                         } 
                         catch (Exception exIns) 
@@ -375,7 +367,6 @@ public sealed class CardQuantityService
                             System.Diagnostics.Debug.WriteLine($"[Collection] Insert exception for CardId {cardId}: {exIns.Message}");
                         }
                     }
-                    // Read back persisted value (whether update or insert)
                     using var verify = con.CreateCommand();
                     verify.CommandText = "SELECT Qty FROM CollectionCards WHERE CardId=@id";
                     verify.Parameters.AddWithValue("@id", cardId);
@@ -387,13 +378,11 @@ public sealed class CardQuantityService
             { System.Diagnostics.Debug.WriteLine($"[Collection] Toggle write failed: {ex.Message}"); setStatus("Write failed"); return -1; }
         }
 
-        // Verification & reconciliation: if DB value differs, trust DB and adjust UI/in-memory.
         if (persistedQty.HasValue && persistedQty.Value != newLogicalQty)
         {
             if (qtyDebug) System.Diagnostics.Debug.WriteLine($"[Quantity][Mismatch] CardId={cardId} intended={newLogicalQty} persisted={persistedQty.Value} set={slot.Set} num={slot.Number}");
             newLogicalQty = persistedQty.Value;
         }
-        // Only now update the slot (after persistence) so UI reflects stored value.
         if (slot.Quantity != newLogicalQty) slot.Quantity = newLogicalQty;
         if (cardId < 0 && qtyDebug)
             System.Diagnostics.Debug.WriteLine($"[Quantity][Warning] Using synthetic cardId for UI-only update; value will revert on refresh set={slot.Set} num={slot.Number}");
@@ -451,7 +440,6 @@ public sealed class CardQuantityService
                     string.Equals(oBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(oBaseStarless, baseNum, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(oBaseStarless.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase) ||
-                    // Direct match on original star number ensures replacement when only resolution differed
                     string.Equals(o.Number, originalNumberWithStar, StringComparison.OrdinalIgnoreCase))
                 {
                     var updated = cards.FirstOrDefault(c => c.Set != null && c.Set.Equals(o.Set, StringComparison.OrdinalIgnoreCase) && c.Number == o.Number && c.IsBackFace == o.IsBackFace);

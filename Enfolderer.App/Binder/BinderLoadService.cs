@@ -11,6 +11,7 @@ using System.Windows;
 
 using Enfolderer.App.Layout;
 using Enfolderer.App.Metadata;
+using Enfolderer.App.Core.Abstractions;
 namespace Enfolderer.App.Binder;
 
 public record BinderLoadResult(
@@ -35,20 +36,22 @@ public record BinderLoadResult(
 public class BinderLoadService
 {
     private readonly BinderThemeService _binderTheme;
-    private readonly CardMetadataResolver _metadataResolver;
+    private readonly ICardMetadataResolver _metadataResolver;
+    private readonly CardMetadataResolverAdapter? _adapter; // transitional access
     private readonly CardBackImageService _backImageService;
     private readonly Func<string, bool> _isCacheComplete;
 
     public BinderLoadService(BinderThemeService binderTheme,
-                             CardMetadataResolver metadataResolver,
+                             ICardMetadataResolver metadataResolver,
                              CardBackImageService backImageService,
                              Func<string,bool> isCacheComplete)
-    { _binderTheme = binderTheme; _metadataResolver = metadataResolver; _backImageService = backImageService; _isCacheComplete = isCacheComplete; }
+    { _binderTheme = binderTheme; _metadataResolver = metadataResolver; _backImageService = backImageService; _isCacheComplete = isCacheComplete; _adapter = metadataResolver as CardMetadataResolverAdapter; }
 
     public async Task<BinderLoadResult> LoadAsync(string path, int slotsPerPage)
     {
         try { var fi = new FileInfo(path); CardSlotTheme.Recalculate(path + fi.LastWriteTimeUtc.Ticks); } catch { CardSlotTheme.Recalculate(path); }
-        var parser = new BinderFileParser(_binderTheme, _metadataResolver, log => _backImageService.Resolve(null, log), _isCacheComplete);
+    var concrete = _adapter?.Inner as CardMetadataResolver ?? throw new InvalidOperationException("CardMetadataResolverAdapter expected");
+    var parser = new BinderFileParser(_binderTheme, concrete, log => _backImageService.Resolve(null, log), _isCacheComplete);
         var parseResult = await parser.ParseAsync(path, slotsPerPage);
         return new BinderLoadResult(
             parseResult.FileHash,

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Text.Json;
 using Enfolderer.App.Core;
 using Enfolderer.App.Infrastructure;
+using Enfolderer.App.Core.Abstractions;
 using Enfolderer.App.Importing;
 
 namespace Enfolderer.App.Metadata;
@@ -15,9 +16,9 @@ namespace Enfolderer.App.Metadata;
 /// </summary>
 public class SpecResolutionService
 {
-    private readonly CardMetadataResolver _resolver;
+    private readonly ICardMetadataResolver _resolver;
 
-    public SpecResolutionService(CardMetadataResolver resolver)
+    public SpecResolutionService(ICardMetadataResolver resolver)
     { _resolver = resolver; }
 
     public async Task ResolveAsync(

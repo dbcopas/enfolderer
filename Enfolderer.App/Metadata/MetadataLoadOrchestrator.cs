@@ -9,6 +9,7 @@ using Enfolderer.App.Quantity;
 using Enfolderer.App.Collection;
 using Enfolderer.App.Binder;
 using Enfolderer.App.Core;
+using Enfolderer.App.Core.Abstractions;
 namespace Enfolderer.App.Metadata;
 
 /// <summary>
@@ -19,9 +20,9 @@ public class MetadataLoadOrchestrator
 {
     private readonly SpecResolutionService _specResolution;
     private readonly CardQuantityService _quantityService;
-    private readonly CardMetadataResolver _metadataResolver;
+    private readonly ICardMetadataResolver _metadataResolver; // reserved for later use (persisting etc.)
 
-    public MetadataLoadOrchestrator(SpecResolutionService specResolution, CardQuantityService quantityService, CardMetadataResolver metadataResolver)
+    public MetadataLoadOrchestrator(SpecResolutionService specResolution, CardQuantityService quantityService, ICardMetadataResolver metadataResolver)
     { _specResolution = specResolution; _quantityService = quantityService; _metadataResolver = metadataResolver; }
 
     public async Task RunInitialAsync(
