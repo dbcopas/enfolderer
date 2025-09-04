@@ -17,13 +17,19 @@ public class CardMetadataResolver
     private readonly string _cacheRoot;
     private readonly int _schemaVersion;
     private static readonly bool CacheDebug = Enfolderer.App.Core.RuntimeFlags.Default.CacheDebug;
-    private static void CacheLog(string msg) { if (CacheDebug) Debug.WriteLine("[Cache][Diag] " + msg); }
+    private readonly Enfolderer.App.Core.Abstractions.ILogSink? _log;
+    private void CacheLog(string msg)
+    {
+        if (!CacheDebug) return;
+        if (_log != null) _log.Log(msg, "Cache.Diag"); else Debug.WriteLine("[Cache][Diag] " + msg);
+    }
 
-    public CardMetadataResolver(string cacheRoot, IEnumerable<string> physicallyTwoSidedLayouts, int schemaVersion)
+    public CardMetadataResolver(string cacheRoot, IEnumerable<string> physicallyTwoSidedLayouts, int schemaVersion, Enfolderer.App.Core.Abstractions.ILogSink? log = null)
     {
         _cacheRoot = cacheRoot;
         _physicallyTwoSidedLayouts = new HashSet<string>(physicallyTwoSidedLayouts, StringComparer.OrdinalIgnoreCase);
         _schemaVersion = schemaVersion;
+        _log = log;
     }
 
     private string MetaCacheDir => Path.Combine(_cacheRoot, "meta");
@@ -61,7 +67,7 @@ public class CardMetadataResolver
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[PerCardCache] Failed to load {setCode} {number}: {ex.Message}");
+            _log?.Log($"Failed to load per-card cache {setCode} {number}: {ex.Message}", "Cache.Card");
             return false;
         }
     }
@@ -83,7 +89,7 @@ public class CardMetadataResolver
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[PerCardCache] Persist failed {ce.Set} {ce.Number}: {ex.Message}");
+            _log?.Log($"Persist per-card cache failed {ce.Set} {ce.Number}: {ex.Message}", "Cache.Card");
         }
     }
 
@@ -124,7 +130,7 @@ public class CardMetadataResolver
             CacheLog($"HIT hash={hash} faces={faces.Count} schema={firstVersion}");
             return true;
         }
-        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to load metadata cache: {ex.Message}"); return false; }
+    catch (Exception ex) { _log?.Log($"Failed to load metadata cache: {ex.Message}", "Cache"); return false; }
     }
 
     public void PersistMetadataCache(string? hash, List<CardEntry> cards)
@@ -150,13 +156,13 @@ public class CardMetadataResolver
             File.WriteAllText(path, json);
             if (CacheDebug)
             {
-                Debug.WriteLine($"[Cache][Diag] Persist hash={hash} faces={list.Count} overwrite={existed}");
                 var missingLayout = list.Where(f => string.IsNullOrEmpty(f.Layout)).Take(5).ToList();
-                if (missingLayout.Count>0) Debug.WriteLine($"[Cache][Diag] Persist missing_layout count={missingLayout.Count} sample=" + string.Join(',', missingLayout.Select(f => (f.Set??"?")+":"+f.Number)));
+                _log?.Log($"Persist hash={hash} faces={list.Count} overwrite={existed}", "Cache.Diag");
+                if (missingLayout.Count>0) _log?.Log($"Persist missing_layout count={missingLayout.Count} sample=" + string.Join(',', missingLayout.Select(f => (f.Set??"?")+":"+f.Number)), "Cache.Diag");
             }
-            Debug.WriteLine($"[Cache] Wrote metadata cache {hash} faces={list.Count}");
+            _log?.Log($"Wrote metadata cache {hash} faces={list.Count}", "Cache");
         }
-        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to write metadata cache: {ex.Message}"); }
+        catch (Exception ex) { _log?.Log($"Failed to write metadata cache: {ex.Message}", "Cache"); }
     }
 
     public void MarkCacheComplete(string? hash)
@@ -166,7 +172,7 @@ public class CardMetadataResolver
         {
             File.WriteAllText(MetaCacheDonePath(hash), DateTime.UtcNow.ToString("O"));
         }
-        catch (Exception ex) { Debug.WriteLine($"[Cache] Failed to mark cache complete: {ex.Message}"); }
+    catch (Exception ex) { _log?.Log($"Failed to mark cache complete: {ex.Message}", "Cache"); }
     }
 
     public async Task ResolveSpecsAsync(
@@ -218,7 +224,7 @@ public class CardMetadataResolver
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[ResolveSpecs] Failed {f.setCode} {f.number}: {ex.Message}");
+                    _log?.Log($"ResolveSpecs failure {f.setCode} {f.number}: {ex.Message}", "ResolveSpecs");
                 }
                 finally
                 {

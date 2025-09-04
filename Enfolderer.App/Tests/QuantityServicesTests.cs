@@ -12,8 +12,10 @@ public static class QuantityServicesTests
     {
     int failures=0; string qlogPath = Path.Combine(Path.GetTempPath(), "enfolderer_qtytest_log.txt");
     void Check(bool c, string msg){ if(!c){ failures++; try { File.AppendAllText(qlogPath, "FAIL "+msg+"\n"); } catch {} } else { try { File.AppendAllText(qlogPath, "OK "+msg+"\n"); } catch {} } }
-        var qtyService = new CardQuantityService();
-        var collection = new CardCollectionData();
+    // Repository injected for completeness (even though these scenarios don't hit DB persistence)
+    var collection = new CardCollectionData();
+    var repo = new CollectionRepository(collection);
+    var qtyService = new CardQuantityService(quantityRepository: repo);
         collection.Quantities[("set", "1")] = 3;
         var faces = new List<CardEntry>{ new CardEntry("Alpha","1","SET",false) };
         qtyService.EnrichQuantities(collection, faces);

@@ -40,14 +40,20 @@ public static class CompositionRoot
         Enfolderer.App.Collection.CollectionRepository? collectionRepo = null,
         Enfolderer.App.Collection.CardCollectionData? collectionData = null)
     {
-        var adapter = new CardMetadataResolverAdapter(resolver);
+        var adapter = new CardMetadataResolverLowLevelAdapter(resolver);
         // Construct concrete parser + adapter stack but expose only IBinderFileParser outward.
         var concreteParser = new BinderFileParser(binderTheme, resolver, _ => backImageService.Resolve(null, _), isCacheComplete);
         IBinderFileParser parserAdapter = new BinderFileParserAdapter(concreteParser);
         var binderLoad = new BinderLoadService(binderTheme, parserAdapter);
-    var specResolution = new SpecResolutionService(adapter, httpClientProvider ?? (() => new System.Net.Http.HttpClient()));
+    // Attempt to reuse DebugLogSink if quantity service has one (best-effort via reflection to avoid public API bloat)
+    Enfolderer.App.Core.Abstractions.ILogSink? log = null;
+    try {
+        var f = typeof(CardQuantityService).GetField("_log", System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+        log = f?.GetValue(quantityService) as Enfolderer.App.Core.Abstractions.ILogSink; }
+    catch { }
+    var specResolution = new SpecResolutionService(adapter, httpClientProvider ?? (() => new System.Net.Http.HttpClient()), log);
         var providerForOrchestrator = new Enfolderer.App.Metadata.MetadataProviderAdapter(adapter);
-        var orchestrator = new MetadataLoadOrchestrator(specResolution, quantityService, providerForOrchestrator);
+    var orchestrator = new MetadataLoadOrchestrator(specResolution, quantityService, providerForOrchestrator, log);
         IQuantityToggleService? qtyToggle = null;
         if (collectionRepo != null && collectionData != null)
             qtyToggle = new Enfolderer.App.Quantity.QuantityToggleService(quantityService, collectionRepo, collectionData);

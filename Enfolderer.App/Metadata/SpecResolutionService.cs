@@ -18,9 +18,10 @@ public class SpecResolutionService
 {
     private readonly ICardMetadataResolver _resolver;
     private readonly Func<System.Net.Http.HttpClient> _httpClientProvider;
+    private readonly Enfolderer.App.Core.Abstractions.ILogSink? _log;
 
-    public SpecResolutionService(ICardMetadataResolver resolver, Func<System.Net.Http.HttpClient> httpClientProvider)
-    { _resolver = resolver; _httpClientProvider = httpClientProvider; }
+    public SpecResolutionService(ICardMetadataResolver resolver, Func<System.Net.Http.HttpClient> httpClientProvider, Enfolderer.App.Core.Abstractions.ILogSink? log = null)
+    { _resolver = resolver; _httpClientProvider = httpClientProvider; _log = log; }
 
     public async Task ResolveAsync(
         List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList,
@@ -67,6 +68,6 @@ public class SpecResolutionService
             await using var stream = await resp.Content.ReadAsStreamAsync();
             using var doc = await JsonDocument.ParseAsync(stream);
             return CardJsonTranslator.Translate(doc.RootElement, setCode, number, overrideName);
-        } catch { return null; }
+    } catch (Exception ex) { _log?.Log($"HTTP fetch failed set={setCode} num={number}: {ex.Message}", "SpecFetch"); return null; }
     }
 }

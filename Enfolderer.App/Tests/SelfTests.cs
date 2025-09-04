@@ -25,6 +25,8 @@ public static class SelfTests
     suiteFails = PageViewPresenterTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After PageViewPresenter fails={suiteFails}\n"); } catch {}
     suiteFails = CommandFactoryTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After CommandFactory fails={suiteFails}\n"); } catch {}
     suiteFails = QuantityServicesTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After QuantityServices fails={suiteFails}\n"); } catch {}
+    // Quantity repository characterization
+    try { suiteFails = QuantityRepositoryTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After QuantityRepositoryTests fails={suiteFails}\n"); } catch { }
     // Quantity toggle characterization
     try { suiteFails = QuantityToggleCharTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After QuantityToggleChar fails={suiteFails}\n"); } catch { }
     // Composition root wiring smoke

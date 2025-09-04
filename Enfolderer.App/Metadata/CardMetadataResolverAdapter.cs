@@ -8,11 +8,11 @@ namespace Enfolderer.App.Metadata;
 /// <summary>
 /// Adapter for CardMetadataResolver -> ICardMetadataResolver.
 /// </summary>
-public sealed class CardMetadataResolverAdapter : ICardMetadataResolver
+public sealed class CardMetadataResolverLowLevelAdapter : ICardMetadataResolver
 {
     private readonly CardMetadataResolver _inner;
     public CardMetadataResolver Inner => _inner; // exposed for transitional consumers needing concrete features
-    public CardMetadataResolverAdapter(CardMetadataResolver inner) { _inner = inner; }
+    public CardMetadataResolverLowLevelAdapter(CardMetadataResolver inner) { _inner = inner; }
     public bool TryLoadMetadataCache(string hash, List<CardEntry> intoCards) => _inner.TryLoadMetadataCache(hash, intoCards);
     public void PersistMetadataCache(string? hash, List<CardEntry> cards) => _inner.PersistMetadataCache(hash, cards);
     public void MarkCacheComplete(string? hash) => _inner.MarkCacheComplete(hash);
