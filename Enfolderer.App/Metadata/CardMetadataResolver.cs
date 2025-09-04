@@ -182,44 +182,92 @@ public class CardMetadataResolver
         Func<int,CardEntry?,(CardEntry? backFace,bool persist)> onCardResolved,
         Func<string,string,string?,Task<CardEntry?>> fetchCard)
     {
-        int total = targetIndexes.Count;
-        int done = 0;
-        var concurrency = new SemaphoreSlim(6);
-        var tasks = new List<Task>();
+        // Deduplicate (SetCode, Number, NameOverride) entries so we don't refetch the same card multiple times.
+        // Many binder specs can reference identical cards (especially with variant display differences).
+        var keyComparer = StringComparer.OrdinalIgnoreCase;
+        var canonicalByKey = new Dictionary<(string set,string number,string? name), int>(capacity: fetchList.Count);
+        var dupSpecIndexesByCanonical = new Dictionary<int, List<int>>();
+        var unique = new List<FetchSpec>(fetchList.Count);
+        var canonicalTargetIndexes = new HashSet<int>();
         foreach (var f in fetchList)
         {
-            if (!targetIndexes.Contains(f.SpecIndex)) continue;
+            var key = (f.SetCode, f.Number, f.NameOverride);
+            if (!canonicalByKey.TryGetValue(key, out int canonicalSpecIndex))
+            {
+                canonicalByKey[key] = f.SpecIndex;
+                unique.Add(f);
+                if (targetIndexes.Contains(f.SpecIndex)) canonicalTargetIndexes.Add(f.SpecIndex);
+            }
+            else
+            {
+                // Record duplicate mapping if duplicate index is in the target set
+                if (targetIndexes.Contains(f.SpecIndex))
+                {
+                    if (!dupSpecIndexesByCanonical.TryGetValue(canonicalSpecIndex, out var list))
+                    {
+                        list = new List<int>(2);
+                        dupSpecIndexesByCanonical[canonicalSpecIndex] = list;
+                    }
+                    list.Add(f.SpecIndex);
+                }
+            }
+        }
+
+        // Sort unique list by SetCode to improve locality (cache, potential future batch endpoints)
+        unique.Sort((a,b) => string.Compare(a.SetCode, b.SetCode, StringComparison.OrdinalIgnoreCase));
+
+        int total = targetIndexes.Count; // still report original target count
+        int done = 0;
+        var concurrency = new SemaphoreSlim(6);
+        var tasks = new List<Task>(unique.Count);
+        foreach (var f in unique)
+        {
+            if (!canonicalTargetIndexes.Contains(f.SpecIndex)) continue; // skip if canonical not needed
             await concurrency.WaitAsync();
             tasks.Add(Task.Run(async () =>
             {
+                int newlyResolvedCount = 0; // number of spec indexes satisfied by this fetch (canonical + dups in target set)
                 try
                 {
                     CardEntry? resolved = null;
-                    // Try per-card cache first
                     if (!TryLoadCardFromCache(f.SetCode, f.Number, out resolved) || resolved == null)
                     {
                         resolved = await fetchCard(f.SetCode, f.Number, f.NameOverride);
-                        if (resolved != null)
-                        {
-                            PersistCardToCache(resolved);
-                        }
+                        if (resolved != null) PersistCardToCache(resolved);
                     }
+                    CardEntry? backFace = null;
                     if (resolved != null)
                     {
-                        // If MFC and has both faces, synthesize back entry for persistence
-                        CardEntry? backFace = null;
                         if (resolved.IsModalDoubleFaced && !string.IsNullOrEmpty(resolved.FrontRaw) && !string.IsNullOrEmpty(resolved.BackRaw))
                         {
                             var backDisplay = $"{resolved.BackRaw} ({resolved.FrontRaw})";
                             backFace = new CardEntry(backDisplay, resolved.Number, resolved.Set, true, true, resolved.FrontRaw, resolved.BackRaw);
                             PersistCardToCache(backFace);
                         }
-                        onCardResolved(f.SpecIndex, resolved);
-                        if (backFace != null) onCardResolved(f.SpecIndex, backFace);
+                        onCardResolved(f.SpecIndex, resolved); newlyResolvedCount++;
+                        if (backFace != null) { onCardResolved(f.SpecIndex, backFace); }
+                        // Propagate to duplicates
+                        if (dupSpecIndexesByCanonical.TryGetValue(f.SpecIndex, out var dups))
+                        {
+                            foreach (var di in dups)
+                            {
+                                onCardResolved(di, resolved);
+                                if (backFace != null) onCardResolved(di, backFace);
+                                newlyResolvedCount++;
+                            }
+                        }
                     }
                     else
                     {
-                        onCardResolved(f.SpecIndex, null);
+                        onCardResolved(f.SpecIndex, null); newlyResolvedCount++;
+                        if (dupSpecIndexesByCanonical.TryGetValue(f.SpecIndex, out var dups))
+                        {
+                            foreach (var di in dups)
+                            {
+                                onCardResolved(di, null);
+                                newlyResolvedCount++;
+                            }
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -228,8 +276,9 @@ public class CardMetadataResolver
                 }
                 finally
                 {
-                    Interlocked.Increment(ref done);
-                    updateCallback(done);
+                    if (newlyResolvedCount == 0) newlyResolvedCount = 1; // safety fallback
+                    int newDone = Interlocked.Add(ref done, newlyResolvedCount);
+                    updateCallback(Math.Min(newDone, total));
                     concurrency.Release();
                 }
             }));

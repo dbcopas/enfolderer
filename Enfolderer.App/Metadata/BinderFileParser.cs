@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Buffers;
 using System.Text;
 using System.Text.RegularExpressions;
 using Enfolderer.App.Imaging;
@@ -44,7 +45,7 @@ public sealed class BinderFileParser
 
     public async Task<BinderParseResult> ParseAsync(string path, int slotsPerPage, CancellationToken ct = default)
     {
-        var lines = await File.ReadAllLinesAsync(path, ct);
+    var lines = await File.ReadAllLinesAsync(path, ct);
         _theme.Reset(path + (new FileInfo(path).LastWriteTimeUtc.Ticks));
         int? pagesPerBinderOverride = null;
         string? layoutModeOverride = null;
@@ -88,11 +89,11 @@ public sealed class BinderFileParser
             }
             return BinderParseResult.CacheHitResult(fileHash, cachedCards, pagesPerBinderOverride, layoutModeOverride, enableHttpDebug, Path.GetDirectoryName(path));
         }
-    // Pre-size lists heuristically (spec lines often expand; choose 2x line count budget)
-    int capacity = lines.Length * 2;
-    var parsedSpecs = new List<BinderParsedSpec>(capacity);
-    var fetchList = new List<FetchSpec>(capacity / 2);
-    var pendingVariantPairs = new List<(string set,string baseNum,string variantNum)>(32);
+    // Estimate capacities with a lightweight scan to reduce dynamic List growth
+    EstimateCapacities(lines, slotsPerPage, out int specCap, out int fetchCap, out int variantPairCap);
+    var parsedSpecs = new List<BinderParsedSpec>(specCap);
+    var fetchList = new List<FetchSpec>(fetchCap);
+    var pendingVariantPairs = new List<(string set,string baseNum,string variantNum)>(variantPairCap);
         string? localBackImagePath = null;
         string? currentSet = null;
 
@@ -449,35 +450,107 @@ public sealed class BinderFileParser
 
     private static string ComputeJoinedLineHash(string[] lines)
     {
-        // Avoid allocating one giant concatenated string; stream into SHA256
         using var sha = SHA256.Create();
-        // Reuse newline bytes rather than allocate each iteration
-        Span<byte> newline = stackalloc byte[1];
-        newline[0] = (byte)'\n';
-    // Single reusable stack buffer for short lines
-    Span<byte> smallBuffer = stackalloc byte[512];
-
-        foreach (var line in lines)
+        // Reuse a single pooled buffer for most lines (UTF8 expansion worst-case 4x, typical ASCII ~1x)
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(2048);
+        Span<byte> nl = stackalloc byte[1]; nl[0] = (byte)'\n';
+    // Single shared newline buffer
+    byte[] newline = new byte[]{ (byte)'\n' };
+    foreach (var line in lines)
         {
-            // Fast-path: for short lines allocate on stack (UTF8 max 4 bytes per char; for ASCII typical binder lines this is safe)
-            if (line.Length <= 128)
+            int needed = Encoding.UTF8.GetByteCount(line);
+            if (needed <= buffer.Length)
             {
-                int written = Encoding.UTF8.GetBytes(line.AsSpan(), smallBuffer);
-                // Rent array once per line (avoid ToArray allocation) then return.
-                var rented = System.Buffers.ArrayPool<byte>.Shared.Rent(written);
-                smallBuffer.Slice(0, written).CopyTo(rented);
-                sha.TransformBlock(rented, 0, written, null, 0);
-                System.Buffers.ArrayPool<byte>.Shared.Return(rented, clearArray: false);
+                int written = Encoding.UTF8.GetBytes(line, 0, line.Length, buffer, 0);
+                sha.TransformBlock(buffer, 0, written, null, 0);
             }
             else
             {
-                var bytes = Encoding.UTF8.GetBytes(line);
-                sha.TransformBlock(bytes, 0, bytes.Length, null, 0);
+                // Rare very long line path: rent a larger temporary
+                byte[] tmp = ArrayPool<byte>.Shared.Rent(needed);
+                try
+                {
+                    int written = Encoding.UTF8.GetBytes(line, 0, line.Length, tmp, 0);
+                    sha.TransformBlock(tmp, 0, written, null, 0);
+                }
+                finally { ArrayPool<byte>.Shared.Return(tmp); }
             }
-        sha.TransformBlock(newline.ToArray(), 0, 1, null, 0); // Append normalized newline
+            sha.TransformBlock(newline, 0, 1, null, 0); // normalized newline
         }
         sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+        ArrayPool<byte>.Shared.Return(buffer);
         return Convert.ToHexString(sha.Hash!);
+    }
+
+    // Lightweight capacity estimator to reduce List<T> growth reallocations
+    private static void EstimateCapacities(string[] lines, int slotsPerPage, out int specCap, out int fetchCap, out int variantPairCap)
+    {
+        int specs = 0; int fetch = 0; int variantPairs = 0; string? currentSet = null;
+        foreach (var raw in lines)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var line = raw.Trim();
+            if (line.StartsWith('#')) continue;
+            if (line.StartsWith("**")) continue; // directive-like skip
+            if (line.StartsWith('=')) { currentSet = line.Length>1 ? line.Substring(1).Trim() : currentSet; continue; }
+            if (currentSet == null) continue;
+            // Backface pattern: "<count>; backface" – specs but no fetch entries
+            if (line.EndsWith("backface", StringComparison.OrdinalIgnoreCase))
+            {
+                int semi = line.IndexOf(';');
+                if (semi > 0 && int.TryParse(line.AsSpan(0, semi), out int backCount) && backCount > 0)
+                { specs += backCount; continue; }
+            }
+            // Extract numberPart (before first ';') similar to main parser
+            var semiIdx = line.IndexOf(';');
+            string numberPart = semiIdx >= 0 ? line.Substring(0, semiIdx).Trim() : line;
+            int added = 1; // default one spec
+            // Simple numeric range a-b
+            int dash = numberPart.IndexOf('-');
+            if (dash > 0 && dash < numberPart.Length - 1 && numberPart.IndexOf('-', dash + 1) < 0)
+            {
+                // Attempt prefix+range or pure numeric
+                int rStartDigitsPos = dash;
+                // Find start digits sequence
+                int leftDigitStart = -1; int leftDigitEnd = -1;
+                for (int i = dash - 1; i >= 0; i--)
+                {
+                    if (char.IsDigit(numberPart[i])) { leftDigitStart = i; }
+                    else { if (leftDigitStart >= 0) { leftDigitEnd = i + 1; break; } }
+                }
+                if (leftDigitStart >= 0 && leftDigitEnd == -1) leftDigitEnd = 0;
+                if (leftDigitStart >= 0)
+                {
+                    // Extract left digits
+                    int len = dash - leftDigitStart;
+                    if (int.TryParse(numberPart.AsSpan(leftDigitStart, len), out int leftVal))
+                    {
+                        // Right side digits
+                        int rightStart = dash + 1; int rightEnd = rightStart;
+                        while (rightEnd < numberPart.Length && char.IsDigit(numberPart[rightEnd])) rightEnd++;
+                        if (rightEnd > rightStart && int.TryParse(numberPart.AsSpan(rightStart, rightEnd - rightStart), out int rightVal) && rightVal >= leftVal)
+                        {
+                            int count = (rightVal - leftVal + 1);
+                            if (count > 1) added = count;
+                        }
+                    }
+                }
+            }
+            // Variant duplication heuristic (+lang or +seg doubles each base)
+            if (numberPart.Contains('+') && added > 0)
+            {
+                // Range + variant => doubled; single + variant => 2 specs
+                added = added * 2;
+                variantPairs += added / 2; // approximate
+            }
+            specs += added;
+            fetch += added; // almost every spec (except backfaces handled earlier) needs fetch
+        }
+        // Provide a modest buffer headroom and minimum baselines
+        if (specs < lines.Length) specs = lines.Length;
+        specCap = specs + Math.Min(256, specs / 8 + 8);
+        fetchCap = fetch + Math.Min(256, fetch / 8 + 8);
+        variantPairCap = Math.Max(32, variantPairs + 4);
     }
 
     // Lightweight parser for pattern: Name;Set;Number[;...]
