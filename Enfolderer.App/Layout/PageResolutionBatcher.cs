@@ -29,7 +29,8 @@ public class PageResolutionBatcher
         NavigationService nav,
         IReadOnlyList<NavigationService.PageView> views,
         ObservableCollection<CardSlot> leftSlots,
-        ObservableCollection<CardSlot> rightSlots)
+    ObservableCollection<CardSlot> rightSlots,
+    System.Net.Http.HttpClient http)
     {
         if (pageNumbers == null || pageNumbers.Length == 0) return;
         var neededSpecs = new HashSet<int>();
@@ -73,9 +74,9 @@ public class PageResolutionBatcher
                     leftSlots.Clear(); rightSlots.Clear();
                     var slotBuilder = new PageSlotBuilder();
                     if (v.LeftPage.HasValue)
-                        foreach (var slot in slotBuilder.BuildPageSlots(orderedFaces, v.LeftPage.Value, slotsPerPage, BinderViewModel.Http)) leftSlots.Add(slot);
+                        foreach (var slot in slotBuilder.BuildPageSlots(orderedFaces, v.LeftPage.Value, slotsPerPage, http)) leftSlots.Add(slot);
                     if (v.RightPage.HasValue)
-                        foreach (var slot in slotBuilder.BuildPageSlots(orderedFaces, v.RightPage.Value, slotsPerPage, BinderViewModel.Http)) rightSlots.Add(slot);
+                        foreach (var slot in slotBuilder.BuildPageSlots(orderedFaces, v.RightPage.Value, slotsPerPage, http)) rightSlots.Add(slot);
                 }
             });
         });
