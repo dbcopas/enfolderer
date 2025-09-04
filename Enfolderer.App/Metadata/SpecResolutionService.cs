@@ -17,9 +17,10 @@ namespace Enfolderer.App.Metadata;
 public class SpecResolutionService
 {
     private readonly ICardMetadataResolver _resolver;
+    private readonly Func<System.Net.Http.HttpClient> _httpClientProvider;
 
-    public SpecResolutionService(ICardMetadataResolver resolver)
-    { _resolver = resolver; }
+    public SpecResolutionService(ICardMetadataResolver resolver, Func<System.Net.Http.HttpClient> httpClientProvider)
+    { _resolver = resolver; _httpClientProvider = httpClientProvider; }
 
     public async Task ResolveAsync(
         List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList,
@@ -50,17 +51,18 @@ public class SpecResolutionService
                 }
                 return (null,false);
             },
-            async (set, num, nameOverride) => await FetchViaHttpAsync(set, num, nameOverride)
+        async (set, num, nameOverride) => await FetchViaHttpAsync(set, num, nameOverride)
         );
     }
 
     // Lightweight HTTP fetch replicating prior inline logic (kept here to isolate from VM).
-    private static async Task<CardEntry?> FetchViaHttpAsync(string setCode, string number, string? overrideName)
+    private async Task<CardEntry?> FetchViaHttpAsync(string setCode, string number, string? overrideName)
     {
         try {
             await ApiRateLimiter.WaitAsync();
             var url = ScryfallUrlHelper.BuildCardApiUrl(setCode, number);
-            var resp = await BinderViewModel.Http.GetAsync(url);
+        var client = _httpClientProvider();
+        var resp = await client.GetAsync(url);
             if (!resp.IsSuccessStatusCode) return null;
             await using var stream = await resp.Content.ReadAsStreamAsync();
             using var doc = await JsonDocument.ParseAsync(stream);

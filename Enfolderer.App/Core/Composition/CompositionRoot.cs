@@ -21,8 +21,10 @@ public static class CompositionRoot
         SpecResolutionService SpecResolution,
         MetadataLoadOrchestrator Orchestrator,
         IQuantityService QuantityService,
-    IQuantityToggleService? QuantityToggleService,
-    IMetadataCachePersistence CachePersistence);
+	IQuantityToggleService? QuantityToggleService,
+	IMetadataCachePersistence CachePersistence,
+        Enfolderer.App.Core.Abstractions.ICardArrangementService ArrangementService,
+        Enfolderer.App.Core.Abstractions.IImportService ImportService);
 
     /// <summary>
     /// Build graph using an existing concrete resolver (so existing readonly field can stay).
@@ -32,7 +34,8 @@ public static class CompositionRoot
         CardQuantityService quantityService,
         CardBackImageService backImageService,
         CardMetadataResolver resolver,
-        Func<string,bool> isCacheComplete,
+    Func<string,bool> isCacheComplete,
+    Func<System.Net.Http.HttpClient>? httpClientProvider = null,
         Enfolderer.App.Collection.CollectionRepository? collectionRepo = null,
         Enfolderer.App.Collection.CardCollectionData? collectionData = null)
     {
@@ -41,12 +44,14 @@ public static class CompositionRoot
         var concreteParser = new BinderFileParser(binderTheme, resolver, _ => backImageService.Resolve(null, _), isCacheComplete);
         IBinderFileParser parserAdapter = new BinderFileParserAdapter(concreteParser);
         var binderLoad = new BinderLoadService(binderTheme, parserAdapter);
-        var specResolution = new SpecResolutionService(adapter);
+    var specResolution = new SpecResolutionService(adapter, httpClientProvider ?? (() => new System.Net.Http.HttpClient()));
         var orchestrator = new MetadataLoadOrchestrator(specResolution, quantityService, adapter);
         IQuantityToggleService? qtyToggle = null;
         if (collectionRepo != null && collectionData != null)
             qtyToggle = new Enfolderer.App.Quantity.QuantityToggleService(quantityService, collectionRepo, collectionData);
     var cachePersistence = new MetadataCachePersistenceAdapter(adapter);
-    return new AppServiceGraph(resolver, adapter, parserAdapter, binderLoad, specResolution, orchestrator, quantityService, qtyToggle, cachePersistence);
+        var arrangement = new Enfolderer.App.Core.Arrangement.CardArrangementService(new VariantPairingService());
+    var importService = new Enfolderer.App.Importing.ImportService();
+    return new AppServiceGraph(resolver, adapter, parserAdapter, binderLoad, specResolution, orchestrator, quantityService, qtyToggle, cachePersistence, arrangement, importService);
     }
 }

@@ -17,6 +17,26 @@ public static class CompositionRootTests
 {
     public static int RunAll()
     {
-    return 0; // Temporarily disabled due to intermittent environment side-effects; retained for future wiring checks.
+        int failures = 0; void Check(bool c){ if(!c) failures++; }
+        try
+        {
+            var theme = new BinderThemeService();
+            var qtySvc = new CardQuantityService();
+            var backImg = new CardBackImageService();
+            var resolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, new[]{"transform"}, 5);
+            bool IsMetaComplete(string h) => true; // deterministic stub
+            var repo = new Enfolderer.App.Collection.CollectionRepository(new Enfolderer.App.Collection.CardCollectionData());
+            var collection = new Enfolderer.App.Collection.CardCollectionData();
+            var graph = CompositionRoot.BuildExisting(theme, qtySvc, backImg, resolver, IsMetaComplete, () => new System.Net.Http.HttpClient(new System.Net.Http.HttpClientHandler()), repo, collection);
+            Check(graph.BinderLoad != null);
+            Check(graph.Orchestrator != null);
+            Check(graph.SpecResolution != null);
+            Check(graph.ResolverAdapter != null);
+            // Quantity toggle service optional; if absent ensure default instantiation works
+            var toggle = graph.QuantityToggleService ?? new QuantityToggleService(qtySvc, repo, collection);
+            Check(toggle != null);
+        }
+        catch { failures++; }
+        return failures;
     }
 }

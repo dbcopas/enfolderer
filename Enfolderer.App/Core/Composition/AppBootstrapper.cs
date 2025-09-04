@@ -18,6 +18,7 @@ public static class AppBootstrapper
         CollectionRepository CollectionRepo,
         CardQuantityService QuantityService,
         QuantityEnrichmentService QuantityEnrichment,
+        QuantityEnrichmentCoordinator QuantityCoordinator,
         IQuantityToggleService QuantityToggle,
         CardBackImageService BackImageService,
         CachePathService CachePaths,
@@ -25,14 +26,19 @@ public static class AppBootstrapper
         TelemetryService Telemetry,
         IHttpClientFactoryService HttpFactory,
         CompositionRoot.AppServiceGraph CoreGraph,
-        IMetadataCachePersistence CachePersistence);
+    IMetadataCachePersistence CachePersistence,
+    Enfolderer.App.Layout.PageViewPresenter PagePresenter,
+    Enfolderer.App.PageResolutionBatcher PageBatcher,
+    Enfolderer.App.Core.Abstractions.ICardArrangementService ArrangementService,
+    Enfolderer.App.Core.Abstractions.IImportService ImportService);
 
     public static AppRuntimeServices Build(string cacheRoot, BinderThemeService binderTheme, System.Func<string,bool> isMetaComplete)
     {
         var collection = new CardCollectionData();
         var repo = new CollectionRepository(collection);
         var qtySvc = new CardQuantityService();
-        var qtyEnrichment = new QuantityEnrichmentService(qtySvc);
+    var qtyEnrichment = new QuantityEnrichmentService(qtySvc);
+    var qtyCoordinator = new QuantityEnrichmentCoordinator();
     var backImg = new CardBackImageService();
     var cachePaths = new CachePathService(cacheRoot);
     var statusPanel = new StatusPanelService(_ => { });
@@ -40,9 +46,11 @@ public static class AppBootstrapper
     var httpFactory = new HttpClientFactoryService(telemetry);
     // Inline constants (keep in sync with MainWindow): schemaVersion=5, physically two-sided layouts list
     var resolver = new CardMetadataResolver(cacheRoot, new[]{"transform","modal_dfc","battle","double_faced_token","double_faced_card","prototype","reversible_card"}, 5);
-        var coreGraph = CompositionRoot.BuildExisting(binderTheme, qtySvc, backImg, resolver, isMetaComplete, repo, collection);
-        var cachePersistence = new MetadataCachePersistenceAdapter(coreGraph.ResolverAdapter);
+    var coreGraph = CompositionRoot.BuildExisting(binderTheme, qtySvc, backImg, resolver, isMetaComplete, () => httpFactory.Client, repo, collection);
+    var cachePersistence = new MetadataCachePersistenceAdapter(coreGraph.ResolverAdapter);
     IQuantityToggleService qtyToggle = coreGraph.QuantityToggleService ?? new QuantityToggleService(qtySvc, repo, collection);
-        return new AppRuntimeServices(collection, repo, qtySvc, qtyEnrichment, qtyToggle, backImg, cachePaths, statusPanel, telemetry, httpFactory, coreGraph, cachePersistence);
+    var pagePresenter = new Enfolderer.App.Layout.PageViewPresenter();
+    var pageBatcher = new Enfolderer.App.PageResolutionBatcher();
+    return new AppRuntimeServices(collection, repo, qtySvc, qtyEnrichment, qtyCoordinator, qtyToggle, backImg, cachePaths, statusPanel, telemetry, httpFactory, coreGraph, cachePersistence, pagePresenter, pageBatcher, coreGraph.ArrangementService, coreGraph.ImportService);
     }
 }
