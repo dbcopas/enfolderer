@@ -24,7 +24,7 @@ public class SpecResolutionService
     { _resolver = resolver; _httpClientProvider = httpClientProvider; _log = log; }
 
     public async Task ResolveAsync(
-        List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList,
+        List<FetchSpec> fetchList,
         HashSet<int> targetIndexes,
         int updateInterval,
         List<CardSpec> specs,

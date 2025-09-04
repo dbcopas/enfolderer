@@ -176,7 +176,7 @@ public class CardMetadataResolver
     }
 
     public async Task ResolveSpecsAsync(
-        List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList,
+        List<FetchSpec> fetchList,
         HashSet<int> targetIndexes,
         Func<int,int> updateCallback,
         Func<int,CardEntry?,(CardEntry? backFace,bool persist)> onCardResolved,
@@ -188,7 +188,7 @@ public class CardMetadataResolver
         var tasks = new List<Task>();
         foreach (var f in fetchList)
         {
-            if (!targetIndexes.Contains(f.specIndex)) continue;
+            if (!targetIndexes.Contains(f.SpecIndex)) continue;
             await concurrency.WaitAsync();
             tasks.Add(Task.Run(async () =>
             {
@@ -196,9 +196,9 @@ public class CardMetadataResolver
                 {
                     CardEntry? resolved = null;
                     // Try per-card cache first
-                    if (!TryLoadCardFromCache(f.setCode, f.number, out resolved) || resolved == null)
+                    if (!TryLoadCardFromCache(f.SetCode, f.Number, out resolved) || resolved == null)
                     {
-                        resolved = await fetchCard(f.setCode, f.number, f.nameOverride);
+                        resolved = await fetchCard(f.SetCode, f.Number, f.NameOverride);
                         if (resolved != null)
                         {
                             PersistCardToCache(resolved);
@@ -214,17 +214,17 @@ public class CardMetadataResolver
                             backFace = new CardEntry(backDisplay, resolved.Number, resolved.Set, true, true, resolved.FrontRaw, resolved.BackRaw);
                             PersistCardToCache(backFace);
                         }
-                        onCardResolved(f.specIndex, resolved);
-                        if (backFace != null) onCardResolved(f.specIndex, backFace);
+                        onCardResolved(f.SpecIndex, resolved);
+                        if (backFace != null) onCardResolved(f.SpecIndex, backFace);
                     }
                     else
                     {
-                        onCardResolved(f.specIndex, null);
+                        onCardResolved(f.SpecIndex, null);
                     }
                 }
                 catch (Exception ex)
                 {
-                    _log?.Log($"ResolveSpecs failure {f.setCode} {f.number}: {ex.Message}", "ResolveSpecs");
+                    _log?.Log($"ResolveSpecs failure {f.SetCode} {f.Number}: {ex.Message}", "ResolveSpecs");
                 }
                 finally
                 {

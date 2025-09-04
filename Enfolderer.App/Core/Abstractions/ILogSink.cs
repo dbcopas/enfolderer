@@ -1,7 +1,7 @@
 namespace Enfolderer.App.Core.Abstractions;
 
 /// <summary>
-/// Minimal logging abstraction (Phase 3) to decouple direct Debug.WriteLine calls.
+/// Minimal logging abstraction to decouple direct Debug.WriteLine calls.
 /// Category is optional; implementation may prepend it.
 /// </summary>
 public interface ILogSink

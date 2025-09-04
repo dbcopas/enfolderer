@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Enfolderer.App.Metadata; // for FetchSpec
 using Enfolderer.App.Core;
 
 namespace Enfolderer.App.Core.Abstractions;
@@ -14,7 +15,7 @@ public interface IMetadataProvider
     bool TryLoadMetadata(string hash, List<CardEntry> intoCards);
     void PersistMetadata(string? hash, List<CardEntry> cards);
     void MarkComplete(string? hash);
-    Task ResolveSpecsAsync(List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList,
+    Task ResolveSpecsAsync(List<FetchSpec> fetchList,
         HashSet<int> targetIndexes,
         Func<int,int> updateCallback,
         Func<int,CardEntry?,(CardEntry? backFace,bool persist)> onCardResolved,

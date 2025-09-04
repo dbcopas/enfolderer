@@ -21,7 +21,6 @@ public static class MfcAdjustmentCharacterizationTests
     {
         var flags = RuntimeFlags.Default;
     var svc = new CardQuantityService(flags, mfcAdjustment: new MfcQuantityAdjustmentService(flags));
-    var orchestrator = new QuantityOrchestrator(svc);
         var cards = new List<CardEntry>
         {
             new CardEntry("Front A","001","SET", true, false, null, null, null, 3),
@@ -36,7 +35,6 @@ public static class MfcAdjustmentCharacterizationTests
     {
         var flags = RuntimeFlags.Default;
     var svc = new CardQuantityService(flags, mfcAdjustment: new MfcQuantityAdjustmentService(flags));
-    var orchestrator = new QuantityOrchestrator(svc);
         var cards = new List<CardEntry>
         {
             new CardEntry("Front B1","002","SET", true, false, null, null, null, 2),
@@ -52,7 +50,6 @@ public static class MfcAdjustmentCharacterizationTests
     {
         var flags = RuntimeFlags.Default;
     var svc = new CardQuantityService(flags, mfcAdjustment: new MfcQuantityAdjustmentService(flags));
-    var orchestrator = new QuantityOrchestrator(svc);
         var cards = new List<CardEntry>
         {
             new CardEntry("Front Solo","010","SET", true, false, null, null, null, 1)

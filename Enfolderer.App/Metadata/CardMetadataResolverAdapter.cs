@@ -18,6 +18,6 @@ public sealed class CardMetadataResolverLowLevelAdapter : ICardMetadataResolver
     public void MarkCacheComplete(string? hash) => _inner.MarkCacheComplete(hash);
     public bool TryLoadCardFromCache(string setCode, string number, out CardEntry? entry) => _inner.TryLoadCardFromCache(setCode, number, out entry);
     public void PersistCardToCache(CardEntry ce) => _inner.PersistCardToCache(ce);
-    public Task ResolveSpecsAsync(List<(string setCode,string number,string? nameOverride,int specIndex)> fetchList, HashSet<int> targetIndexes, System.Func<int,int> updateCallback, System.Func<int,CardEntry?,(CardEntry? backFace,bool persist)> onCardResolved, System.Func<string,string,string?,Task<CardEntry?>> fetchCard)
+    public Task ResolveSpecsAsync(List<FetchSpec> fetchList, HashSet<int> targetIndexes, System.Func<int,int> updateCallback, System.Func<int,CardEntry?,(CardEntry? backFace,bool persist)> onCardResolved, System.Func<string,string,string?,Task<CardEntry?>> fetchCard)
         => _inner.ResolveSpecsAsync(fetchList, targetIndexes, updateCallback, onCardResolved, fetchCard);
 }

@@ -19,13 +19,7 @@ public class QuantityEnrichmentCoordinator
     {
             if (debug)
                 sink?.Log($"Before enrichment: cards={cards.Count} qtyKeys={collection.Quantities.Count} anyPositive={cards.Any(c=>c.Quantity>0)}", LogCategories.QtyCoordinator);
-            if (quantityService is CardQuantityService concrete)
-                concrete.ApplyAll(collection, cards);
-            else
-            {
-                quantityService.EnrichQuantities(collection, cards);
-                quantityService.AdjustMfcQuantities(cards);
-            }
+            quantityService.ApplyAll(collection, cards);
             rebuildOrderedFaces();
             refresh();
             if (debug)
@@ -45,13 +39,7 @@ public class QuantityEnrichmentCoordinator
     {
             if (debug)
                 sink?.Log($"Fallback trigger: cards={cards.Count} qtyKeys={collection.Quantities.Count} positivesPre={cards.Count(c=>c.Quantity>0)}", LogCategories.QtyCoordinator);
-            if (quantityService is CardQuantityService concrete)
-                concrete.ApplyAll(collection, cards);
-            else
-            {
-                quantityService.EnrichQuantities(collection, cards);
-                quantityService.AdjustMfcQuantities(cards);
-            }
+            quantityService.ApplyAll(collection, cards);
             rebuildOrderedFaces();
             if (debug)
                 sink?.Log($"Fallback after: positives={cards.Count(c=>c.Quantity>0)}", LogCategories.QtyCoordinator);
@@ -74,13 +62,7 @@ public class QuantityEnrichmentCoordinator
             var sink = quantityService.LogSink;
             try
             {
-                if (quantityService is CardQuantityService concrete)
-                    concrete.ApplyAll(collection, cards);
-                else
-                {
-                    quantityService.EnrichQuantities(collection, cards);
-                    quantityService.AdjustMfcQuantities(cards);
-                }
+                quantityService.ApplyAll(collection, cards);
                 buildOrderedFaces();
                 rebuildViews();
                 refresh();

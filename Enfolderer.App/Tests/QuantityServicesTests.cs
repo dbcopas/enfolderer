@@ -16,17 +16,15 @@ public static class QuantityServicesTests
     var collection = new CardCollectionData();
     var repo = new CollectionRepository(collection);
     var qtyService = new CardQuantityService(quantityRepository: repo, mfcAdjustment: new MfcQuantityAdjustmentService());
-    var orchestrator = new QuantityOrchestrator(qtyService);
         collection.Quantities[("set", "1")] = 3;
         var faces = new List<CardEntry>{ new CardEntry("Alpha","1","SET",false) };
-    orchestrator.ApplyAll(collection, faces);
+        qtyService.ApplyAll(collection, faces);
     Check(faces[0].Quantity==3, "Basic quantity enrich");
     // Simulate mainDb-only custom card quantity (custom cards store quantity directly in Quantities via load)
     var mainOnlyCollection = new CardCollectionData();
     mainOnlyCollection.Quantities[("custom", "5")] = 2; // mimic loader effect
     var customFaces = new List<CardEntry>{ new CardEntry("Custom Card","5","CUSTOM",false) };
-    var customOrchestrator = new QuantityOrchestrator(qtyService);
-    customOrchestrator.ApplyAll(mainOnlyCollection, customFaces);
+        qtyService.ApplyAll(mainOnlyCollection, customFaces);
     Check(customFaces[0].Quantity==2, "Custom mainDb-only quantity");
         // MFC adjust
         var mfcFaces = new List<CardEntry>{ new CardEntry("Front/Back|MFC","10","SET",true,false,"Front","Back"), new CardEntry("Front/Back|MFC","10","SET",true,true,"Front","Back") };
@@ -39,13 +37,13 @@ public static class QuantityServicesTests
     var suffixCollection = new CardCollectionData();
     suffixCollection.Quantities[("set", "12a")] = 4;
     var suffixFaces = new List<CardEntry>{ new CardEntry("Suffix Card","12a","SET",false) };
-    orchestrator.ApplyAll(suffixCollection, suffixFaces);
+        qtyService.ApplyAll(suffixCollection, suffixFaces);
     Check(suffixFaces[0].Quantity==4, "Suffix card quantity");
     // Leading zero trim alias test
     var trimCollection = new CardCollectionData();
     trimCollection.Quantities[("set", "7")] = 5;
     var trimFaces = new List<CardEntry>{ new CardEntry("Trim Card","007","SET",false) };
-    orchestrator.ApplyAll(trimCollection, trimFaces);
+        qtyService.ApplyAll(trimCollection, trimFaces);
     Check(trimFaces[0].Quantity==5, "Leading zero trim");
         return failures;
     }

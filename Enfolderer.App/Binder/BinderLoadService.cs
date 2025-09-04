@@ -25,7 +25,7 @@ public record BinderLoadResult(
     List<CardEntry> CachedCards,
     List<BinderParsedSpec> Specs,
     List<(string set,string baseNum,string variantNum)> PendingVariantPairs,
-    List<(string setCode,string number,string? nameOverride,int specIndex)> InitialFetchList,
+    List<FetchSpec> InitialFetchList,
     HashSet<int> InitialSpecIndexes
 );
 
