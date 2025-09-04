@@ -2,15 +2,16 @@ using System;
 using System.Collections.Generic;
 using Enfolderer.App.Collection;
 using Enfolderer.App.Core;
+using Enfolderer.App.Core.Abstractions;
 
 namespace Enfolderer.App.Quantity;
 
-public class QuantityToggleService
+public class QuantityToggleService : IQuantityToggleService
 {
-    private readonly CardQuantityService _quantityService;
-    private readonly CollectionRepository _collectionRepo;
+    private readonly IQuantityService _quantityService;
+    private readonly ICollectionRepository _collectionRepo;
     private readonly CardCollectionData _collection;
-    public QuantityToggleService(CardQuantityService qty, CollectionRepository repo, CardCollectionData collection)
+    public QuantityToggleService(IQuantityService qty, ICollectionRepository repo, CardCollectionData collection)
     { _quantityService = qty; _collectionRepo = repo; _collection = collection; }
 
     public void Toggle(CardSlot slot,

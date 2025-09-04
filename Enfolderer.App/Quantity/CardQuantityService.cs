@@ -14,7 +14,7 @@ namespace Enfolderer.App.Quantity;
 /// Encapsulates quantity enrichment, MFC display adjustment, and toggle persistence logic.
 /// Extracted from MainWindow.xaml.cs (Phase 2 refactor).
 /// </summary>
-public sealed class CardQuantityService
+public sealed class CardQuantityService : IQuantityService
 {
     private readonly IRuntimeFlags _flags;
     public CardQuantityService(IRuntimeFlags? flags = null) { _flags = flags ?? RuntimeFlags.Default; }
