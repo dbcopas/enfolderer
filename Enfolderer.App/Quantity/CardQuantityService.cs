@@ -179,7 +179,9 @@ public sealed class CardQuantityService
         for (int gi = 0; gi < cards.Count; gi++)
         {
             var c = cards[gi];
-            if (!c.IsModalDoubleFaced) continue;
+            // Broaden detection: include classic modal_dfc OR entries that have both front/back raw text even if IsModalDoubleFaced flag wasn't set (regression cases like SLD 379, ZNR 286).
+            bool treatAsModal = c.IsModalDoubleFaced || (!c.IsBackFace && !string.IsNullOrEmpty(c.FrontRaw) && !string.IsNullOrEmpty(c.BackRaw));
+            if (!treatAsModal) continue;
             string setKey = c.Set ?? string.Empty;
             string numKey = c.Number?.Split('/')[0] ?? string.Empty;
             string composite = setKey + "|" + numKey;
@@ -199,7 +201,7 @@ public sealed class CardQuantityService
             if (a.Quantity != frontDisplay) cards[list[0]] = a with { Quantity = frontDisplay };
             if (b.Quantity != backDisplay) cards[list[1]] = b with { Quantity = backDisplay };
             if (Environment.GetEnvironmentVariable("ENFOLDERER_QTY_DEBUG") == "1")
-                Debug.WriteLine($"[MFC][FallbackAdjust] Applied heuristic split set={a.Set} num={a.Number} q={qLogical} front={frontDisplay} back={backDisplay}");
+                Debug.WriteLine($"[MFC][FallbackAdjust] Applied heuristic split (broad) set={a.Set} num={a.Number} q={qLogical} front={frontDisplay} back={backDisplay} flags aMfc={a.IsModalDoubleFaced} bMfc={b.IsModalDoubleFaced}");
         }
 
     }
