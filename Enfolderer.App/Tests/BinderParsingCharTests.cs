@@ -135,13 +135,15 @@ public static class BinderParsingCharTests
             var tempCollection = new Enfolderer.App.Collection.CardCollectionData();
             var tempRepo = new Enfolderer.App.Collection.CollectionRepository(tempCollection);
             var qtySvc = new CardQuantityService(quantityRepository: tempRepo, mfcAdjustment: new MfcQuantityAdjustmentService()); // enforce repository wiring even for pure AdjustMfcQuantities logic
+            var orchestrator = new QuantityOrchestrator(qtySvc);
             var list = new List<CardEntry>{
                 new CardEntry("Alpha/Beta|MFC","10","SET",true,false,"Alpha","Beta"),
                 new CardEntry("Alpha/Beta|MFC","10","SET",true,false,"Alpha","Beta")
             };
             list[0] = list[0] with { Quantity = 1 };
             list[1] = list[1] with { Quantity = 1 };
-            qtySvc.AdjustMfcQuantities(list);
+            // Only need MFC adjust; ApplyAll safe (collection has 0 quantities) and keeps tests aligned with orchestrator path
+            orchestrator.ApplyAll(tempCollection, list);
             Check(ref failures, list[0].Quantity==1 && list[1].Quantity==0, "MFC fallback pairing (broad heuristic) changed");
         }, "MfcFallbackPairing");
 

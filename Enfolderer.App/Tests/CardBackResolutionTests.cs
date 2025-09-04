@@ -31,8 +31,7 @@ public static class CardBackResolutionTests
 
             var theme = new BinderThemeService();
             var resolver = new CardMetadataResolver(ImageCacheStore.CacheRoot, new[]{"transform"}, 5);
-            bool resolvedOnce = false;
-            string? Resolver(bool want) { resolvedOnce = true; return localBackPath; }
+            string? Resolver(bool want) { return localBackPath; }
             var parser = new BinderFileParser(theme, resolver, Resolver, _ => false);
             var result = parser.ParseAsync(binderPath, slotsPerPage).GetAwaiter().GetResult();
             var (front, back) = CardImageUrlStore.Get("__BACK__", "BACK");

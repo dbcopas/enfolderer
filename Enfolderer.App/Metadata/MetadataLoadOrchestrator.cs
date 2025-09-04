@@ -58,7 +58,8 @@ public class MetadataLoadOrchestrator
         rebuildCardList();
         if (collection.IsLoaded)
         {
-            try { _quantityService.EnrichQuantities(collection, cards); _quantityService.AdjustMfcQuantities(cards); } catch (Exception ex) { _log?.Log($"Enrichment failed: {ex.Message}", "Collection"); }
+            try { (_quantityService as CardQuantityService)?.ApplyAll(collection, cards); }
+            catch (Exception ex) { _log?.Log($"Enrichment failed: {ex.Message}", "Collection"); }
         }
         setStatus($"Initial load {cards.Count} faces (placeholders included).");
         buildOrderedFaces(); rebuildViews(); refresh();
@@ -72,8 +73,7 @@ public class MetadataLoadOrchestrator
             Application.Current.Dispatcher.Invoke(() =>
             {
                 rebuildCardList();
-                if (collection.IsLoaded) _quantityService.EnrichQuantities(collection, cards);
-                if (collection.IsLoaded) _quantityService.AdjustMfcQuantities(cards);
+                if (collection.IsLoaded) { (_quantityService as CardQuantityService)?.ApplyAll(collection, cards); }
                 buildOrderedFaces(); rebuildViews(); refresh();
                 setStatus($"All metadata loaded ({cards.Count} faces).");
                 persistCache();
