@@ -28,6 +28,16 @@ public class PageSlotBuilder
             {
                 var face = orderedFaces[gi];
                 var slot = new CardSlot(face, gi);
+                    // Recompute display quantity for MFC faces (layout may carry logical counts; apply visual rule here to guarantee consistency)
+                    if (face.IsModalDoubleFaced)
+                    {
+                        int logical = face.Quantity;
+                        int displayQty;
+                        if (logical <= 0) displayQty = 0;
+                        else if (logical == 1) displayQty = face.IsBackFace ? 0 : 1;
+                        else displayQty = 2; // use 2 as "has >=2" marker
+                        if (slot.Quantity != displayQty) slot.Quantity = displayQty;
+                    }
                 result.Add(slot);
                 // Always invoke image load, including for placeholder backfaces.
                 // The CardSlot logic itself suppresses external HTTP for "__BACK__" and will

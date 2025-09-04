@@ -69,7 +69,7 @@ public class CardSlot : INotifyPropertyChanged
         Set = entry.Set ?? string.Empty;
         Tooltip = entry.Display + (string.IsNullOrEmpty(Set) ? string.Empty : $" ({Set})");
         Background = Brushes.Black;
-        IsBackFace = entry.IsBackFace;
+    IsBackFace = entry.IsBackFace;
         IsPlaceholderBack = string.Equals(Set, "__BACK__", StringComparison.OrdinalIgnoreCase) && string.Equals(Name, "Backface", StringComparison.OrdinalIgnoreCase);
         if (IsPlaceholderBack)
             _quantity = -1;
