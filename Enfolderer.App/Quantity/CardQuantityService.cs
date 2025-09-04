@@ -301,6 +301,13 @@ public sealed class CardQuantityService : IQuantityService
         {
             if (newLogicalQty > 0) collection.Quantities[(setLower, trimmed)] = newLogicalQty; else collection.Quantities.Remove((setLower, trimmed));
         }
+        // If baseNum contains trailing non-digit variant letters (e.g., 13a), also update the pure numeric base so enrichment maps future rebuilds.
+        string numericBaseOnly = baseNum;
+        while (numericBaseOnly.Length > 0 && !char.IsDigit(numericBaseOnly[^1])) numericBaseOnly = numericBaseOnly.Substring(0, numericBaseOnly.Length - 1);
+        if (numericBaseOnly.Length > 0 && !string.Equals(numericBaseOnly, baseNum, StringComparison.OrdinalIgnoreCase))
+        {
+            if (newLogicalQty > 0) collection.Quantities[(setLower, numericBaseOnly)] = newLogicalQty; else collection.Quantities.Remove((setLower, numericBaseOnly));
+        }
         // For WAR star variant cards, also update VariantQuantities so subsequent enrichment passes reflect new value without a full DB reload.
         if (warStar)
         {
@@ -327,10 +334,23 @@ public sealed class CardQuantityService : IQuantityService
             {
                 string cBase = c.Number.Split('/')[0];
                 string cBaseStarless = cBase.IndexOf('★') >= 0 ? cBase.Replace("★", string.Empty) : cBase;
-                if (string.Equals(cBase, baseNum, StringComparison.OrdinalIgnoreCase) ||
+                string slotBaseForCompare = baseNum;
+                // If the slot base (from DisplayNumber/EffectiveNumber) has trailing non-digits but the card's underlying number does not,
+                // trim trailing non-digit characters for comparison (mirrors enrichment fallback logic).
+                if (!string.Equals(cBase, slotBaseForCompare, StringComparison.OrdinalIgnoreCase))
+                {
+                    string trimmedVariant = slotBaseForCompare;
+                    while (trimmedVariant.Length > 0 && !char.IsDigit(trimmedVariant[^1])) trimmedVariant = trimmedVariant.Substring(0, trimmedVariant.Length - 1);
+                    if (trimmedVariant.Length > 0) slotBaseForCompare = trimmedVariant;
+                }
+                bool matches =
+                    string.Equals(cBase, baseNum, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(cBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(cBaseStarless, baseNum, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(cBaseStarless.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase))
+                    string.Equals(cBaseStarless.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cBase, slotBaseForCompare, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(cBase.TrimStart('0'), slotBaseForCompare.TrimStart('0'), StringComparison.OrdinalIgnoreCase);
+                if (matches)
                 {
                     if (c.Quantity != newLogicalQty)
                         cards[i] = c with { Quantity = newLogicalQty };
@@ -345,11 +365,22 @@ public sealed class CardQuantityService : IQuantityService
             {
                 string oBase = o.Number.Split('/')[0];
                 string oBaseStarless = oBase.IndexOf('★') >= 0 ? oBase.Replace("★", string.Empty) : oBase;
-                if (string.Equals(oBase, baseNum, StringComparison.OrdinalIgnoreCase) ||
+                string slotBaseForCompare = baseNum;
+                if (!string.Equals(oBase, slotBaseForCompare, StringComparison.OrdinalIgnoreCase))
+                {
+                    string trimmedVariant = slotBaseForCompare;
+                    while (trimmedVariant.Length > 0 && !char.IsDigit(trimmedVariant[^1])) trimmedVariant = trimmedVariant.Substring(0, trimmedVariant.Length - 1);
+                    if (trimmedVariant.Length > 0) slotBaseForCompare = trimmedVariant;
+                }
+                bool matches =
+                    string.Equals(oBase, baseNum, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(oBase.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(oBaseStarless, baseNum, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(oBaseStarless.TrimStart('0'), trimmed, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(o.Number, originalNumberWithStar, StringComparison.OrdinalIgnoreCase))
+                    string.Equals(oBase, slotBaseForCompare, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(oBase.TrimStart('0'), slotBaseForCompare.TrimStart('0'), StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(o.Number, originalNumberWithStar, StringComparison.OrdinalIgnoreCase);
+                if (matches)
                 {
                     var updated = cards.FirstOrDefault(c => c.Set != null && c.Set.Equals(o.Set, StringComparison.OrdinalIgnoreCase) && c.Number == o.Number && c.IsBackFace == o.IsBackFace);
                     if (updated != null && updated.Quantity != o.Quantity) orderedFaces[i] = updated;
