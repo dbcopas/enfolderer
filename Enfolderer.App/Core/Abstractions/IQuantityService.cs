@@ -12,6 +12,7 @@ public interface IQuantityService
 {
     void EnrichQuantities(CardCollectionData collection, List<CardEntry> cards);
     void AdjustMfcQuantities(List<CardEntry> cards);
+    Enfolderer.App.Core.Abstractions.ILogSink? LogSink { get; }
     int ToggleQuantity(
         CardSlot slot,
         string currentCollectionDir,

@@ -39,6 +39,7 @@ public static class SelfTests
     failures += binderFails;
     try { File.AppendAllText(progressLog, $"After BinderParsing fails={binderFails}\n"); } catch {}
     try { File.AppendAllText(progressLog, $"DONE failures={failures}\n"); } catch {}
+        try { failures += MfcAdjustmentCharacterizationTests.Run(); } catch { failures++; }
         return failures;
     }
 }

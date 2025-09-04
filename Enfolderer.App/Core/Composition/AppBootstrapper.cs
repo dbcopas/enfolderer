@@ -17,7 +17,7 @@ public static class AppBootstrapper
         CardCollectionData Collection,
         CollectionRepository CollectionRepo,
         CardQuantityService QuantityService,
-        QuantityEnrichmentService QuantityEnrichment,
+    IQuantityOrchestrator QuantityOrchestrator,
         QuantityEnrichmentCoordinator QuantityCoordinator,
         IQuantityToggleService QuantityToggle,
         CardBackImageService BackImageService,
@@ -47,8 +47,8 @@ public static class AppBootstrapper
         var repo = existingRepository ?? new CollectionRepository(collection, log);
         Enfolderer.App.Core.Logging.LogHost.Sink = log;
         var mfcAdjust = existingMfcAdjust ?? new MfcQuantityAdjustmentService(log: log);
-        var qtySvc = new CardQuantityService(quantityRepository: repo, log: log, mfcAdjustment: mfcAdjust);
-    var qtyEnrichment = new QuantityEnrichmentService(qtySvc);
+    var flagSvc = new RuntimeFlagService(RuntimeFlags.Default);
+    var qtySvc = new CardQuantityService(quantityRepository: repo, log: log, mfcAdjustment: mfcAdjust, flagService: flagSvc);
     var qtyCoordinator = new QuantityEnrichmentCoordinator();
     var backImg = new CardBackImageService();
     var cachePaths = new CachePathService(cacheRoot);
@@ -62,6 +62,7 @@ public static class AppBootstrapper
     IQuantityToggleService qtyToggle = coreGraph.QuantityToggleService ?? new QuantityToggleService(qtySvc, repo, collection);
     var pagePresenter = new Enfolderer.App.Layout.PageViewPresenter();
     var pageBatcher = new Enfolderer.App.PageResolutionBatcher();
-    return new AppRuntimeServices(collection, repo, qtySvc, qtyEnrichment, qtyCoordinator, qtyToggle, backImg, cachePaths, statusPanel, telemetry, httpFactory, coreGraph, cachePersistence, pagePresenter, pageBatcher, coreGraph.ArrangementService, coreGraph.ImportService, coreGraph.MetadataProvider);
+    var orchestrator = new QuantityOrchestrator(qtySvc);
+    return new AppRuntimeServices(collection, repo, qtySvc, orchestrator, qtyCoordinator, qtyToggle, backImg, cachePaths, statusPanel, telemetry, httpFactory, coreGraph, cachePersistence, pagePresenter, pageBatcher, coreGraph.ArrangementService, coreGraph.ImportService, coreGraph.MetadataProvider);
     }
 }

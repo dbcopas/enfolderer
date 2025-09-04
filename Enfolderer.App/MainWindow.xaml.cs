@@ -288,20 +288,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         RebuildViews();
         Refresh();
         
-        // Fallback: if collection loaded and we have quantity keys but no card face got a positive quantity, attempt enrichment again (late specs scenario)
-        try
-        {
-            if (_collection.IsLoaded && _collection.Quantities.Count > 0 && !_cards.Any(c => c.Quantity > 0))
-            {
-                _quantityService.EnrichQuantities(_collection, _cards);
-                _quantityService.AdjustMfcQuantities(_cards);
-                BuildOrderedFaces();
-                RebuildViews();
-                Refresh();
-                Debug.WriteLine("[Collection][Fallback] Post-build enrichment executed (initial pass yielded zero positives).");
-            }
-        }
-        catch (Exception ex) { Debug.WriteLine($"[Collection][Fallback] Enrichment error: {ex.Message}"); }
+    // Delegate fallback enrichment to coordinator (extracted from VM)
+    _quantityCoordinator.LayoutChangeFallback(_collection, _quantityService, _cards, BuildOrderedFaces, RebuildViews, Refresh, debug:false);
     }
     private readonly BinderSession _session = new();
     private List<CardEntry> _cards => _session.Cards;
@@ -314,7 +302,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private IReadOnlyList<Enfolderer.App.Layout.NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly Enfolderer.App.Collection.CardCollectionData _collection = new();
     private readonly Enfolderer.App.Quantity.CardQuantityService _quantityService; // repository-backed instance created in ctor
-    private readonly Enfolderer.App.Quantity.QuantityEnrichmentService _quantityEnrichment;
+    private readonly Enfolderer.App.Quantity.IQuantityOrchestrator _quantityOrchestrator; // combined enrichment+adjust
     private readonly Enfolderer.App.Quantity.QuantityEnrichmentCoordinator _quantityCoordinator = new();
     private readonly Enfolderer.App.Collection.CollectionRepository _collectionRepo; // phase 3 collection repo
     private readonly CardBackImageService _backImageService = new();
@@ -345,8 +333,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             if (string.IsNullOrEmpty(_currentCollectionDir)) { SetStatus("No collection loaded."); return; }
             _collection.Reload(_currentCollectionDir);
             if (!_collection.IsLoaded) { SetStatus("Collection DBs not found."); return; }
-            _quantityService.EnrichQuantities(_collection, _cards);
-            _quantityService.AdjustMfcQuantities(_cards);
+            // Unified path: orchestrator handles enrichment + MFC adjustment
+            _quantityOrchestrator.ApplyAll(_collection, _cards);
             BuildOrderedFaces();
             RebuildViews();
             Refresh();
@@ -413,7 +401,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _binderLoadService = boot.CoreGraph.BinderLoad;
     _specResolutionService = boot.CoreGraph.SpecResolution;
     _metadataOrchestrator = boot.CoreGraph.Orchestrator;
-    _quantityEnrichment = boot.QuantityEnrichment;
+    _quantityOrchestrator = boot.QuantityOrchestrator;
     _quantityCoordinator = boot.QuantityCoordinator;
     _quantityToggleService = boot.QuantityToggle as Enfolderer.App.Quantity.QuantityToggleService ?? new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
         _cachePersistence = boot.CachePersistence; // ensure existing field assigned

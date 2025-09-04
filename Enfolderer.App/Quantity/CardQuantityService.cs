@@ -18,20 +18,24 @@ namespace Enfolderer.App.Quantity;
 public sealed class CardQuantityService : IQuantityService
 {
     private readonly IRuntimeFlags _flags;
+    private readonly IRuntimeFlagService? _flagService;
     private readonly IQuantityRepository? _quantityRepo;
     private readonly ILogSink? _log;
     private readonly IMfcQuantityAdjustmentService _mfcAdjust;
-    public CardQuantityService(IRuntimeFlags? flags = null, IQuantityRepository? quantityRepository = null, ILogSink? log = null, IMfcQuantityAdjustmentService? mfcAdjustment = null)
+    public CardQuantityService(IRuntimeFlags? flags = null, IQuantityRepository? quantityRepository = null, ILogSink? log = null, IMfcQuantityAdjustmentService? mfcAdjustment = null, IRuntimeFlagService? flagService = null)
     {
         _flags = flags ?? RuntimeFlags.Default;
         _quantityRepo = quantityRepository;
         _log = log;
         _mfcAdjust = mfcAdjustment ?? new MfcQuantityAdjustmentService(_flags, _log);
+        _flagService = flagService;
     }
+
+    public ILogSink? LogSink => _log;
 
     public void EnrichQuantities(CardCollectionData collection, List<CardEntry> cards)
     {
-        bool qtyDebug = _flags.QtyDebug;
+    bool qtyDebug = _flagService?.QtyDebug ?? _flags.QtyDebug;
         if (collection.Quantities.Count == 0)
         {
             if (qtyDebug)
@@ -152,9 +156,15 @@ public sealed class CardQuantityService : IQuantityService
 
     public void AdjustMfcQuantities(List<CardEntry> cards)
     {
-    // Delegated to injected specialized service (Phase 3 extraction).
-    _mfcAdjust.Adjust(cards);
+        // Delegated to injected specialized service (Phase 3 extraction).
+        _mfcAdjust.Adjust(cards);
+    }
 
+    // Convenience combined operation (Phase 3 consolidation)
+    public void ApplyAll(CardCollectionData collection, List<CardEntry> cards)
+    {
+        EnrichQuantities(collection, cards);
+        AdjustMfcQuantities(cards);
     }
 
     public int ToggleQuantity(

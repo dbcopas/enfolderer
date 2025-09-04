@@ -18,8 +18,13 @@ public class QuantityEnrichmentService
     {
         try
         {
-            _quantityService.EnrichQuantities(collection, cards);
-            _quantityService.AdjustMfcQuantities(cards);
+            if (_quantityService is CardQuantityService concrete)
+                concrete.ApplyAll(collection, cards);
+            else
+            {
+                _quantityService.EnrichQuantities(collection, cards);
+                _quantityService.AdjustMfcQuantities(cards);
+            }
         }
         catch (System.Exception ex)
         {
