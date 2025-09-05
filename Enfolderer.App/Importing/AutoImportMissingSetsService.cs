@@ -66,6 +66,8 @@ public sealed class AutoImportMissingSetsService
         {
             try
             {
+        // Throttle between set imports to avoid burst hitting Scryfall
+        await Enfolderer.App.Infrastructure.ApiRateLimiter.WaitAsync();
                 sink.SetStatus($"[{++processed}/{binderSetCodes.Count}] {setCode}: importing (supplement mode)...");
                 var result = await importer.ImportAsync(setCode, forceReimport:false, dbPath, msg => sink.SetStatus($"{setCode}: {msg}"));
                 if (result.Inserted > 0) setsWithNewInserts++;
