@@ -15,6 +15,7 @@ public static class MfcAdjustmentCharacterizationTests
         failures += MixedOrderStillAligns();
         failures += MissingBackFaceGraceful();
     failures += DisplaySplitMapping();
+    failures += BackFaceNotFlaggedStillDims();
         return failures;
     }
 
@@ -97,5 +98,21 @@ public static class MfcAdjustmentCharacterizationTests
         svc.AdjustMfcQuantities(facesToggle);
         if (facesToggle[0].Quantity !=0 || facesToggle[1].Quantity!=0) failures++;
         return failures;
+    }
+
+    // Regression: back face sometimes not marked IsModalDoubleFaced on refresh; ensure it still gets 0 when logical=1.
+    private static int BackFaceNotFlaggedStillDims()
+    {
+        var flags = RuntimeFlags.Default;
+        var svc = new CardQuantityService(flags, mfcAdjustment: new MfcQuantityAdjustmentService(flags));
+        var cards = new List<CardEntry>
+        {
+            new CardEntry("Front RF","030","SET", true, false, null, null, null, 1),
+            // Back face: IsModalDoubleFaced = false to simulate classification miss after refresh
+            new CardEntry("Back RF","030","SET", false, true, null, null, null, 0)
+        };
+        svc.AdjustMfcQuantities(cards);
+        bool ok = cards[0].Quantity==1 && cards[1].Quantity==0; // back must remain dim
+        return ok ? 0 : 1;
     }
 }
