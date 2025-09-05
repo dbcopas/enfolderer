@@ -93,10 +93,12 @@ public sealed class ScryfallSetImporter
         }
 
         using var http = BinderViewModelHttpFactory.Create();
-        statusCallback?.Invoke($"Validating set '{setCode}'...");
-        var validateUrl = $"https://api.scryfall.com/sets/{setCode}";
+    statusCallback?.Invoke($"Validating set '{setCode}' (throttled)...");
+    var validateUrl = $"https://api.scryfall.com/sets/{setCode}";
         var swValidate = Stopwatch.StartNew();
-        HttpHelper.LogHttpExternal("REQ", validateUrl);
+    // Rate limit prior to validation request
+    await Enfolderer.App.Infrastructure.ApiRateLimiter.WaitAsync();
+    HttpHelper.LogHttpExternal("REQ", validateUrl);
         JsonElement? setJson = null;
         using (var setResp = await http.GetAsync(validateUrl, ct))
         {
@@ -129,6 +131,8 @@ public sealed class ScryfallSetImporter
         {
             ct.ThrowIfCancellationRequested();
             var swPage = Stopwatch.StartNew();
+            // Rate limit each page fetch
+            await Enfolderer.App.Infrastructure.ApiRateLimiter.WaitAsync();
             HttpHelper.LogHttpExternal("REQ", page);
             var resp = await http.GetAsync(page, ct);
             swPage.Stop();
