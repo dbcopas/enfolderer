@@ -32,7 +32,8 @@ public sealed class MfcQuantityAdjustmentService : IMfcQuantityAdjustmentService
             if (i + 1 < cards.Count)
             {
                 var candidate = cards[i + 1];
-                if (candidate.IsModalDoubleFaced && candidate.IsBackFace && candidate.Set == front.Set && candidate.Number == front.Number)
+                // Relaxed predicate: some back faces aren't flagged IsModalDoubleFaced after fresh load/refresh.
+                if (candidate.IsBackFace && candidate.Set == front.Set && candidate.Number == front.Number)
                     backIndex = i + 1;
             }
             if (backIndex == -1)
@@ -40,7 +41,7 @@ public sealed class MfcQuantityAdjustmentService : IMfcQuantityAdjustmentService
                 for (int j = i + 1; j < cards.Count; j++)
                 {
                     var cand = cards[j];
-                    if (cand.IsModalDoubleFaced && cand.IsBackFace && cand.Set == front.Set && cand.Number == front.Number)
+                    if (cand.IsBackFace && cand.Set == front.Set && cand.Number == front.Number)
                     { backIndex = j; break; }
                 }
             }
