@@ -64,7 +64,11 @@ public class SpecResolutionService
             var url = ScryfallUrlHelper.BuildCardApiUrl(setCode, number);
         var client = _httpClientProvider();
         var resp = await client.GetAsync(url);
-            if (!resp.IsSuccessStatusCode) return null;
+            if (!resp.IsSuccessStatusCode)
+            {
+                try { _log?.Log($"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase} GET {url}", "SpecFetch"); } catch { }
+                return null;
+            }
             await using var stream = await resp.Content.ReadAsStreamAsync();
             using var doc = await JsonDocument.ParseAsync(stream);
             return CardJsonTranslator.Translate(doc.RootElement, setCode, number, overrideName);

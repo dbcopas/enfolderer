@@ -145,8 +145,6 @@ T 1-2
 2024-0 7-8
 =plg24
 1
-2 J-b
-5 J-b
 =pw24
 1-5
 19
@@ -155,10 +153,6 @@ T 1-2
 # Standard Showdown 24.8
 =PCBB
 1-5
-# Pro Tour Promos
-=ppro
-2025-1
-2025-3
 =pw25
 2
 4
@@ -167,7 +161,7 @@ T 1-2
 2025-3
 =pspl
 1-3
-5-6
+6
 =pjsc
 2025- 1-2
 =rfin
@@ -198,3 +192,12 @@ J1-2
 177★
 =pisd
 13
+=plg24
+2 J-b
+5 J-b
+# Pro Tour Promos
+=ppro
+2025-1
+2025-3
+=pspl
+5
