@@ -7,6 +7,7 @@ using Enfolderer.App.Core;
 using Enfolderer.App.Infrastructure;
 using Enfolderer.App.Core.Abstractions;
 using Enfolderer.App.Importing;
+using Enfolderer.App.Imaging;
 
 namespace Enfolderer.App.Metadata;
 
@@ -60,6 +61,7 @@ public class SpecResolutionService
     private async Task<CardEntry?> FetchViaHttpAsync(string setCode, string number, string? overrideName)
     {
         try {
+            if (NotFoundCardStore.IsNotFound(setCode, number)) { _log?.Log($"Skip fetch (cached 404) set={setCode} num={number}", "SpecFetch"); return null; }
             await ApiRateLimiter.WaitAsync();
             var url = ScryfallUrlHelper.BuildCardApiUrl(setCode, number);
         var client = _httpClientProvider();
@@ -67,6 +69,7 @@ public class SpecResolutionService
             if (!resp.IsSuccessStatusCode)
             {
                 try { _log?.Log($"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase} GET {url}", "SpecFetch"); } catch { }
+                if ((int)resp.StatusCode == 404) { try { NotFoundCardStore.MarkNotFound(setCode, number); } catch { } }
                 return null;
             }
             await using var stream = await resp.Content.ReadAsStreamAsync();
