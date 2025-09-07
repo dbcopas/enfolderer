@@ -48,7 +48,7 @@ public static class ScryfallImportService
             {
                 try { var bytes = await setResp.Content.ReadAsByteArrayAsync(); using var doc = JsonDocument.Parse(bytes); setJson = doc.RootElement.Clone(); } catch { }
             }
-            else { sink.SetStatus($"Set '{setCode}' not found"); return new ImportResult(setCode,0,0,0,0,null); }
+            else { sink.SetStatus($"Set '{setCode}' not found (GET {validateUrl})"); return new ImportResult(setCode,0,0,0,0,null); }
         }
         string api = $"https://api.scryfall.com/cards/search?order=set&q=e:{Uri.EscapeDataString(setCode)}&unique=prints";
         int? declaredCount = null;
@@ -63,7 +63,7 @@ public static class ScryfallImportService
         while (page != null)
         {
             var resp = await http.GetAsync(page);
-            if (!resp.IsSuccessStatusCode) { sink.SetStatus($"Error {(int)resp.StatusCode} fetching {setCode}"); return new ImportResult(setCode,0,0,0,all.Count,declaredCount); }
+            if (!resp.IsSuccessStatusCode) { sink.SetStatus($"Error {(int)resp.StatusCode} GET {page} for set {setCode}"); return new ImportResult(setCode,0,0,0,all.Count,declaredCount); }
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsByteArrayAsync());
             var root = doc.RootElement;
             if (root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)

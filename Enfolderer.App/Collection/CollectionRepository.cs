@@ -136,6 +136,60 @@ public sealed class CollectionRepository : ICollectionRepository, IQuantityRepos
                 if (qtyDebug) _log?.Log($"UPDATE rows={rows} cardId={cardId} qty={newQty}", "QuantityRepo.Std");
                 if (rows == 0)
                 {
+                    // Enforce rule: only INSERT into collection if mainDb has this cardId AND its MtgsId is present.
+                    bool allowInsertToCollection = false;
+                    try
+                    {
+                        string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                        string mainDbPath = Path.Combine(exeDir, "mainDb.db");
+                        if (File.Exists(mainDbPath))
+                        {
+                            using var conMain = new SqliteConnection($"Data Source={mainDbPath};Mode=ReadOnly");
+                            conMain.Open();
+                            // Detect column name for MtgsId (case-insensitive)
+                            string mtgsCol = "MtgsId";
+                            var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            using (var pragma = conMain.CreateCommand())
+                            {
+                                pragma.CommandText = "PRAGMA table_info(Cards)";
+                                using var pr = pragma.ExecuteReader();
+                                while (pr.Read()) { try { cols.Add(pr.GetString(1)); } catch { } }
+                            }
+                            if (!cols.Contains(mtgsCol))
+                            {
+                                // Try common variants
+                                if (cols.Contains("mtgsid")) mtgsCol = "mtgsid"; else if (cols.Contains("MTGSID")) mtgsCol = "MTGSID"; else mtgsCol = "MtgsId"; // fallback
+                            }
+                            using var check = conMain.CreateCommand();
+                            check.CommandText = $"SELECT {mtgsCol} FROM Cards WHERE id=@id LIMIT 1";
+                            check.Parameters.AddWithValue("@id", cardId);
+                            var val = check.ExecuteScalar();
+                            if (val != null && val != DBNull.Value)
+                            {
+                                // Accept any non-null/non-empty value
+                                string s = val.ToString() ?? string.Empty;
+                                if (!string.IsNullOrWhiteSpace(s) && !string.Equals(s, "0", StringComparison.Ordinal))
+                                    allowInsertToCollection = true;
+                            }
+                        }
+                    }
+                    catch (Exception exCheck)
+                    { _log?.Log($"MtgsId check failed for cardId={cardId}: {exCheck.Message}", "QuantityRepo.Std"); }
+
+                    if (!allowInsertToCollection)
+                    {
+                        // Route to mainDb custom update instead of inserting into collection.
+                        try
+                        {
+                            string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                            string mainDbPath = Path.Combine(exeDir, "mainDb.db");
+                            _log?.Log($"Redirecting write to mainDb for cardId={cardId} qty={newQty} (MtgsId missing)", "QuantityRepo.Std");
+                            return UpdateCustomCardQuantity(mainDbPath, cardId, newQty, qtyDebug);
+                        }
+                        catch (Exception exRedirect)
+                        { _log?.Log($"Redirect to mainDb failed cardId={cardId}: {exRedirect.Message}", "QuantityRepo.Std"); }
+                    }
+
                     using var ins = con.CreateCommand();
                     ins.CommandText = @"INSERT INTO CollectionCards 
                             (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)

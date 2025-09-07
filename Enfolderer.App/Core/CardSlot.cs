@@ -184,7 +184,7 @@ public class CardSlot : INotifyPropertyChanged
                     if (!resp.IsSuccessStatusCode)
                     {
                         string body = string.Empty; try { body = await resp.Content.ReadAsStringAsync(); } catch { }
-                        LogHost.Sink?.Log($"API status {(int)resp.StatusCode} {resp.ReasonPhrase} Body: {body}", LogCategories.CardSlot);
+                        LogHost.Sink?.Log($"API status {(int)resp.StatusCode} {resp.ReasonPhrase} GET {apiUrl} Body: {body}", LogCategories.CardSlot);
                         return;
                     }
                     await using var stream = await resp.Content.ReadAsStreamAsync();
