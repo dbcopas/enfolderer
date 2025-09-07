@@ -90,6 +90,27 @@ public static class CardImageUrlStore
 }
 
 /// <summary>
+/// In-memory negative cache: tracks (set, number) pairs that returned 404 from Scryfall.
+/// Used to avoid hammering the API when a binder entry is invalid. Not persisted across runs.
+/// </summary>
+public static class NotFoundCardStore
+{
+    private static readonly ConcurrentDictionary<string, byte> _notFound = new(StringComparer.OrdinalIgnoreCase);
+    private static string Key(string setCode, string number) => $"{setCode.ToLowerInvariant()}/{number}";
+
+    public static void MarkNotFound(string setCode, string number)
+    {
+        if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
+        _notFound[Key(setCode, number)] = 1;
+    }
+
+    public static bool IsNotFound(string setCode, string number)
+    {
+        return _notFound.ContainsKey(Key(setCode, number));
+    }
+}
+
+/// <summary>
 /// Persists per-card layout type (e.g., transform, split) so UI logic can distinguish
 /// true two-sided cards from other multi-face styles.
 /// </summary>

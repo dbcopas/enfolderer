@@ -8,6 +8,7 @@ using System.Windows;
 using System.Net.Http;
 using System.Collections.ObjectModel;
 using Enfolderer.App.Layout;
+using Enfolderer.App.Imaging;
 
 namespace Enfolderer.App;
 
@@ -43,8 +44,13 @@ public class PageResolutionBatcher
             int faceCounter = 0;
             for (int si = 0; si < specs.Count && faceCounter < endFace; si++)
             {
-                if (faceCounter >= startFace && faceCounter < endFace && specs[si].Resolved == null && !specs[si].explicitEntry)
-                    neededSpecs.Add(si);
+                if (faceCounter >= startFace && faceCounter < endFace)
+                {
+                    var s = specs[si];
+                    // If this spec is already known to be 404/not found, skip requesting it again
+                    if (s.Resolved == null && !s.explicitEntry && !NotFoundCardStore.IsNotFound(s.setCode, s.number))
+                        neededSpecs.Add(si);
+                }
                 faceCounter++;
                 if (mfcBacks.ContainsKey(si)) faceCounter++;
             }
@@ -54,7 +60,8 @@ public class PageResolutionBatcher
         foreach (var si in neededSpecs)
         {
             var s = specs[si];
-            quickList.Add(new FetchSpec(s.setCode, s.number, s.overrideName, si));
+            if (!NotFoundCardStore.IsNotFound(s.setCode, s.number))
+                quickList.Add(new FetchSpec(s.setCode, s.number, s.overrideName, si));
         }
         _ = Task.Run(async () =>
         {

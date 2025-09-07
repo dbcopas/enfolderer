@@ -159,6 +159,11 @@ public class CardSlot : INotifyPropertyChanged
             return;
         }
         if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
+        if (Enfolderer.App.Imaging.NotFoundCardStore.IsNotFound(setCode, number))
+        {
+            LogHost.Sink?.Log($"Skip image fetch (cached 404) set={setCode} number={number}", LogCategories.CardSlot);
+            return;
+        }
         if (string.Equals(setCode, "TOKEN", StringComparison.OrdinalIgnoreCase) || string.Equals(number, "TOKEN", StringComparison.OrdinalIgnoreCase))
         {
             LogHost.Sink?.Log($"Skip image fetch for token: set={setCode} number={number}", LogCategories.CardSlot);
@@ -179,12 +184,13 @@ public class CardSlot : INotifyPropertyChanged
                 HttpResponseMessage resp = null!;
                 try { resp = await client.GetAsync(apiUrl, HttpCompletionOption.ResponseHeadersRead); }
                 finally { FetchGate.Release(); }
-                using (resp)
+        using (resp)
                 {
                     if (!resp.IsSuccessStatusCode)
                     {
                         string body = string.Empty; try { body = await resp.Content.ReadAsStringAsync(); } catch { }
                         LogHost.Sink?.Log($"API status {(int)resp.StatusCode} {resp.ReasonPhrase} GET {apiUrl} Body: {body}", LogCategories.CardSlot);
+            if ((int)resp.StatusCode == 404) { try { Enfolderer.App.Imaging.NotFoundCardStore.MarkNotFound(setCode, number); } catch { } }
                         return;
                     }
                     await using var stream = await resp.Content.ReadAsStreamAsync();
