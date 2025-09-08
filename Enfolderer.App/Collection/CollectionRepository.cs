@@ -217,4 +217,82 @@ public sealed class CollectionRepository : ICollectionRepository, IQuantityRepos
     { _log?.Log($"Std write failed: {ex.Message}", "QuantityRepo.Std"); }
         return null;
     }
+
+    /// <summary>
+    /// Inserts 0-quantity rows into mtgstudio.collection for any Cards.id in mainDb.db under the specified threshold
+    /// that do not already have a CollectionCards row. Returns the number of rows inserted.
+    /// Always uses the executable directory to locate both databases.
+    /// </summary>
+    public int BackfillZeroQuantityRowsUnderThreshold(int threshold = 150000, bool qtyDebug = false)
+    {
+        int inserted = 0;
+        try
+        {
+            string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string mainDbPath = Path.Combine(exeDir, "mainDb.db");
+            string collectionPath = Path.Combine(exeDir, "mtgstudio.collection");
+            if (!File.Exists(mainDbPath) || !File.Exists(collectionPath))
+            {
+                _log?.Log($"Backfill aborted: DBs missing mainDb={File.Exists(mainDbPath)} collection={File.Exists(collectionPath)}", "QuantityRepo.Backfill");
+                return 0;
+            }
+
+            // Load existing CardIds in collection under threshold into a set for fast lookup
+            var existing = new HashSet<int>();
+            using var conCol = new SqliteConnection($"Data Source={collectionPath}");
+            conCol.Open();
+            using (var cmdExist = conCol.CreateCommand())
+            {
+                cmdExist.CommandText = "SELECT CardId FROM CollectionCards WHERE CardId < @t";
+                cmdExist.Parameters.AddWithValue("@t", threshold);
+                using var r = cmdExist.ExecuteReader();
+                while (r.Read()) { try { existing.Add(r.GetInt32(0)); } catch { } }
+            }
+
+            // Enumerate candidate ids from mainDb
+            var candidates = new List<int>(1024);
+            using (var conMain = new SqliteConnection($"Data Source={mainDbPath};Mode=ReadOnly"))
+            {
+                conMain.Open();
+                using var cmdIds = conMain.CreateCommand();
+                cmdIds.CommandText = "SELECT id FROM Cards WHERE id < @t ORDER BY id";
+                cmdIds.Parameters.AddWithValue("@t", threshold);
+                using var rr = cmdIds.ExecuteReader();
+                while (rr.Read())
+                {
+                    try { var id = rr.GetInt32(0); if (!existing.Contains(id)) candidates.Add(id); } catch { }
+                }
+            }
+
+            if (candidates.Count == 0) { if (qtyDebug) _log?.Log("Backfill: no missing rows to insert.", "QuantityRepo.Backfill"); return 0; }
+
+            // Prepare insert command (reuse same Added field formatting as elsewhere)
+            using var tx = conCol.BeginTransaction();
+            using (var ins = conCol.CreateCommand())
+            {
+                ins.Transaction = tx;
+                ins.CommandText = @"INSERT INTO CollectionCards 
+                            (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)
+                            VALUES (@id,0,0,0.0,0.0,0.0,0,0,0,0,0,'','',0,'',1,0,0,@added)";
+                var pId = ins.CreateParameter(); pId.ParameterName = "@id"; ins.Parameters.Add(pId);
+                var pAdded = ins.CreateParameter(); pAdded.ParameterName = "@added"; ins.Parameters.Add(pAdded);
+                foreach (var id in candidates)
+                {
+                    pId.Value = id;
+                    var added = DateTime.Now.ToString("s").Replace('T',' ');
+                    pAdded.Value = added;
+                    try { inserted += ins.ExecuteNonQuery(); }
+                    catch (Exception exIns) { _log?.Log($"Backfill insert failed id={id}: {exIns.Message}", "QuantityRepo.Backfill"); }
+                }
+                tx.Commit();
+            }
+
+            _log?.Log($"Backfill complete: inserted={inserted} threshold={threshold}", "QuantityRepo.Backfill");
+        }
+        catch (Exception ex)
+        {
+            _log?.Log($"Backfill error: {ex.Message}", "QuantityRepo.Backfill");
+        }
+        return inserted;
+    }
 }

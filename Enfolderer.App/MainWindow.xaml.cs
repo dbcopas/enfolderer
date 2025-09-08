@@ -156,6 +156,20 @@ public partial class MainWindow : Window
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
 
+    private void BackfillZeroQty_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_vm == null) return;
+            int inserted = _vm.RunBackfillZeroQty(threshold: 150000);
+            _vm.SetStatus($"Backfill inserted {inserted} rows (id < 150000).");
+        }
+        catch (Exception ex)
+        {
+            _vm?.SetStatus("Backfill failed: " + ex.Message);
+        }
+    }
+
     protected override void OnPreviewMouseWheel(MouseWheelEventArgs e)
     {
         if (_vm == null) { base.OnPreviewMouseWheel(e); return; }
@@ -190,6 +204,8 @@ public partial class MainWindow : Window
             }
             else
             {
+    
+    
                 // No modifier = normal page navigation
                 if (delta > 0)
                 {
@@ -395,6 +411,17 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     {
         // Keep last 1 line for now; could extend to rolling log.
         HttpPanel = line;
+    }
+
+    public int RunBackfillZeroQty(int threshold = 150000)
+    {
+        try
+        {
+            var log = Enfolderer.App.Core.Logging.LogHost.Sink;
+            var repo = new Enfolderer.App.Collection.CollectionRepository(_collection, log);
+            return repo.BackfillZeroQuantityRowsUnderThreshold(threshold, qtyDebug: true);
+        }
+        catch { return 0; }
     }
     private void RefreshSummaryIfIdle() { }
 

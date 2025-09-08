@@ -100,6 +100,8 @@
                 <MenuItem Header="Update mainDb from CSV..." Click="UpdateMainDbFromCsv_Click" Visibility="Collapsed" />
                 <MenuItem Header="Import Scryfall Set Into mainDb" Click="ImportScryfallSet_Click" />
                 <Separator />
+                <MenuItem Header="Backfill missing 0-qty rows (id &lt; 150000)" Click="BackfillZeroQty_Click" />
+                <Separator />
                 <MenuItem Header="E_xit" Click="Exit_Click" />
             </MenuItem>
         </Menu>
