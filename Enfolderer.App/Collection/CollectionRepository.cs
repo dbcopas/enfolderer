@@ -295,4 +295,112 @@ public sealed class CollectionRepository : ICollectionRepository, IQuantityRepos
         }
         return inserted;
     }
+
+    /// <summary>
+    /// Sets Qty = CardId for all rows in mtgstudio.collection. Returns the number of rows updated.
+    /// This is used to generate an external mapping between CardId and (name/edition/number) via MTGS export.
+    /// </summary>
+    public int SetQuantityEqualsCardIdAll(bool qtyDebug = false)
+    {
+        try
+        {
+            string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string collectionPath = Path.Combine(exeDir, "mtgstudio.collection");
+            if (!File.Exists(collectionPath)) { _log?.Log("SetQty=CardId aborted: collection DB missing.", "QuantityRepo.Mapping"); return 0; }
+            // Backup before modifying
+            try
+            {
+                string backupPath = collectionPath + ".bak";
+                File.Copy(collectionPath, backupPath, overwrite: true);
+                if (qtyDebug) _log?.Log($"Backup created: {backupPath}", "QuantityRepo.Mapping");
+            }
+            catch (Exception bEx)
+            {
+                _log?.Log($"Backup failed; aborting update: {bEx.Message}", "QuantityRepo.Mapping");
+                return 0;
+            }
+            using var con = new SqliteConnection($"Data Source={collectionPath}");
+            con.Open();
+            using var tx = con.BeginTransaction();
+
+            const int maxId = 200000;
+            int totalAffected = 0;
+
+            // 1) Update existing rows in range: Qty = CardId
+            using (var cmdUpdate = con.CreateCommand())
+            {
+                cmdUpdate.Transaction = tx;
+                cmdUpdate.CommandText = "UPDATE CollectionCards SET Qty = CardId WHERE CardId BETWEEN 1 AND @max";
+                cmdUpdate.Parameters.AddWithValue("@max", maxId);
+                try { totalAffected += cmdUpdate.ExecuteNonQuery(); }
+                catch (Exception ex) { _log?.Log($"SetQty=CardId update failed: {ex.Message}", "QuantityRepo.Mapping"); throw; }
+            }
+
+            // 2) Gather existing ids in range and insert any missing rows with defaults and Qty = CardId
+            var existing = new HashSet<int>();
+            using (var cmdScan = con.CreateCommand())
+            {
+                cmdScan.Transaction = tx;
+                cmdScan.CommandText = "SELECT CardId FROM CollectionCards WHERE CardId BETWEEN 1 AND @max";
+                cmdScan.Parameters.AddWithValue("@max", maxId);
+                using var r = cmdScan.ExecuteReader();
+                while (r.Read()) { try { existing.Add(r.GetInt32(0)); } catch { } }
+            }
+
+            using (var cmdIns = con.CreateCommand())
+            {
+                cmdIns.Transaction = tx;
+                cmdIns.CommandText = @"INSERT INTO CollectionCards 
+                            (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)
+                            VALUES (@id,@qty,0,0.0,0.0,0.0,0,0,0,0,0,'','',0,'',1,0,0,@added)";
+                var pId = cmdIns.CreateParameter(); pId.ParameterName = "@id"; cmdIns.Parameters.Add(pId);
+                var pQty = cmdIns.CreateParameter(); pQty.ParameterName = "@qty"; cmdIns.Parameters.Add(pQty);
+                var pAdded = cmdIns.CreateParameter(); pAdded.ParameterName = "@added"; cmdIns.Parameters.Add(pAdded);
+
+                // Iterate through the range and insert missing
+                for (int id = 1; id <= maxId; id++)
+                {
+                    if (existing.Contains(id)) continue;
+                    pId.Value = id;
+                    pQty.Value = id;
+                    pAdded.Value = DateTime.Now.ToString("s").Replace('T',' ');
+                    try { totalAffected += cmdIns.ExecuteNonQuery(); }
+                    catch (Exception exIns) { _log?.Log($"Insert failed for CardId={id}: {exIns.Message}", "QuantityRepo.Mapping"); }
+                }
+            }
+
+            tx.Commit();
+            if (qtyDebug) _log?.Log($"SetQty=CardId completed. Affected rows={totalAffected}; ensured 1..{maxId}", "QuantityRepo.Mapping");
+            return totalAffected;
+        }
+        catch (Exception ex)
+        {
+            _log?.Log($"SetQty=CardId error: {ex.Message}", "QuantityRepo.Mapping");
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Restores mtgstudio.collection from the .bak file beside it. Returns true on success.
+    /// </summary>
+    public bool RestoreCollectionBackup(bool qtyDebug = false)
+    {
+        try
+        {
+            string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string collectionPath = Path.Combine(exeDir, "mtgstudio.collection");
+            string backupPath = collectionPath + ".bak";
+            if (!File.Exists(backupPath)) { _log?.Log("Restore aborted: backup not found.", "QuantityRepo.Mapping"); return false; }
+            // Ensure target is not locked by our process
+            // Just overwrite the file with backup
+            File.Copy(backupPath, collectionPath, overwrite: true);
+            if (qtyDebug) _log?.Log("Restore complete.", "QuantityRepo.Mapping");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log?.Log($"Restore failed: {ex.Message}", "QuantityRepo.Mapping");
+            return false;
+        }
+    }
 }

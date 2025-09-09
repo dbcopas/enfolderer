@@ -32,24 +32,55 @@ public partial class MainWindow : Window
 {
     private readonly BinderViewModel _vm;
 
-    private void UpdateMainDbFromCsv_Click(object sender, RoutedEventArgs e)
+    private async void UpdateMainDbFromCsv_Click(object sender, RoutedEventArgs e)
+    {
+        try
         {
-            try
+            var dlg = new Microsoft.Win32.OpenFileDialog
             {
-                var dlg = new Microsoft.Win32.OpenFileDialog
-                {
-                    Title = "Select CSV File to Update mainDb.db",
-                    Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*"
-                };
-                if (dlg.ShowDialog(this) != true) return;
-                var result = CsvMainDbUpdater.Process(dlg.FileName);
-                MessageBox.Show(this, $"mainDb.db update complete:\nUpdated: {result.Updated}\nInserted: {result.Inserted}\nErrors: {result.Errors}", "CSV Utility", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception ex)
+                Title = "Select CSV File to Update mainDb.db",
+                Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*"
+            };
+            if (dlg.ShowDialog(this) != true) return;
+
+            // If Ctrl is held, run legacy updater; otherwise, run MTGS mapping flow (dry-run first)
+            bool useLegacy = (Keyboard.IsKeyDown(Key.LeftCtrl) || Keyboard.IsKeyDown(Key.RightCtrl));
+            if (useLegacy)
             {
-                MessageBox.Show(this, ex.Message, "CSV Utility Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                _vm.StartImportProgress("Legacy CSV update");
+                var result = await Task.Run(() => CsvMainDbUpdater.Process(dlg.FileName, progress: (done, total) => _vm.ReportImportProgress(done, total)));
+                _vm.FinishImportProgress();
+                MessageBox.Show(this, $"Legacy update complete:\nUpdated: {result.Updated}\nInserted: {result.Inserted}\nErrors: {result.Errors}", "CSV Utility", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
             }
+
+            // MTGS mapping dry-run: set MtgsId for matching rows; collect unmatched/conflicts
+            _vm.StartImportProgress("MTGS dry-run");
+            var dry = await Task.Run(() => CsvMainDbUpdater.ProcessMtgsMapping(dlg.FileName, dryRun: true, insertMissing: false, progress: (done, total) => _vm.ReportImportProgress(done, total)));
+            _vm.FinishImportProgress();
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("MTGS mapping dry-run:");
+            sb.AppendLine($"Will update MtgsId on: {dry.UpdatedMtgsIds}");
+            sb.AppendLine($"Already mapped (skipped): {dry.SkippedExisting}");
+            sb.AppendLine($"Conflicts: {dry.Conflicts}");
+            sb.AppendLine($"Unmatched: {(dry.UnmatchedLogPath != null ? "see log " + dry.UnmatchedLogPath : "0")} ");
+            sb.AppendLine($"Errors: {dry.Errors}");
+            sb.AppendLine();
+            sb.AppendLine("Proceed to apply updates?\nClick Yes to apply only updates; No to also insert unmatched; Cancel to abort.");
+            var choice = MessageBox.Show(this, sb.ToString(), "MTGS Mapping", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+            if (choice == MessageBoxResult.Cancel) return;
+
+            bool insertMissing = (choice == MessageBoxResult.No);
+            _vm.StartImportProgress(insertMissing ? "MTGS apply + insert" : "MTGS apply");
+            var apply = await Task.Run(() => CsvMainDbUpdater.ProcessMtgsMapping(dlg.FileName, dryRun: false, insertMissing: insertMissing, progress: (done, total) => _vm.ReportImportProgress(done, total)));
+            _vm.FinishImportProgress();
+            MessageBox.Show(this, $"MTGS mapping applied:\nUpdated MtgsId: {apply.UpdatedMtgsIds}\nInserted new: {apply.InsertedNew}\nSkipped existing: {apply.SkippedExisting}\nConflicts: {apply.Conflicts}\nErrors: {apply.Errors}\nUnmatched log: {(apply.UnmatchedLogPath ?? "(none)")}", "CSV Utility", MessageBoxButton.OK, MessageBoxImage.Information);
         }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "CSV Utility Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
 
     private async void ImportScryfallSet_Click(object sender, RoutedEventArgs e)
     {
@@ -167,6 +198,38 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _vm?.SetStatus("Backfill failed: " + ex.Message);
+        }
+    }
+
+    private void SetQtyEqualsCardId_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_vm == null) return;
+            var confirm = MessageBox.Show(this, "This will set Qty = CardId for ALL rows in mtgstudio.collection beside the EXE. Continue?", "Confirm Update", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.OK) return;
+            int updated = _vm.RunSetQtyEqualsCardId();
+            _vm.SetStatus($"Set Qty=CardId updated {updated} rows.");
+        }
+        catch (Exception ex)
+        {
+            _vm?.SetStatus("Set Qty=CardId failed: " + ex.Message);
+        }
+    }
+
+    private void RestoreCollectionBackup_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_vm == null) return;
+            var confirm = MessageBox.Show(this, "Restore mtgstudio.collection from .bak beside the EXE?", "Confirm Restore", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+            if (confirm != MessageBoxResult.OK) return;
+            bool ok = _vm.RunRestoreCollectionBackup();
+            _vm.SetStatus(ok ? "Restore completed from .bak." : "Restore failed or backup not found.");
+        }
+        catch (Exception ex)
+        {
+            _vm?.SetStatus("Restore failed: " + ex.Message);
         }
     }
 
@@ -423,6 +486,28 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         }
         catch { return 0; }
     }
+
+    public int RunSetQtyEqualsCardId()
+    {
+        try
+        {
+            var log = Enfolderer.App.Core.Logging.LogHost.Sink;
+            var repo = new Enfolderer.App.Collection.CollectionRepository(_collection, log);
+            return repo.SetQuantityEqualsCardIdAll(qtyDebug: true);
+        }
+        catch { return 0; }
+    }
+
+    public bool RunRestoreCollectionBackup()
+    {
+        try
+        {
+            var log = Enfolderer.App.Core.Logging.LogHost.Sink;
+            var repo = new Enfolderer.App.Collection.CollectionRepository(_collection, log);
+            return repo.RestoreCollectionBackup(qtyDebug: true);
+        }
+        catch { return false; }
+    }
     private void RefreshSummaryIfIdle() { }
 
     public ICommand NextCommand { get; }
@@ -483,6 +568,28 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         RebuildViews();
         Refresh();
     _statusPanel.Update(null, s => ApiStatus = s);
+    }
+
+    // CSV import progress UI
+    private bool _importInProgress;
+    public bool ImportInProgress { get => _importInProgress; private set { if (_importInProgress != value) { _importInProgress = value; OnPropertyChanged(); } } }
+    private int _importProgress;
+    public int ImportProgress { get => _importProgress; private set { if (_importProgress != value) { _importProgress = value; OnPropertyChanged(); } } }
+    private string _importProgressText = string.Empty;
+    public string ImportProgressText { get => _importProgressText; private set { if (_importProgressText != value) { _importProgressText = value; OnPropertyChanged(); } } }
+    public void StartImportProgress(string stage)
+    {
+        Application.Current?.Dispatcher?.Invoke(() => { ImportInProgress = true; ImportProgress = 0; ImportProgressText = stage + ": 0%"; });
+    }
+    public void ReportImportProgress(int processed, int total)
+    {
+        if (total <= 0) return;
+        int pct = (int)Math.Round(100.0 * processed / total);
+        Application.Current?.Dispatcher?.Invoke(() => { ImportProgress = Math.Clamp(pct, 0, 100); ImportProgressText = $"Import: {processed}/{total} ({ImportProgress}%)"; });
+    }
+    public void FinishImportProgress()
+    {
+        Application.Current?.Dispatcher?.Invoke(() => { ImportProgress = 100; ImportProgressText = "Done"; ImportInProgress = false; });
     }
 
         public static void SetImageUrlName(string url, string name)

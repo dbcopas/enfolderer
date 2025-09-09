@@ -9,6 +9,7 @@
     Title="MTG Binder" Height="900" Width="1400" MinWidth="1100" MinHeight="700"
     Background="{Binding BinderBackground}">
     <Window.Resources>
+    <BooleanToVisibilityConverter x:Key="BoolToVis" />
     <qty:QuantityImageConverter x:Key="QuantityImageConverter" />
         <Style x:Key="CardSlotStyle" TargetType="Border">
             <Setter Property="Margin" Value="4" />
@@ -97,10 +98,12 @@
     <DockPanel>
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
-                <MenuItem Header="Update mainDb from CSV..." Click="UpdateMainDbFromCsv_Click" Visibility="Collapsed" />
+                <MenuItem Header="Update mainDb from CSV..." Click="UpdateMainDbFromCsv_Click" />
                 <MenuItem Header="Import Scryfall Set Into mainDb" Click="ImportScryfallSet_Click" />
                 <Separator />
                 <MenuItem Header="Backfill missing 0-qty rows (id &lt; 150000)" Click="BackfillZeroQty_Click" />
+                <MenuItem Header="Set Qty = CardId (all rows)" Click="SetQtyEqualsCardId_Click" />
+                <MenuItem Header="Restore collection backup (.bak)" Click="RestoreCollectionBackup_Click" />
                 <Separator />
                 <MenuItem Header="E_xit" Click="Exit_Click" />
             </MenuItem>
@@ -109,6 +112,13 @@
             <!-- Primary status (metadata resolving / all metadata loaded) -->
             <StatusBarItem>
                 <TextBlock Text="{Binding Status}" />
+            </StatusBarItem>
+            <!-- CSV import progress -->
+        <StatusBarItem Visibility="{Binding ImportInProgress, Converter={StaticResource BoolToVis}}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding ImportProgressText}" Margin="0,0,6,0" />
+            <ProgressBar Width="200" Height="14" Minimum="0" Maximum="100" Value="{Binding ImportProgress, Mode=OneWay}" />
+                </StackPanel>
             </StatusBarItem>
             <!-- Current page indicator -->
             <StatusBarItem>
