@@ -41,7 +41,7 @@ public class TelemetryService
     { if (!string.IsNullOrWhiteSpace(url) && !string.IsNullOrWhiteSpace(name)) _imageUrlNameMap[url] = name; }
 
     private void Log(string line)
-    { if (!_debugEnabled) return; try { lock(_httpLogLock) { Directory.CreateDirectory(ImageCacheStore.CacheRoot); File.AppendAllText(HttpLogPath, line+Environment.NewLine); } } catch { } }
+    { if (!_debugEnabled) return; try { lock(_httpLogLock) { Directory.CreateDirectory(ImageCacheStore.CacheRoot); File.AppendAllText(HttpLogPath, line+Environment.NewLine); } } catch (System.Exception) { throw; } }
 
     private string ShortLabel(string url)
     {

@@ -36,10 +36,10 @@ public static class ParserProfiler
         string logPath = Path.Combine(root, "parser_profile.log");
         void Log(string msg)
         {
-            try { File.AppendAllText(logPath, msg + Environment.NewLine); } catch { }
+            try { File.AppendAllText(logPath, msg + Environment.NewLine); } catch (System.Exception) { throw; }
             Console.WriteLine(msg); // will be invisible in WinExe but kept for completeness
             System.Diagnostics.Debug.WriteLine(msg);
-            try { File.AppendAllText(Path.Combine(baseDir, "parser_profile_local.log"), msg + Environment.NewLine); } catch { }
+            try { File.AppendAllText(Path.Combine(baseDir, "parser_profile_local.log"), msg + Environment.NewLine); } catch (System.Exception) { throw; }
         }
         Log($"[Profiler] baseDir={baseDir}");
     Log($"[Profiler] chosenRoot={root}");

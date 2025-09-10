@@ -321,7 +321,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private static BinderViewModel? _singleton;
     private static readonly object _singletonLock = new();
     public static void RegisterInstance(BinderViewModel vm) { lock(_singletonLock) _singleton = vm; }
-    public static void WithVm(Action<BinderViewModel> action) { BinderViewModel? vm; lock(_singletonLock) vm = _singleton; if (vm!=null) { try { action(vm); } catch { } } }
+    public static void WithVm(Action<BinderViewModel> action) { BinderViewModel? vm; lock(_singletonLock) vm = _singleton; if (vm!=null) { try { action(vm); } catch (System.Exception) { throw; } } }
 
     private readonly StatusFlashService _statusFlash = new();
     private string _apiStatus = string.Empty;
@@ -401,7 +401,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             foreach (var c in _cards)
                 if (!string.IsNullOrWhiteSpace(c.Set)) hs.Add(c.Set.Trim());
         }
-        catch { }
+    catch (System.Exception) { throw; }
         return hs;
     }
     public void RefreshQuantities()

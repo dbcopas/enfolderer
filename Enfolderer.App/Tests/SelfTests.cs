@@ -26,13 +26,13 @@ public static class SelfTests
     suiteFails = CommandFactoryTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After CommandFactory fails={suiteFails}\n"); } catch {}
     suiteFails = QuantityServicesTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After QuantityServices fails={suiteFails}\n"); } catch {}
     // Quantity repository characterization
-    try { suiteFails = QuantityRepositoryTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After QuantityRepositoryTests fails={suiteFails}\n"); } catch { }
+    try { suiteFails = QuantityRepositoryTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After QuantityRepositoryTests fails={suiteFails}\n"); } catch (System.Exception) { throw; }
     // Quantity toggle characterization
-    try { suiteFails = QuantityToggleCharTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After QuantityToggleChar fails={suiteFails}\n"); } catch { }
+    try { suiteFails = QuantityToggleCharTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After QuantityToggleChar fails={suiteFails}\n"); } catch (System.Exception) { throw; }
     // Composition root wiring smoke
-    try { suiteFails = CompositionRootTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After CompositionRootTests fails={suiteFails}\n"); } catch { }
+    try { suiteFails = CompositionRootTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After CompositionRootTests fails={suiteFails}\n"); } catch (System.Exception) { throw; }
     // Metadata provider cache load characterization
-    try { suiteFails = MetadataProviderCacheTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After MetadataProviderCacheTests fails={suiteFails}\n"); } catch { }
+    try { suiteFails = MetadataProviderCacheTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After MetadataProviderCacheTests fails={suiteFails}\n"); } catch (System.Exception) { throw; }
     // Binder parsing characterization (now using Task.Run inside test to avoid dispatcher deadlock).
     int binderFails = 0;
     try { binderFails = BinderParsingCharTests.RunAll(); } catch(Exception ex) { binderFails = 1; try { File.AppendAllText(progressLog, "BinderParsing EX: "+ex.GetType().Name+" "+ex.Message+"\n"); } catch {} }

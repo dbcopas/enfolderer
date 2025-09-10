@@ -406,7 +406,7 @@ public sealed class BinderFileParser
                         var variantDisplay = baseNum + " (" + lang + ")";
                         parsedSpecs.Add(new BinderParsedSpec(currentSet, variantNumber, nameOverride, false, variantDisplay, null));
                         fetchList.Add(new FetchSpec(currentSet, variantNumber, nameOverride, parsedSpecs.Count-1));
-                        try { pendingVariantPairs.Add((currentSet, baseNum, variantNumber)); } catch { }
+                        try { pendingVariantPairs.Add((currentSet, baseNum, variantNumber)); } catch (System.Exception) { throw; }
                     }
                     continue;
                 }
@@ -432,7 +432,7 @@ public sealed class BinderFileParser
                 var variantDisplay = baseNum + " (" + seg + ")";
                 parsedSpecs.Add(new BinderParsedSpec(currentSet, variantNumber, nameOverride, false, variantDisplay, null));
                 fetchList.Add(new FetchSpec(currentSet, variantNumber, nameOverride, parsedSpecs.Count-1));
-                try { pendingVariantPairs.Add((currentSet, baseNum, variantNumber)); } catch { }
+                try { pendingVariantPairs.Add((currentSet, baseNum, variantNumber)); } catch (System.Exception) { throw; }
                 continue;
             }
             var numFinal = numberPart.Trim();

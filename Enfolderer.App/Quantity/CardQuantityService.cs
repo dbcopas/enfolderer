@@ -62,7 +62,7 @@ public sealed class CardQuantityService : IQuantityService
                     .Select(g => g.Key + ":" + string.Join("|", g.Take(8).Select(t => t.Item2)));
                 _log?.Log("KeysSample " + string.Join(" || ", firstSets), LogCategories.QtyEnrich);
             }
-            catch { }
+            catch (System.Exception) { throw; }
         }
         for (int i = 0; i < cards.Count; i++)
         {
@@ -131,7 +131,7 @@ public sealed class CardQuantityService : IQuantityService
                         }
                         unmatchedCount++;
                     }
-                    catch { }
+                    catch (System.Exception) { throw; }
                 }
                 if (c.Quantity != 0) { cards[i] = c with { Quantity = 0 }; updated++; }
                 continue;
