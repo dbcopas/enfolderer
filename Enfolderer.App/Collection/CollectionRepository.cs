@@ -178,7 +178,7 @@ public sealed class CollectionRepository : ICollectionRepository, IQuantityRepos
 
                     if (!allowInsertToCollection)
                     {
-                        // Route to mainDb custom update instead of inserting into collection.
+                                            // cardId parameter here represents MtgsId (external id) per corrected rule: CollectionCards.CardId == Cards.MtgsId
                         try
                         {
                             string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);

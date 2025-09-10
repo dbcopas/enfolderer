@@ -68,8 +68,8 @@ public class SpecResolutionService
         var resp = await client.GetAsync(url);
             if (!resp.IsSuccessStatusCode)
             {
-                try { _log?.Log($"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase} GET {url}", "SpecFetch"); } catch { }
-                if ((int)resp.StatusCode == 404) { try { NotFoundCardStore.MarkNotFound(setCode, number); } catch { } }
+                try { _log?.Log($"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase} GET {url}", "SpecFetch"); } catch (System.Exception) { throw; }
+                if ((int)resp.StatusCode == 404) { try { NotFoundCardStore.MarkNotFound(setCode, number); } catch (System.Exception) { throw; } }
                 return null;
             }
             await using var stream = await resp.Content.ReadAsStreamAsync();

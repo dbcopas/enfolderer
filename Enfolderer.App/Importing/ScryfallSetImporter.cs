@@ -45,7 +45,7 @@ public sealed class ScryfallSetImporter
         {
             pragma.CommandText = "PRAGMA table_info(Cards)";
             using var pr = await pragma.ExecuteReaderAsync(ct);
-            while (await pr.ReadAsync(ct)) { try { cardCols.Add(pr.GetString(1)); } catch { } }
+            while (await pr.ReadAsync(ct)) { try { cardCols.Add(pr.GetString(1)); } catch (System.Exception) { throw; } }
         }
         string editionCol = cardCols.Contains("edition") ? "edition" : (cardCols.Contains("set") ? "set" : "edition");
         string collectorCol = cardCols.Contains("collectorNumberValue") ? "collectorNumberValue" : (cardCols.Contains("collectorNumber") ? "collectorNumber" : "collectorNumberValue");
@@ -71,7 +71,7 @@ public sealed class ScryfallSetImporter
                     string collectorVal = rdr.GetString(0);
                     string? exName = null; string? exRarity = null; int? exGatherer = null;
                     int colIndex = 1;
-                    if (nameCol != null && colIndex < rdr.FieldCount) { try { if (!rdr.IsDBNull(colIndex)) exName = rdr.GetString(colIndex); } catch { } colIndex++; }
+                    if (nameCol != null && colIndex < rdr.FieldCount) { try { if (!rdr.IsDBNull(colIndex)) exName = rdr.GetString(colIndex); } catch (System.Exception) { throw; } colIndex++; }
                     if (rarityCol != null && colIndex < rdr.FieldCount) { try { if (!rdr.IsDBNull(colIndex)) exRarity = rdr.GetString(colIndex); } catch { } colIndex++; }
                     if (gathererCol != null && colIndex < rdr.FieldCount) { try { if (!rdr.IsDBNull(colIndex)) exGatherer = rdr.GetInt32(colIndex); } catch { } colIndex++; }
                     existing[collectorVal] = (exName, exRarity, exGatherer);

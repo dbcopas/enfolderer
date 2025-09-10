@@ -40,7 +40,7 @@ public static class QuantityToggleCharTests
             var f = typeof(CardCollectionData).GetField("_loadedFolder", BindingFlags.NonPublic | BindingFlags.Instance);
             f?.SetValue(collection, "test");
         }
-        catch { }
+    catch (System.Exception) { throw; }
     }
 
     private static void Log(bool ok, ref int failures, string msg)

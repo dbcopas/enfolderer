@@ -22,7 +22,7 @@ internal static class BinderViewModelHttpFactory
             var mi = typeof(BinderViewModel).GetMethod("CreateClient", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
             if (mi != null && mi.Invoke(null, null) is HttpClient existing) return existing;
         }
-        catch { }
+    catch (System.Exception) { throw; }
         var c = new HttpClient();
         c.DefaultRequestHeaders.UserAgent.ParseAdd("Enfolderer/0.1 (+https://github.com/dbcopas/enfolderer)");
         c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
@@ -88,7 +88,7 @@ internal static class HttpHelper
                 File.AppendAllText(path, line + Environment.NewLine, Encoding.UTF8);
             }
         }
-        catch { }
+    catch (System.Exception) { throw; }
     }
 }
 
