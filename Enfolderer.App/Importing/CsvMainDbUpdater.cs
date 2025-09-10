@@ -87,6 +87,7 @@ public static class CsvMainDbUpdater
     bool hasVersionCol = cols.Contains("version");
     bool hasQtyCol = cols.Contains("Qty");
     int qtyMoveSuccess = 0, qtyMoveFail = 0, qtyMoveSkippedNoQty = 0;
+    int idRekeySuccess = 0, idRekeyFail = 0; // rekey Cards.id -> MtgsId
     int qtyMoveAttempted = 0, preExistingMtgs = 0;
 
         int total = 0, processed = 0;
@@ -439,7 +440,35 @@ public static class CsvMainDbUpdater
                                 }
                             }
                 string modNote = modifierNeedsUpdate ? $"; set modifier=[{csvModifier}]" : string.Empty;
-                updateLines.Add(line + $" | UPDATE id={foundId.Value} MtgsId={mtgsId}" + modNote + $"; origQty={(qtyMoveNote.Contains("moved Qty=")?"moved":(qtyMoveNote.Contains("FAILED")?"failed":(qtyMoveNote.Contains("missing")?"missing":"unknown")))}" + qtyMoveNote);
+                string rekeyNote = string.Empty;
+                if (foundId.HasValue && foundId.Value != mtgsId)
+                {
+                    bool canRekey = true;
+                    try
+                    {
+                        using var chk = con.CreateCommand();
+                        chk.CommandText = $"SELECT 1 FROM Cards WHERE {idCol}=@nid LIMIT 1";
+                        chk.Parameters.AddWithValue("@nid", mtgsId);
+                        var exists = chk.ExecuteScalar();
+                        if (exists != null && exists != DBNull.Value) { canRekey = false; rekeyNote = "; rekey-skip target-exists"; idRekeyFail++; }
+                    }
+                    catch (Exception exChk) { canRekey = false; rekeyNote = "; rekey-check-fail:" + Truncate(exChk.Message,40); idRekeyFail++; }
+                    if (canRekey)
+                    {
+                        try
+                        {
+                            using var rk = con.CreateCommand();
+                            rk.CommandText = $"UPDATE Cards SET {idCol}=@newId WHERE {idCol}=@oldId";
+                            rk.Parameters.AddWithValue("@newId", mtgsId);
+                            rk.Parameters.AddWithValue("@oldId", foundId.Value);
+                            int changed = rk.ExecuteNonQuery();
+                            if (changed == 1) { rekeyNote = $"; rekeyed {foundId.Value}->{mtgsId}"; idRekeySuccess++; foundId = mtgsId; }
+                            else { rekeyNote = "; rekey-nochange"; idRekeyFail++; }
+                        }
+                        catch (Exception exRk) { rekeyNote = "; rekey-fail:" + Truncate(exRk.Message,40); idRekeyFail++; }
+                    }
+                }
+                updateLines.Add(line + $" | UPDATE id={foundId.Value} MtgsId={mtgsId}" + modNote + rekeyNote + $"; origQty={(qtyMoveNote.Contains("moved Qty=")?"moved":(qtyMoveNote.Contains("FAILED")?"failed":(qtyMoveNote.Contains("missing")?"missing":"unknown")))}" + qtyMoveNote);
                             if (!hasQtyCol) debugLines.Add($"ID={foundId.Value}|mtgs={mtgsId}|origQty=NA|attempt=0|status=no-qty-column");
                         }
                         catch { errors++; errorLines.Add(line + " | ERROR update failed"); }
@@ -608,7 +637,7 @@ ProgressOnly:
 
         // Write categorized logs (suffix with dryrun/apply)
         // Append summary BEFORE writing so it appears in updates file
-        updateLines.Add($"# QTY MOVE SUMMARY success={qtyMoveSuccess} fail={qtyMoveFail} skipped_no_qty={qtyMoveSkippedNoQty} attempted={qtyMoveAttempted} preExistingMtgs={preExistingMtgs}");
+    updateLines.Add($"# QTY MOVE SUMMARY success={qtyMoveSuccess} fail={qtyMoveFail} skipped_no_qty={qtyMoveSkippedNoQty} attempted={qtyMoveAttempted} preExistingMtgs={preExistingMtgs} idRekeySuccess={idRekeySuccess} idRekeyFail={idRekeyFail}");
 
         // Write categorized logs (suffix with dryrun/apply)
         try
