@@ -25,6 +25,7 @@ using Enfolderer.App.Binder;
 using Enfolderer.App.Metadata; // orchestrator & provider types
 using Enfolderer.App.Core;
 using Enfolderer.App.Core.Abstractions;
+using Enfolderer.App.Utilities;
 
 namespace Enfolderer.App;
 
@@ -98,6 +99,20 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _vm.SetStatus("Import error: " + ex.Message);
+        }
+    }
+
+    private void ExportDmrPlaysetNeeds_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string path = PlaysetNeedsExporter.ExportDmrPlaysetNeeds();
+            _vm.SetStatus("DMR playset needs exported: " + System.IO.Path.GetFileName(path));
+            MessageBox.Show(this, $"Export complete:\n{path}", "DMR Playset Needs", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
