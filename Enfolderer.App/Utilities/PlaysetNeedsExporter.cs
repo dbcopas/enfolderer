@@ -123,7 +123,7 @@ namespace Enfolderer.App.Utilities
                 var excludedEditions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "AS", "A25", "CM2", "IMA", "MP2", "PLIST", "PRM", "PZ2",
                     "BD", "BR", "C19", "P2", "PJ21", "REN", "A22", "AFC", "ANB", "C14", "C20", "CMA", "DC", "UMA", "DRC", "CMM", "CLU", "DVD", "EMA",
                     "C16", "C17", "C18", "CMD", "DK", "GNT", "MAT", "ME2", "ME4", "P3", "PR", "PT", "S1", "U", "UNF", "VMA", "EOC", "FIC", "GVL", "WOT",
-                    "2X2", "2XM", "40K", "A", "B", "BBD", "C13", "C15", "C21", "CC1", "CN2", "CNS", "DDN", "DDR", "E02", "G18", "GN3", "HBG", "J22",
+                    "2X2", "2XM", "40K", "A", "B", "BBD", "C13", "C15", "C21", "CC1", "CN2", "CNS", "DDN", "DDR", "E02", "G18", "GN3", "HBG", "J22", "V17",
                     "JMP", "ME3", "MIC", "MKC", "MOC", "MPR", "MPS", "PIP", "OTC", "PAGL", "PC2", "PCA", "SLD", "WOC", "ZNC", "PUMA", "BLC", "BRC", "SIR",
                     "CC2", "CM1" , "J25", "LCC", "LTC", "MB1", "MB2", "NEC", "NCC", "ONC", "PF25", "PZ1", "SPG", "SS3", "TDC", "V11", "VOC", "P30A" };
 
