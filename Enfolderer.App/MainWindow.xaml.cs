@@ -102,13 +102,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ExportDmrPlaysetNeeds_Click(object sender, RoutedEventArgs e)
+    private void ExportPlaysetNeedsGeneric_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            string path = PlaysetNeedsExporter.ExportDmrPlaysetNeeds();
-            _vm.SetStatus("DMR playset needs exported: " + System.IO.Path.GetFileName(path));
-            MessageBox.Show(this, $"Export complete:\n{path}", "DMR Playset Needs", MessageBoxButton.OK, MessageBoxImage.Information);
+            string setCode = Microsoft.VisualBasic.Interaction.InputBox("Enter source set code (e.g., DMR, MOM, BRO)", "Playset Needs Export", "DMR");
+            if (string.IsNullOrWhiteSpace(setCode)) return;
+            string path = PlaysetNeedsExporter.ExportPlaysetNeedsForSet(setCode.Trim());
+            _vm.SetStatus($"{setCode.ToUpperInvariant()} playset needs exported: " + System.IO.Path.GetFileName(path));
+            MessageBox.Show(this, $"Export complete for {setCode.ToUpperInvariant()}:\n{path}", "Playset Needs Export", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {

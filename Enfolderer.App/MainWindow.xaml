@@ -101,7 +101,7 @@
                 <MenuItem Header="Update mainDb from CSV..." Click="UpdateMainDbFromCsv_Click" />
                 <MenuItem Header="Import Scryfall Set Into mainDb" Click="ImportScryfallSet_Click" />
                 <Separator />
-                <MenuItem Header="Export _DMR Playset Needs" Click="ExportDmrPlaysetNeeds_Click" />
+                <MenuItem Header="Export _Playset Needs..." Click="ExportPlaysetNeedsGeneric_Click" />
                 <Separator />
                 <MenuItem Header="Backfill missing 0-qty rows (id &lt; 150000)" Click="BackfillZeroQty_Click" />
                 <MenuItem Header="Set Qty = CardId (all rows)" Click="SetQtyEqualsCardId_Click" />
