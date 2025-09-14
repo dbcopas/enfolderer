@@ -330,6 +330,12 @@ public partial class MainWindow : Window
             e.Handled = true;
         }
     }
+
+    private void SearchButton_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        _vm?.PerformSearchNextSet();
+        e.Handled = true;
+    }
 }
 
 
@@ -611,6 +617,43 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         catch (Exception ex)
         {
             SetStatus("Search failed: " + ex.Message);
+        }
+    }
+
+    public void PerformSearchNextSet()
+    {
+        try
+        {
+            string term = SearchName;
+            if (string.IsNullOrWhiteSpace(term) || _orderedFaces.Count == 0) { SetStatus("Enter a set code fragment."); return; }
+            var comp = StringComparison.OrdinalIgnoreCase;
+            int start = _lastSearchIndex;
+            int count = _orderedFaces.Count;
+            int i = (start + 1) % Math.Max(count,1);
+            while (true)
+            {
+                var ce = _orderedFaces[i];
+                if (!string.IsNullOrWhiteSpace(ce.Set) && ce.Set.IndexOf(term, comp) >= 0)
+                {
+                    _lastSearchIndex = i;
+                    int slotsPerPage = SlotsPerPage;
+                    int targetPage = (i / slotsPerPage) + 1;
+                    int binderIndex = (targetPage - 1) / PagesPerBinder;
+                    int binderOneBased = binderIndex + 1;
+                    int pageWithinBinder = ((targetPage - 1) % PagesPerBinder) + 1;
+                    if (_nav.CanJumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder))
+                        _nav.JumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder);
+                    SetStatus($"Found set match '{term}' at face {i + 1} ({ce.Set}).");
+                    return;
+                }
+                i = (i + 1) % count;
+                if (i == (start + 1) % count) break;
+            }
+            SetStatus($"No set match for '{term}'.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Set search failed: " + ex.Message);
         }
     }
 
