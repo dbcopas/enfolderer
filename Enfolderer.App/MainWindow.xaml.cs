@@ -321,6 +321,15 @@ public partial class MainWindow : Window
             Debug.WriteLine($"[UI] Click handler error: {ex.Message}");
         }
     }
+
+    private void SearchNameBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            _vm?.PerformSearchNext();
+            e.Handled = true;
+        }
+    }
 }
 
 
@@ -534,11 +543,76 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public ICommand JumpToPageCommand { get; }
     public ICommand NextSetCommand { get; }
     public ICommand PrevSetCommand { get; }
+    public ICommand SearchNextCommand { get; }
 
     private string _jumpBinderInput = "1";
     public string JumpBinderInput { get => _jumpBinderInput; set { _jumpBinderInput = value; OnPropertyChanged(); } }
     private string _jumpPageInput = "1";
     public string JumpPageInput { get => _jumpPageInput; set { _jumpPageInput = value; OnPropertyChanged(); } }
+
+    // Search state
+    private string _searchName = string.Empty;
+    public string SearchName { get => _searchName; set { if (_searchName != value) { _searchName = value; OnPropertyChanged(); _lastSearchIndex = -1; } } }
+    private int _lastSearchIndex = -1; // face index of last match to continue from
+
+    private bool TryFindNextByName(string term, out int faceIndex)
+    {
+        faceIndex = -1;
+        if (string.IsNullOrWhiteSpace(term) || _orderedFaces.Count == 0) return false;
+        // Case-insensitive contains match against display Name (CardEntry.Name)
+        var comp = StringComparison.OrdinalIgnoreCase;
+        int start = _lastSearchIndex;
+        int count = _orderedFaces.Count;
+        // Begin after last index
+        int i = (start + 1) % Math.Max(count,1);
+        while (true)
+        {
+            if (_orderedFaces[i].Name.IndexOf(term, comp) >= 0)
+            {
+                faceIndex = i; return true;
+            }
+            i = (i + 1) % count;
+            if (i == (start + 1) % count) break; // wrapped fully
+        }
+        return false;
+    }
+
+    public void PerformSearchNext()
+    {
+        try
+        {
+            if (TryFindNextByName(SearchName, out int idx))
+            {
+                _lastSearchIndex = idx;
+                // Navigate to page containing this face
+                int slotsPerPage = SlotsPerPage;
+                int targetPage = (idx / slotsPerPage) + 1; // global page (1-based)
+                // Determine binder & local page using existing navigation service mapping: find view containing targetPage
+                bool viewContains = false;
+                foreach (var v in _nav.Views)
+                {
+                    if (v.LeftPage == targetPage || v.RightPage == targetPage) { viewContains = true; break; }
+                }
+                if (viewContains)
+                {
+                    int binderIndex = (targetPage - 1) / PagesPerBinder; // zero-based binder index
+                    int binderOneBased = binderIndex + 1;
+                    int pageWithinBinder = ((targetPage - 1) % PagesPerBinder) + 1;
+                    if (_nav.CanJumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder))
+                        _nav.JumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder);
+                }
+                SetStatus($"Found '{SearchName}' at face {idx + 1}.");
+            }
+            else
+            {
+                SetStatus(string.IsNullOrWhiteSpace(SearchName) ? "Enter a name to search." : $"No match for '{SearchName}'.");
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Search failed: " + ex.Message);
+        }
+    }
 
     public BinderViewModel()
     {
@@ -580,6 +654,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         JumpToPageCommand = commandFactory.CreateJumpToPage();
         NextSetCommand = commandFactory.CreateNextSet();
         PrevSetCommand = commandFactory.CreatePrevSet();
+        SearchNextCommand = new RelayCommand(_ => PerformSearchNext(), _ => !string.IsNullOrWhiteSpace(SearchName) && _orderedFaces.Count > 0);
         RebuildViews();
         Refresh();
     _statusPanel.Update(null, s => ApiStatus = s);
