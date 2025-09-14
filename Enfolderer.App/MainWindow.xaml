@@ -199,7 +199,7 @@
                 <StackPanel Orientation="Horizontal" Grid.Column="5" VerticalAlignment="Center" Margin="20,0,0,0">
                     <TextBlock Text="Find:" VerticalAlignment="Center" Margin="0,0,4,0" />
                     <TextBox x:Name="SearchNameBox" Width="160" Text="{Binding SearchName, UpdateSourceTrigger=PropertyChanged}" KeyDown="SearchNameBox_KeyDown"/>
-                    <Button Content="Find ▶" Command="{Binding SearchNextCommand}" Margin="6,0,0,0" />
+                    <Button Content="Find ▶" Command="{Binding SearchNextCommand}" Margin="6,0,0,0" MouseRightButtonUp="SearchButton_MouseRightButtonUp" ToolTip="Left click: find next name match. Right click: find next set code match." />
                 </StackPanel>
                 <!-- Jump controls at far right -->
                 <StackPanel Orientation="Horizontal" Grid.Column="6" VerticalAlignment="Center" Margin="10,0,0,0">
