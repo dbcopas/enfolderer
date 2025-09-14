@@ -36,7 +36,9 @@ namespace Enfolderer.App.Utilities
     public static string ExportPlaysetNeedsForSet(string setCode, string? outputPath = null, int playsetSize = 4, bool includeZeroNeeds = false)
     {
             if (string.IsNullOrWhiteSpace(setCode)) throw new ArgumentException("Set code required", nameof(setCode));
+            // Normalize user-provided set code: trim and keep an original form for messaging; use uppercase canonical internally
             setCode = setCode.Trim();
+            string canonicalSetCode = setCode.ToUpperInvariant();
             string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             string mainDbPath = Path.Combine(exeDir, "mainDb.db");
             string collectionPath = Path.Combine(exeDir, "mtgstudio.collection");
@@ -51,8 +53,9 @@ namespace Enfolderer.App.Utilities
             {
                 con.Open();
                 using var cmdR = con.CreateCommand();
-                cmdR.CommandText = "SELECT name, rarity, id, collectorNumberValue, color FROM cards WHERE edition=@pSet";
-                cmdR.Parameters.AddWithValue("@pSet", setCode);
+                // Case-insensitive match on edition via COLLATE NOCASE so mixed-case entries unify
+                cmdR.CommandText = "SELECT name, rarity, id, collectorNumberValue, color FROM cards WHERE edition = @pSet COLLATE NOCASE";
+                cmdR.Parameters.AddWithValue("@pSet", canonicalSetCode);
                 using var rdr = cmdR.ExecuteReader();
                 while (rdr.Read())
                 {
@@ -117,7 +120,9 @@ namespace Enfolderer.App.Utilities
                     if (row.MtgsId.HasValue && qtyByMtgs.TryGetValue(row.MtgsId.Value, out var qv)) totals[row.Name] += qv;
                 }
                 // Editions we do not want to place cards into as target binders
-                var excludedEditions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "BD", "BR", "C19", "P2", "PJ21", "REN" };
+                var excludedEditions = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "AS", "A25", "CM2", "IMA", "MP2", "PLIST", "PRM", "PZ2",
+                    "BD", "BR", "C19", "P2", "PJ21", "REN", "A22", "AFC", "ANB", "C14", "C20", "CMA", "DC", "UMA", "DRC",
+                    "C16", "C17", "C18", "CMD", "DK", "GNT", "MAT", "ME2", "ME4", "P3", "PR", "PT", "S1", "U", "UNF", "VMA"  };
 
                 // Determine target edition (earliest non-target edition, excluding specific codes) for each source set name
                 foreach (var name in rarityByName.Keys)
@@ -129,7 +134,7 @@ namespace Enfolderer.App.Utilities
                         .ToList();
                     if (candidates.Count == 0)
                     {
-                        targetEditionByName[name] = setCode; // fallback if only source set
+                        targetEditionByName[name] = canonicalSetCode; // fallback if only source set
                         // target rarity same as source in this case
                         targetEditionRarityByName[name] = rarityByName[name];
                         continue;
@@ -147,22 +152,22 @@ namespace Enfolderer.App.Utilities
                 string name = kvp.Key;
                 totals.TryGetValue(name, out var have);
                 int need = playsetSize - have;
-                string targetEdition = targetEditionByName.TryGetValue(name, out var te) ? te : setCode;
+                string targetEdition = targetEditionByName.TryGetValue(name, out var te) ? te : canonicalSetCode;
                 numberByName.TryGetValue(name, out var num);
                 colorByName.TryGetValue(name, out var col);
-                string targetRarity = targetEdition == setCode
+                string targetRarity = targetEdition.Equals(canonicalSetCode, StringComparison.OrdinalIgnoreCase)
                     ? kvp.Value
                     : (targetEditionRarityByName.TryGetValue(name, out var tr) && !string.IsNullOrWhiteSpace(tr) ? tr : kvp.Value);
                 allEntries.Add(new PlaysetNeed(name, targetEdition, kvp.Value, targetRarity, num ?? string.Empty, col ?? string.Empty, have, need > 0 ? need : 0));
             }
 
             // Partition
-            var needsWithPlacement = allEntries.Where(e => e.Need > 0 && !string.Equals(e.TargetEdition, setCode, StringComparison.OrdinalIgnoreCase))
+            var needsWithPlacement = allEntries.Where(e => e.Need > 0 && !string.Equals(e.TargetEdition, canonicalSetCode, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(e => e.TargetEdition, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(e => e.SourceSetRarity, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            var needsNoPlacement = allEntries.Where(e => e.Need > 0 && string.Equals(e.TargetEdition, setCode, StringComparison.OrdinalIgnoreCase))
+            var needsNoPlacement = allEntries.Where(e => e.Need > 0 && string.Equals(e.TargetEdition, canonicalSetCode, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(e => e.SourceSetRarity, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -174,7 +179,7 @@ namespace Enfolderer.App.Utilities
             if (string.IsNullOrWhiteSpace(outputPath))
             {
                 string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-                outputPath = Path.Combine(AppContext.BaseDirectory, $"{setCode.ToLowerInvariant()}_playset_needs_{stamp}.csv");
+                outputPath = Path.Combine(AppContext.BaseDirectory, $"{canonicalSetCode.ToLowerInvariant()}_playset_needs_{stamp}.csv");
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
