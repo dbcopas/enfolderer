@@ -78,13 +78,14 @@ namespace Enfolderer.App.Utilities
             var totals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             var targetEditionByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var targetEditionRarityByName = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase); // hoisted so accessible after data collection
+            // Will hold all candidate printings for names in the source set for color fallback and placement logic
+            var allRows = new List<(long Id, string Name, string Edition, int? MtgsId, string Rarity, string Color)>();
             using (var con = new SqliteConnection($"Data Source={mainDbPath};Mode=ReadOnly"))
             {
                 con.Open();
                 using var cmdAll = con.CreateCommand();
-                cmdAll.CommandText = "SELECT id, name, edition, MtgsId, rarity FROM cards";
+                cmdAll.CommandText = "SELECT id, name, edition, MtgsId, rarity, color FROM cards";
                 using var rdr = cmdAll.ExecuteReader();
-                var allRows = new List<(long Id, string Name, string Edition, int? MtgsId, string Rarity)>();
                 while (rdr.Read())
                 {
                     if (rdr.IsDBNull(1)) continue;
@@ -94,7 +95,8 @@ namespace Enfolderer.App.Utilities
                     string edition = rdr.IsDBNull(2) ? string.Empty : rdr.GetString(2) ?? string.Empty;
                     int? mid = rdr.IsDBNull(3) ? (int?)null : rdr.GetInt32(3);
                     string rar = rdr.IsDBNull(4) ? string.Empty : rdr.GetString(4) ?? string.Empty;
-                    allRows.Add((idVal, nm, edition, mid, rar));
+                    string clr = rdr.IsDBNull(5) ? string.Empty : rdr.GetString(5) ?? string.Empty;
+                    allRows.Add((idVal, nm, edition, mid, rar, clr));
                 }
                 // Load collection quantities into dictionary for fast lookup
                 var qtyByMtgs = new Dictionary<int, int>();
@@ -158,6 +160,28 @@ namespace Enfolderer.App.Utilities
                 string targetEdition = targetEditionByName.TryGetValue(name, out var te) ? te : canonicalSetCode;
                 numberByName.TryGetValue(name, out var num);
                 colorByName.TryGetValue(name, out var col);
+                if (string.IsNullOrWhiteSpace(col))
+                {
+                    // Fallback 1: color from chosen target edition printing if present
+                    var targetColor = allRows
+                        .Where(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && r.Edition.Equals(targetEdition, StringComparison.OrdinalIgnoreCase))
+                        .Select(r => r.Color)
+                        .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c));
+                    if (!string.IsNullOrWhiteSpace(targetColor))
+                    {
+                        col = targetColor;
+                    }
+                    else
+                    {
+                        // Fallback 2: earliest (by Id) non-empty color among any printing of this name
+                        var earliestColor = allRows
+                            .Where(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(r.Color))
+                            .OrderBy(r => r.Id)
+                            .Select(r => r.Color)
+                            .FirstOrDefault();
+                        if (!string.IsNullOrWhiteSpace(earliestColor)) col = earliestColor;
+                    }
+                }
                 string targetRarity = targetEdition.Equals(canonicalSetCode, StringComparison.OrdinalIgnoreCase)
                     ? kvp.Value
                     : (targetEditionRarityByName.TryGetValue(name, out var tr) && !string.IsNullOrWhiteSpace(tr) ? tr : kvp.Value);
