@@ -28,3 +28,7 @@ paket-files/
 [Dd]esktop.ini
 [Tt]humbs.db
 $RECYCLE.BIN/
+
+# .NET build artifacts
+Enfolderer.App/bin/
+Enfolderer.App/obj/
