@@ -1,15 +1,13 @@
-# Enfolderer MTG Binder
+# Enfolderer MTG Binder - 100% Vibe Coded with GitHub Copilot.
 
-WPF application for visualizing a Magic: The Gathering collection in virtual binders. Layout is now dynamic (4×3 / 3×3 / 2×2 selectable) and pages‑per‑binder is configurable (default 40 displayed sides / 20 physical sheets). The app auto‑adds binders as your list grows.
+![Screenshot](https://github.com/user-attachments/assets/0a6ef719-fce1-4905-a152-0cc9e9dd308c)
 
-Physical pagination is emulated:
-* Page 1: single right page (front cover opened)
-* Interior: two‑page spreads (left + right simultaneously)
-* Final page of a binder: single left page (back cover)
+
+WPF application for visualizing a Magic: The Gathering collection in virtual binders. Layout is dynamic (4×3 / 3×3 / 2×2 selectable) and pages‑per‑binder is configurable (default 40 displayed sides / 20 physical sheets). The app auto‑adds binders as your list grows.
 
 ## Quick Start (Basic Setup)
 1. Download or build the app. After a publish/build you will have an executable (e.g. `Enfolderer.App.exe`).
-2. Place `mainDb.db` and `mtgstudio.collection` in the SAME directory as the executable. The build already copies them during development; for releases ensure they are present.
+2. `mainDb.db` and `mtgstudio.collection` must be in the SAME directory as the executable.
 3. Launch the app and open your binder definition file (`File > Open`).
 4. (Optional) If your real `mtgstudio.collection` lives elsewhere (e.g. managed by MTG Studio), create a symbolic link beside the exe instead of copying the file so updates propagate automatically.
 
@@ -86,7 +84,7 @@ When importing or manually inserting new cards that do not correspond to mtgstud
 Rules:
 * Qty changes persist to `Cards.Qty`.
 * Import never overwrites existing custom quantities.
-* You can still later reconcile by populating MtgsId if a mapping becomes known (future tooling).
+* You can still later reconcile by populating MtgsId if a mapping becomes known.
 
 ## Scryfall Set Import (mainDb)
 Menu: File → "Import Scryfall Set Into mainDb".
@@ -269,7 +267,7 @@ dotnet publish Enfolderer.App -c Release -r win-x64 --self-contained false -p:Pu
 * Optional offline mode using full cache only
 
 ## Attribution
-Card data & images © Scryfall (https://scryfall.com). Unofficial; not endorsed by Wizards of the Coast.
+Card data & images © Wizards of the Coast (https://magic.wizards.com). Unofficial; not endorsed by Wizards of the Coast.
 
 ## License
 MIT
