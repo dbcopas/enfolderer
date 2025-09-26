@@ -56,11 +56,15 @@ public class CardSlot : INotifyPropertyChanged
     public Brush Background { get; }
     public bool IsBackFace { get; }
     public bool IsPlaceholderBack { get; }
+    // Global face index (position within _orderedFaces) assigned at construction for search highlighting correlation
+    public int GlobalIndex { get; }
     private ImageSource? _imageSource;
     public ImageSource? ImageSource { get => _imageSource; private set { _imageSource = value; OnPropertyChanged(); } }
     private int _quantity;
     public int Quantity { get => _quantity; set { if (_quantity != value) { _quantity = value; OnPropertyChanged(); OnPropertyChanged(nameof(QuantityDisplay)); } } }
     public string QuantityDisplay => (IsPlaceholderBack || _quantity < 0) ? string.Empty : _quantity.ToString();
+    private bool _isSearchHighlight;
+    public bool IsSearchHighlight { get => _isSearchHighlight; set { if (_isSearchHighlight != value) { _isSearchHighlight = value; OnPropertyChanged(); } } }
 
     public CardSlot(CardEntry entry, int index)
     {
@@ -71,6 +75,7 @@ public class CardSlot : INotifyPropertyChanged
         Background = Brushes.Black;
     IsBackFace = entry.IsBackFace;
         IsPlaceholderBack = string.Equals(Set, "__BACK__", StringComparison.OrdinalIgnoreCase) && string.Equals(Name, "Backface", StringComparison.OrdinalIgnoreCase);
+        GlobalIndex = index;
         if (IsPlaceholderBack)
             _quantity = -1;
         else
@@ -85,6 +90,7 @@ public class CardSlot : INotifyPropertyChanged
         Tooltip = placeholder;
         Background = Brushes.Black;
         _quantity = 0;
+        GlobalIndex = index;
     }
 
     private static Color GenerateColor(int index) => CardSlotTheme.BaseColor;

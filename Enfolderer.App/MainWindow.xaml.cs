@@ -562,6 +562,57 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private string _searchName = string.Empty;
     public string SearchName { get => _searchName; set { if (_searchName != value) { _searchName = value; OnPropertyChanged(); _lastSearchIndex = -1; } } }
     private int _lastSearchIndex = -1; // face index of last match to continue from
+    // Search highlight state
+    private int _highlightedIndex = -1; // currently highlighted global face index
+    private int _pendingHighlightIndex = -1; // requested highlight to apply after view/page rebuild
+
+    private void ClearExistingHighlight()
+    {
+        if (_highlightedIndex < 0) return;
+        // Determine if current highlighted slot is visible; if so clear flag.
+        foreach (var s in LeftSlots)
+        {
+            if (s.GlobalIndex == _highlightedIndex) { s.IsSearchHighlight = false; break; }
+        }
+        foreach (var s in RightSlots)
+        {
+            if (s.GlobalIndex == _highlightedIndex) { s.IsSearchHighlight = false; break; }
+        }
+        _highlightedIndex = -1;
+    }
+
+    private void RequestHighlight(int globalIndex)
+    {
+        _pendingHighlightIndex = globalIndex;
+        ApplyHighlightIfVisible();
+    }
+
+    private void ApplyHighlightIfVisible()
+    {
+        if (_pendingHighlightIndex < 0) return;
+        int gi = _pendingHighlightIndex;
+        bool applied = false;
+        foreach (var s in LeftSlots)
+        {
+            if (s.GlobalIndex == gi)
+            {
+                ClearExistingHighlight();
+                s.IsSearchHighlight = true; _highlightedIndex = gi; applied = true; break;
+            }
+        }
+        if (!applied)
+        {
+            foreach (var s in RightSlots)
+            {
+                if (s.GlobalIndex == gi)
+                {
+                    ClearExistingHighlight();
+                    s.IsSearchHighlight = true; _highlightedIndex = gi; applied = true; break;
+                }
+            }
+        }
+        if (applied) _pendingHighlightIndex = -1; // done
+    }
 
     private bool TryFindNextByName(string term, out int faceIndex)
     {
@@ -592,6 +643,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             if (TryFindNextByName(SearchName, out int idx))
             {
                 _lastSearchIndex = idx;
+                RequestHighlight(idx);
                 // Navigate to page containing this face
                 int slotsPerPage = SlotsPerPage;
                 int targetPage = (idx / slotsPerPage) + 1; // global page (1-based)
@@ -638,6 +690,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                 if (!string.IsNullOrWhiteSpace(ce.Set) && ce.Set.IndexOf(term, comp) >= 0)
                 {
                     _lastSearchIndex = i;
+                    RequestHighlight(i);
                     int slotsPerPage = SlotsPerPage;
                     int targetPage = (i / slotsPerPage) + 1;
                     int binderIndex = (targetPage - 1) / PagesPerBinder;
@@ -733,6 +786,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private void NavOnViewChanged()
     {
         Refresh();
+        // Attempt to apply pending highlight after view change
+        ApplyHighlightIfVisible();
     }
 
     private void RebuildViews()
@@ -834,6 +889,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             TriggerPageResolution(v.LeftPage ?? 0, v.RightPage ?? 0);
         }
         CommandManager.InvalidateRequerySuggested();
+        // After refresh may have rebuilt slots; try to apply highlight
+        ApplyHighlightIfVisible();
     }
 
     private void UpdateBinderBackground(int binderNumber)

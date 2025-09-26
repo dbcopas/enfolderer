@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using Microsoft.Data.Sqlite;
 
+using System.Text;
 namespace Enfolderer.App.Utilities
 {
     /// <summary>
@@ -33,22 +34,86 @@ namespace Enfolderer.App.Utilities
                                      int Have,
                                      int Need);
 
-    public static string ExportPlaysetNeedsForSet(string setCode, string? outputPath = null, int playsetSize = 4, bool includeZeroNeeds = false)
+    public static string ExportPlaysetNeedsForSet(string setCode, string? outputPath = null, int playsetSize = 4, bool includeZeroNeeds = false, bool debugPlacement = false)
     {
             if (string.IsNullOrWhiteSpace(setCode)) throw new ArgumentException("Set code required", nameof(setCode));
             // Normalize user-provided set code: trim and keep an original form for messaging; use uppercase canonical internally
             setCode = setCode.Trim();
             string canonicalSetCode = setCode.ToUpperInvariant();
+        bool sourceIsListSet = string.Equals(canonicalSetCode, "PLST", StringComparison.OrdinalIgnoreCase) || string.Equals(canonicalSetCode, "PLIST", StringComparison.OrdinalIgnoreCase);
+            // Allow environment variable override
+            if (!debugPlacement)
+            {
+                var env = Environment.GetEnvironmentVariable("ENFOLDERER_DEBUG_PLACEMENT");
+                if (!string.IsNullOrWhiteSpace(env) && (env.Equals("1") || env.Equals("true", StringComparison.OrdinalIgnoreCase)))
+                {
+                    debugPlacement = true;
+                }
+            }
             string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             string mainDbPath = Path.Combine(exeDir, "mainDb.db");
             string collectionPath = Path.Combine(exeDir, "mtgstudio.collection");
             if (!File.Exists(mainDbPath)) throw new FileNotFoundException("mainDb.db not found", mainDbPath);
+
+            // Utilities for name normalization (moved to top so we can use during allRows population)
+            static string NormalizeName(string n)
+            {
+                if (string.IsNullOrWhiteSpace(n)) return string.Empty;
+                // Collapse spaced double slash variants and strip surrounding whitespace
+                var collapsed = n.Replace(" // ", "/", StringComparison.OrdinalIgnoreCase)
+                                 .Replace(" / ", "/", StringComparison.OrdinalIgnoreCase)
+                                 .Replace("/ ", "/", StringComparison.OrdinalIgnoreCase)
+                                 .Replace(" /", "/", StringComparison.OrdinalIgnoreCase);
+                return collapsed.Trim();
+            }
+            static string FrontFace(string n)
+            {
+                var norm = NormalizeName(n);
+                var idx = norm.IndexOf('/');
+                return idx >= 0 ? norm.Substring(0, idx) : norm;
+            }
+            // Edition alias groups (keys normalized upper). Add more codes here if future discrepancies arise.
+            var editionAliases = new List<HashSet<string>>
+            {
+                new HashSet<string>(new[]{"CHK","COK"}, StringComparer.OrdinalIgnoreCase), // Champions of Kamigawa (Scryfall=CHK, MtGS=COK)
+                new HashSet<string>(new[]{"MIR","MR","MI"}, StringComparer.OrdinalIgnoreCase),  // Mirage (long/short/alt code)
+                new HashSet<string>(new[]{"USG","US"}, StringComparer.OrdinalIgnoreCase)   // Urza's Saga (Scryfall=USG, DB=US)
+            };
+            bool EditionEquals(string a, string b)
+            {
+                if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+                if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return false;
+                foreach (var grp in editionAliases)
+                {
+                    if (grp.Contains(a) && grp.Contains(b)) return true;
+                }
+                return false;
+            }
+            bool IsAliasOfSource(string candidateEdition, string sourceEdition)
+            {
+                return EditionEquals(candidateEdition, sourceEdition);
+            }
+
+            // Core set codes (older numbered core sets + modern core + special reprint cores) we want to deprioritize for placement
+            var coreSetCodes = new HashSet<string>(new [] {
+                // Classic numbered cores and later base sets
+                "4E","5E","6E","7E","8E","9E","10E",
+                // Magic 2010+ core sequence
+                "M10","M11","M12","M13","M14","M15",
+                // Later annual cores / pivot sets
+                "M19","M20","M21","ORI", // ORI (Magic Origins) often filed with core sets for binder purposes
+                // Premium reprint / broad supplemental 'core-like' sets we also want to deprioritize
+                "A25","IMA","2XM","2X2","CM2","CMA","UMA","MM2","MM3","MMQ","MB1","MB2" // include some broad reprint products
+            }, StringComparer.OrdinalIgnoreCase);
 
             // Fixed schema as provided: table "cards" columns: id, name, edition, rarity, MtgsId, Qty (Qty may be null / used earlier)
             var rarityByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var numberByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var colorByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var dmrInternalIds = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            var normalizedSourceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Track front-face names for multi-face source cards so we can include single-face DB rows (e.g., Budoka Gardener // Dokai ... -> Budoka Gardener)
+            var frontFaceSourceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             using (var con = new SqliteConnection($"Data Source={mainDbPath};Mode=ReadOnly"))
             {
                 con.Open();
@@ -66,6 +131,9 @@ namespace Enfolderer.App.Utilities
                     if (!dmrInternalIds.ContainsKey(name)) dmrInternalIds[name] = rdr.IsDBNull(2) ? 0 : rdr.GetInt64(2);
                     if (!numberByName.ContainsKey(name)) numberByName[name] = rdr.IsDBNull(3) ? string.Empty : rdr.GetString(3) ?? string.Empty;
                     if (!colorByName.ContainsKey(name)) colorByName[name] = rdr.IsDBNull(4) ? string.Empty : rdr.GetString(4) ?? string.Empty;
+                    normalizedSourceNames.Add(NormalizeName(name));
+                    var ff = FrontFace(name);
+                    if (!string.IsNullOrWhiteSpace(ff)) frontFaceSourceNames.Add(ff);
                 }
             }
 
@@ -79,24 +147,36 @@ namespace Enfolderer.App.Utilities
             var targetEditionByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var targetEditionRarityByName = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase); // hoisted so accessible after data collection
             // Will hold all candidate printings for names in the source set for color fallback and placement logic
-            var allRows = new List<(long Id, string Name, string Edition, int? MtgsId, string Rarity, string Color)>();
+            var allRows = new List<(long Id, string Name, string Edition, int? MtgsId, string Rarity, string Color, string CollectorNumber)>();
             using (var con = new SqliteConnection($"Data Source={mainDbPath};Mode=ReadOnly"))
             {
                 con.Open();
                 using var cmdAll = con.CreateCommand();
-                cmdAll.CommandText = "SELECT id, name, edition, MtgsId, rarity, color FROM cards";
+                cmdAll.CommandText = "SELECT id, name, edition, MtgsId, rarity, color, collectorNumberValue FROM cards";
                 using var rdr = cmdAll.ExecuteReader();
                 while (rdr.Read())
                 {
                     if (rdr.IsDBNull(1)) continue;
                     var nm = rdr.GetString(1);
-                    if (!rarityByName.ContainsKey(nm)) continue; // only process names appearing in DMR
+                    var normNm = NormalizeName(nm);
+                    // Accept row if:
+                    //  - exact source name
+                    //  - normalized form matches a normalized source name
+                    //  - front-face form matches a front-face source (handles DB storing only front face)
+                    var ffNm = FrontFace(nm);
+                    if (!rarityByName.ContainsKey(nm)
+                        && !normalizedSourceNames.Contains(normNm)
+                        && !frontFaceSourceNames.Contains(nm)
+                        && !frontFaceSourceNames.Contains(normNm)
+                        && !frontFaceSourceNames.Contains(ffNm))
+                        continue;
                     long idVal = rdr.IsDBNull(0) ? 0 : rdr.GetInt64(0);
                     string edition = rdr.IsDBNull(2) ? string.Empty : rdr.GetString(2) ?? string.Empty;
                     int? mid = rdr.IsDBNull(3) ? (int?)null : rdr.GetInt32(3);
                     string rar = rdr.IsDBNull(4) ? string.Empty : rdr.GetString(4) ?? string.Empty;
                     string clr = rdr.IsDBNull(5) ? string.Empty : rdr.GetString(5) ?? string.Empty;
-                    allRows.Add((idVal, nm, edition, mid, rar, clr));
+                    string colNum = rdr.IsDBNull(6) ? string.Empty : rdr.GetString(6) ?? string.Empty;
+                    allRows.Add((idVal, nm, edition, mid, rar, clr, colNum));
                 }
                 // Load collection quantities into dictionary for fast lookup
                 var qtyByMtgs = new Dictionary<int, int>();
@@ -129,24 +209,275 @@ namespace Enfolderer.App.Utilities
                     "JMP", "ME3", "MIC", "MKC", "MOC", "MPR", "MPS", "PIP", "OTC", "PAGL", "PC2", "PCA", "SLD", "WOC", "ZNC", "PUMA", "BLC", "BRC", "SIR",
                     "CC2", "CM1" , "J25", "LCC", "LTC", "MB1", "MB2", "NEC", "NCC", "ONC", "PF25", "PZ1", "SPG", "SS3", "TDC", "V11", "VOC", "P30A" };
 
-                // Determine target edition (earliest non-target edition, excluding specific codes) for each source set name
-                foreach (var name in rarityByName.Keys)
+                // Determine target edition (earliest non-target edition, excluding specific codes) for each source set name.
+                // If no name-based candidates found, perform generic fallback:
+                // 1. Try front-face (for multi-face names containing ' // ')
+                // 2. Try parsing the source collector number pattern PREFIX-REST to locate edition+collector number directly (name-independent)
+                StreamWriter? debugLog = null;
+                try
                 {
+                    if (debugPlacement)
+                    {
+                        string dbgPath = Path.Combine(AppContext.BaseDirectory, $"placement_debug_{canonicalSetCode.ToLowerInvariant()}.log");
+                        debugLog = new StreamWriter(dbgPath, append: false, Encoding.UTF8);
+                        debugLog.WriteLine($"# Placement debug log for {canonicalSetCode} generated {DateTime.Now:O}");
+                    }
+
+                    foreach (var name in rarityByName.Keys)
+                {
+                    string normalizedName = NormalizeName(name);
+
+                    if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Detail=NormalizedName | Value={normalizedName}");
                     var candidates = allRows
-                        .Where(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
-                                    && !string.Equals(r.Edition, setCode, StringComparison.OrdinalIgnoreCase)
+                        .Where(r => NormalizeName(r.Name).Equals(normalizedName, StringComparison.OrdinalIgnoreCase)
+                                    && !IsAliasOfSource(r.Edition, setCode)
                                     && !excludedEditions.Contains(r.Edition))
+                        .OrderBy(r => r.Id)
                         .ToList();
+                    // Keep a snapshot of the broad initial candidate pool (by normalized name) for later core override decisions
+                    var initialBroadCandidates = candidates.ToList();
+                    if (debugPlacement)
+                    {
+                        debugLog?.WriteLine($"CARD: {name} | Stage=InitialNormalizedMatch | Candidates={candidates.Count}");
+                    }
+
+                    // Multi-face normalization: retry using front-face segment
+                    if (candidates.Count == 0 && (name.Contains(" // ") || name.Contains('/')))
+                    {
+                        var front = FrontFace(name);
+                        candidates = allRows
+                            .Where(r => FrontFace(r.Name).Equals(front, StringComparison.OrdinalIgnoreCase)
+                                        && !IsAliasOfSource(r.Edition, setCode)
+                                        && !excludedEditions.Contains(r.Edition))
+                            .OrderBy(r => r.Id)
+                            .ToList();
+                        if (debugPlacement)
+                        {
+                            debugLog?.WriteLine($"CARD: {name} | Stage=FrontFaceMatch | Candidates={candidates.Count}");
+                        }
+                    }
+
+                    // Edition + collector number inference if still none
+                    if (candidates.Count == 0 && numberByName.TryGetValue(name, out var rawNumber) && !string.IsNullOrWhiteSpace(rawNumber))
+                    {
+                        var rawTrim = rawNumber.Trim();
+                        int dash = rawTrim.IndexOf('-');
+                        if (dash > 0)
+                        {
+                            string inferredEdition = rawTrim.Substring(0, dash).Trim();
+                            string remainder = rawTrim.Substring(dash + 1).Trim();
+                            if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=EditionInference | InferredEdition={inferredEdition} | Remainder={remainder}");
+                            if (!string.IsNullOrWhiteSpace(inferredEdition) && !string.IsNullOrWhiteSpace(remainder))
+                            {
+                                // Exact match on edition + full collector number
+                                var exact = allRows
+                                    .Where(r => EditionEquals(r.Edition, inferredEdition)
+                                                && r.CollectorNumber.Equals(remainder, StringComparison.OrdinalIgnoreCase))
+                                    .OrderBy(r => r.Id)
+                                    .ToList();
+                                if (exact.Count == 0)
+                                {
+                                    // Relaxed numeric core match (e.g., 296 matches 296a)
+                                    var numericCore = new string(remainder.TakeWhile(char.IsDigit).ToArray());
+                                    if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=EditionInference | NumericCoreAttempt={numericCore}");
+                                    if (!string.IsNullOrWhiteSpace(numericCore))
+                                    {
+                                        exact = allRows
+                                            .Where(r => EditionEquals(r.Edition, inferredEdition)
+                                                        && r.CollectorNumber.StartsWith(numericCore, StringComparison.OrdinalIgnoreCase))
+                                            .OrderBy(r => r.Id)
+                                            .ToList();
+                                    }
+                                }
+                                if (exact.Count > 0)
+                                {
+                                    candidates = exact; // adopt these as candidates
+                                    if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=EditionInferenceResult | ExactOrNumericCandidates={candidates.Count}");
+                                }
+                                else if (sourceIsListSet)
+                                {
+                                    // New PLST fallback: use edition+collector to fetch canonical DB name then re-search by that name (normalized)
+                                    var canonicalRow = allRows
+                                        .FirstOrDefault(r => EditionEquals(r.Edition, inferredEdition)
+                                                             && r.CollectorNumber.Equals(remainder, StringComparison.OrdinalIgnoreCase));
+                                    if (canonicalRow.Id == 0)
+                                    {
+                                        // Try numeric core in case variant letter difference
+                                        var numericCore = new string(remainder.TakeWhile(char.IsDigit).ToArray());
+                                        if (!string.IsNullOrWhiteSpace(numericCore))
+                                        {
+                                            canonicalRow = allRows.FirstOrDefault(r => EditionEquals(r.Edition, inferredEdition)
+                                                && r.CollectorNumber.StartsWith(numericCore, StringComparison.OrdinalIgnoreCase));
+                                        }
+                                    }
+                                    if (canonicalRow.Id != 0)
+                                    {
+                                        var canonicalNorm = NormalizeName(canonicalRow.Name);
+                                        // Gather every printing (any edition) whose normalized name matches canonicalNorm and is not source excluded
+                                        var crossNameCandidates = allRows
+                                            .Where(r => NormalizeName(r.Name).Equals(canonicalNorm, StringComparison.OrdinalIgnoreCase))
+                                            .OrderBy(r => r.Id)
+                                            .ToList();
+                                        // Add all inferred edition printings first (ordered) then other editions (excluding source or excluded)
+                                        candidates = crossNameCandidates
+                                            .Where(r => EditionEquals(r.Edition, inferredEdition))
+                                            .Concat(crossNameCandidates.Where(r => !r.Edition.Equals(inferredEdition, StringComparison.OrdinalIgnoreCase)
+                                                                                   && !IsAliasOfSource(r.Edition, setCode)
+                                                                                   && !excludedEditions.Contains(r.Edition)))
+                                            .ToList();
+                                        if (debugPlacement)
+                                        {
+                                            debugLog?.WriteLine($"CARD: {name} | Stage=PLSTCanonicalNameLookup | Canonical={canonicalRow.Name} | InferredEdition={inferredEdition} | NewCandidates={candidates.Count}");
+                                        }
+                                    }
+                                }
+                                else if (debugPlacement)
+                                {
+                                    debugLog?.WriteLine($"CARD: {name} | Stage=EditionInferenceResult | Candidates=0");
+                                }
+                            }
+                        }
+                    }
+
                     if (candidates.Count == 0)
                     {
-                        targetEditionByName[name] = canonicalSetCode; // fallback if only source set
-                        // target rarity same as source in this case
+                        // For PLST/PLIST we attempt a late inference using the source card's own collector number prefix before defaulting to PLST.
+                        if (sourceIsListSet && numberByName.TryGetValue(name, out var srcListCol) && !string.IsNullOrWhiteSpace(srcListCol))
+                        {
+                            var trimmedList = srcListCol.Trim();
+                            int dashIdx = trimmedList.IndexOf('-');
+                            if (dashIdx > 0)
+                            {
+                                string inferredPref = trimmedList.Substring(0, dashIdx).Trim();
+                                if (!string.IsNullOrWhiteSpace(inferredPref) && !EditionEquals(inferredPref, canonicalSetCode))
+                                {
+                                    // Choose earliest (by Id) non-excluded printing in the inferred edition (excluding alias-equal to source list set, though unlikely)
+                                    var inferredPrint = allRows
+                                        .Where(r => EditionEquals(r.Edition, inferredPref) && !IsAliasOfSource(r.Edition, canonicalSetCode) && !excludedEditions.Contains(r.Edition))
+                                        .OrderBy(r => r.Id)
+                                        .FirstOrDefault();
+                                    if (inferredPrint.Id != 0)
+                                    {
+                                        targetEditionByName[name] = inferredPrint.Edition;
+                                        targetEditionRarityByName[name] = string.IsNullOrWhiteSpace(inferredPrint.Rarity) ? rarityByName[name] : inferredPrint.Rarity;
+                                        if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=FallbackInferredFromPLST | ChosenEdition={inferredPrint.Edition} | FromPrefix={inferredPref}");
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        // Final fallback: stay in source set (PLST or normal set)
+                        targetEditionByName[name] = canonicalSetCode;
                         targetEditionRarityByName[name] = rarityByName[name];
+                        if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=FallbackSource | ChosenEdition={canonicalSetCode}");
                         continue;
                     }
-                    var earliest = candidates.OrderBy(r => r.Id).First();
-                    targetEditionByName[name] = earliest.Edition;
-                    targetEditionRarityByName[name] = earliest.Rarity;
+                    // Narrowing based on collector number pattern. For most sets prefer exact match; for List source sets prefer earliest (lowest numeric) printing in inferred edition.
+                    if (numberByName.TryGetValue(name, out var srcColRaw) && !string.IsNullOrWhiteSpace(srcColRaw))
+                    {
+                        var trimmed = srcColRaw.Trim();
+                        int dash = trimmed.IndexOf('-');
+                        if (dash > 0)
+                        {
+                            string pref = trimmed[..dash].Trim();
+                            string rest = trimmed[(dash + 1)..].Trim();
+                            if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=Narrowing | Pref={pref} | Rest={rest} | CandidateCount={candidates.Count}");
+                            if (!string.IsNullOrWhiteSpace(pref) && !string.IsNullOrWhiteSpace(rest))
+                            {
+                                if (sourceIsListSet)
+                                {
+                                    // For PLST/PLIST choose the lowest numeric core candidate within the inferred edition.
+                                    var inEdition = candidates.Where(c => EditionEquals(c.Edition, pref)).ToList();
+                                    if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=NarrowingListEditionSubset | InEditionCount={inEdition.Count}");
+                                    if (inEdition.Count > 0)
+                                    {
+                                        int NumericCore(string cn)
+                                        {
+                                            if (string.IsNullOrWhiteSpace(cn)) return int.MaxValue;
+                                            var digits = new string(cn.TakeWhile(char.IsDigit).ToArray());
+                                            if (int.TryParse(digits, out var val)) return val; else return int.MaxValue;
+                                        }
+                                        // Order by numeric core, then by presence of variant letter 'a' (preferred), then by Id for determinism
+                                        var chosenList = inEdition
+                                            .OrderBy(c => NumericCore(c.CollectorNumber))
+                                            .ThenByDescending(c => c.CollectorNumber.Any(ch => char.IsLetter(ch))) // prioritize those with letter (e.g., 150a) AFTER numeric core sort; descending so true before false
+                                            .ThenBy(c => c.Id)
+                                            .ToList();
+                                        candidates = new List<(long Id, string Name, string Edition, int? MtgsId, string Rarity, string Color, string CollectorNumber)>{ chosenList.First() };
+                                        if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=NarrowingListChosen | ChosenCollector={candidates[0].CollectorNumber}");
+                                    }
+                                }
+                                else
+                                {
+                                    var exactCandidate = candidates
+                                        .FirstOrDefault(c => EditionEquals(c.Edition, pref)
+                                                             && c.CollectorNumber.Equals(rest, StringComparison.OrdinalIgnoreCase));
+                                    if (exactCandidate.Id != 0)
+                                    {
+                                        candidates = new List<(long Id, string Name, string Edition, int? MtgsId, string Rarity, string Color, string CollectorNumber)>{ exactCandidate };
+                                        if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=NarrowingExact | Collector={rest}");
+                                    }
+                                    else
+                                    {
+                                        string numericCore = new string(rest.TakeWhile(char.IsDigit).ToArray());
+                                        if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=NarrowingNumericCoreAttempt | NumericCore={numericCore}");
+                                        if (!string.IsNullOrWhiteSpace(numericCore))
+                                        {
+                                            var numericVariant = candidates
+                                                .FirstOrDefault(c => EditionEquals(c.Edition, pref)
+                                                                     && c.CollectorNumber.StartsWith(numericCore, StringComparison.OrdinalIgnoreCase));
+                                            if (numericVariant.Id != 0)
+                                            {
+                                                candidates = new List<(long Id, string Name, string Edition, int? MtgsId, string Rarity, string Color, string CollectorNumber)>{ numericVariant };
+                                                if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=NarrowingNumericVariant | ChosenCollector={numericVariant.CollectorNumber}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    var chosen = candidates.First();
+                    // Core override: if narrowing forced a single core-set candidate but earlier there existed any non-core candidate, prefer earliest non-core.
+                    if (initialBroadCandidates.Count > 0 && coreSetCodes.Contains(chosen.Edition))
+                    {
+                        var nonCore = initialBroadCandidates.Where(c => !coreSetCodes.Contains(c.Edition)).OrderBy(c => c.Id).FirstOrDefault();
+                        if (nonCore.Id != 0)
+                        {
+                            if (debugPlacement) debugLog?.WriteLine($"CARD: {name} | Stage=CorePreferenceOverrideExact | OldCore={chosen.Edition} | NewNonCore={nonCore.Edition}");
+                            chosen = nonCore;
+                        }
+                    }
+                    // If more than one candidate remains (rare except earlier broad match), prefer non-core sets over core sets
+                    if (candidates.Count > 1)
+                    {
+                        var before = candidates.First();
+                        candidates = candidates
+                            .OrderBy(c => coreSetCodes.Contains(c.Edition) ? 1 : 0) // non-core (0) before core (1)
+                            .ThenBy(c => c.Id) // then earliest Id for determinism
+                            .ToList();
+                        if (debugPlacement && (before.Id != candidates.First().Id))
+                        {
+                            debugLog?.WriteLine($"CARD: {name} | Stage=CorePreferenceReorder | NewFirstEdition={candidates.First().Edition} | OldFirstEdition={before.Edition}");
+                        }
+                        chosen = candidates.First();
+                    }
+                    if (debugPlacement)
+                    {
+                        debugLog?.WriteLine($"CARD: {name} | Stage=Chosen | Edition={chosen.Edition} | Collector={chosen.CollectorNumber} | SourceIsList={sourceIsListSet}");
+                    }
+                    targetEditionByName[name] = chosen.Edition;
+                    targetEditionRarityByName[name] = string.IsNullOrWhiteSpace(chosen.Rarity) ? rarityByName[name] : chosen.Rarity;
+                    if ((!colorByName.ContainsKey(name) || string.IsNullOrWhiteSpace(colorByName[name])) && !string.IsNullOrWhiteSpace(chosen.Color))
+                    {
+                        colorByName[name] = chosen.Color;
+                    }
+                }
+                }
+                finally
+                {
+                    debugLog?.Dispose();
                 }
             }
 
@@ -164,9 +495,18 @@ namespace Enfolderer.App.Utilities
                 {
                     // Fallback 1: color from chosen target edition printing if present
                     var targetColor = allRows
-                        .Where(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && r.Edition.Equals(targetEdition, StringComparison.OrdinalIgnoreCase))
+                        .Where(r => r.Edition.Equals(targetEdition, StringComparison.OrdinalIgnoreCase) && r.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
                         .Select(r => r.Color)
                         .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c));
+                    if (string.IsNullOrWhiteSpace(targetColor) && name.Contains(" // "))
+                    {
+                        var front = name.Split(new[]{" // "}, StringSplitOptions.None)[0];
+                        targetColor = allRows
+                            .Where(r => r.Edition.Equals(targetEdition, StringComparison.OrdinalIgnoreCase)
+                                        && r.Name.Split(new[]{" // "}, StringSplitOptions.None)[0].Equals(front, StringComparison.OrdinalIgnoreCase))
+                            .Select(r => r.Color)
+                            .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c));
+                    }
                     if (!string.IsNullOrWhiteSpace(targetColor))
                     {
                         col = targetColor;
