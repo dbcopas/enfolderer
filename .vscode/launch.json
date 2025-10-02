@@ -28,7 +28,7 @@
             "console": "internalConsole",
             "stopAtEntry": false,
             "env": {
-                "ENFOLDERER_DEBUG_PLACEMENT": "1"
+                "ENFOLDERER_QTY_DEBUG": "1"
             }
         },
         {

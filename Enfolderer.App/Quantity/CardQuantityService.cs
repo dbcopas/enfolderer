@@ -17,6 +17,9 @@ namespace Enfolderer.App.Quantity;
 /// </summary>
 public sealed class CardQuantityService : IQuantityService
 {
+    // Tracks (set:number) miss occurrences to suppress endless logging loops when enrichment runs repeatedly.
+    private static readonly Dictionary<(string set,string num), int> _missCounts = new();
+    private const int MissLogLimitPerKey = 3; // after this, additional misses for the same key are suppressed
     private readonly IRuntimeFlags _flags;
     private readonly IRuntimeFlagService? _flagService;
     private readonly IQuantityRepository? _quantityRepo;
@@ -56,13 +59,22 @@ public sealed class CardQuantityService : IQuantityService
             Console.WriteLine($"[QtyEnrich] Start: quantityKeys={collection.Quantities.Count} cards={cards.Count}");
             try
             {
-                var firstSets = collection.Quantities.Keys
+                // Snapshot keys defensively to avoid InvalidOperationException if underlying dictionary mutates mid-enumeration.
+                var keySnapshot = collection.Quantities.Keys.ToArray();
+                var firstSets = keySnapshot
                     .GroupBy(k => k.Item1)
                     .Take(5)
                     .Select(g => g.Key + ":" + string.Join("|", g.Take(8).Select(t => t.Item2)));
                 _log?.Log("KeysSample " + string.Join(" || ", firstSets), LogCategories.QtyEnrich);
             }
-            catch (System.Exception) { throw; }
+            catch (System.InvalidOperationException ioe)
+            {
+                _log?.Log("KeysSample enumeration race (continuing): " + ioe.Message, LogCategories.QtyCoordinator);
+            }
+            catch (System.Exception ex)
+            {
+                _log?.Log("KeysSample unexpected error (continuing): " + ex.Message, LogCategories.QtyCoordinator);
+            }
         }
         for (int i = 0; i < cards.Count; i++)
         {
@@ -120,18 +132,26 @@ public sealed class CardQuantityService : IQuantityService
             {
                 if (qtyDebug)
                 {
-                    try
+                    var missKey = (setLower, baseNum);
+                    bool shouldLog = true;
+                    if (_missCounts.TryGetValue(missKey, out var count))
                     {
-                        var sampleKeys = string.Join(", ", collection.Quantities.Keys.Where(k => k.Item1 == setLower).Take(25).Select(k => k.Item1+":"+k.Item2));
-                        _log?.Log($"MISS {c.Set} {baseNum} (trim {trimmed}) sampleKeys={sampleKeys}", LogCategories.Collection);
-                        Console.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found.");
-                        if (unmatchedSamples.Count < 15)
-                        {
-                            unmatchedSamples.Add($"{c.Set}:{baseNum} trim={trimmed} raw='{c.Number}'");
-                        }
-                        unmatchedCount++;
+                        if (count >= MissLogLimitPerKey) shouldLog = false; else _missCounts[missKey] = count + 1;
                     }
-                    catch (System.Exception) { throw; }
+                    else _missCounts[missKey] = 1;
+                    if (shouldLog)
+                    {
+                        try
+                        {
+                            var sampleKeys = string.Join(", ", collection.Quantities.Keys.Where(k => k.Item1 == setLower).Take(25).Select(k => k.Item1+":"+k.Item2));
+                            _log?.Log($"MISS {c.Set} {baseNum} (trim {trimmed}) sampleKeys={sampleKeys}", LogCategories.Collection);
+                            Console.WriteLine($"[Collection][MISS] {c.Set} {baseNum} (trim {trimmed}) not found.");
+                        }
+                        catch (System.InvalidOperationException) { /* ignore sampling race */ }
+                    }
+                    if (unmatchedSamples.Count < 15)
+                        unmatchedSamples.Add($"{c.Set}:{baseNum} trim={trimmed} raw='{c.Number}'");
+                    unmatchedCount++;
                 }
                 if (c.Quantity != 0) { cards[i] = c with { Quantity = 0 }; updated++; }
                 continue;
@@ -166,6 +186,76 @@ public sealed class CardQuantityService : IQuantityService
         EnrichQuantities(collection, cards);
     // Apply MFC display adjustment to the canonical card list first.
     AdjustMfcQuantities(cards);
+        // Merge paired-number quantities (e.g., 296(361)) so ownership reflects either number having quantity
+        MergePairedNumberQuantities(collection, cards);
+    }
+
+    private void MergePairedNumberQuantities(CardCollectionData collection, List<CardEntry> cards)
+    {
+        if (collection.Quantities.Count == 0) return;
+        bool qtyDebug = _flagService?.QtyDebug ?? _flags.QtyDebug;
+        int updates = 0;
+        // Take a snapshot to avoid InvalidOperationException if the underlying list is structurally modified (background metadata resolution)
+        var snapshot = cards.ToArray();
+        int originalCount = snapshot.Length;
+        for (int idx = 0; idx < snapshot.Length; idx++)
+        {
+            if (idx >= cards.Count) break; // underlying list shrank; abort safely
+            var card = snapshot[idx];
+            if (card.IsBackFace) continue;
+            if (string.IsNullOrEmpty(card.Set) || string.IsNullOrEmpty(card.Number)) continue;
+            // Only interested in entries created from the && pairing: EffectiveNumber is something like 296(361)
+            // Pattern: primary(secondary) with both numeric
+            string eff = card.EffectiveNumber;
+            int open = eff.IndexOf('(');
+            int close = eff.EndsWith(')') ? eff.Length - 1 : -1;
+            if (open <= 0 || close <= open + 1) continue;
+            var primary = eff.Substring(0, open);
+            var secondary = eff.Substring(open + 1, close - open - 1);
+            if (!IsAllDigits(primary) || !IsAllDigits(secondary)) continue;
+            string setLower = card.Set.ToLowerInvariant();
+            int primaryQty = card.Quantity;
+            int secondaryQty = 0;
+            // Look up secondary number in collection quantities (using trimmed-leading-zero fallback like enrichment does)
+            string secondaryTrim = secondary.TrimStart('0'); if (secondaryTrim.Length == 0) secondaryTrim = "0";
+            if (!collection.Quantities.TryGetValue((setLower, secondary), out secondaryQty))
+            {
+                if (!string.Equals(secondaryTrim, secondary, StringComparison.Ordinal) && collection.Quantities.TryGetValue((setLower, secondaryTrim), out int secondaryTrimQty))
+                    secondaryQty = secondaryTrimQty;
+            }
+            // Treat negative (un-enriched) quantities as zero for paired display purposes so x(y) always renders
+            if (primaryQty < 0) primaryQty = 0;
+            if (secondaryQty < 0) secondaryQty = 0;
+            int merged = primaryQty >= secondaryQty ? primaryQty : secondaryQty;
+            // Always annotate paired component quantities if missing OR if values differ OR if merged value differs from stored Quantity
+            if (merged != card.Quantity || card.PrimaryPairedQuantity != primaryQty || card.SecondaryPairedQuantity != secondaryQty)
+            {
+                if (idx < cards.Count) // defensive bounds check
+                    cards[idx] = card with { Quantity = merged, PrimaryPairedQuantity = primaryQty, SecondaryPairedQuantity = secondaryQty };
+                updates++;
+                if (qtyDebug) _log?.Log($"PairedQtyMerge {card.Set} {eff} primary={primaryQty} secondary={secondaryQty} merged={merged}", LogCategories.QtyEnrich);
+            }
+            else if (card.PrimaryPairedQuantity == null && card.SecondaryPairedQuantity == null)
+            {
+                // Force population even when both are zero and merged already equals existing quantity.
+                if (idx < cards.Count)
+                    cards[idx] = card with { PrimaryPairedQuantity = primaryQty, SecondaryPairedQuantity = secondaryQty };
+                if (qtyDebug) _log?.Log($"PairedQtyAnnotateOnly {card.Set} {eff} primary={primaryQty} secondary={secondaryQty}", LogCategories.QtyEnrich);
+            }
+        }
+        if (qtyDebug && updates>0) _log?.Log($"PairedQtyMerge applied to {updates} entries", LogCategories.QtyEnrich);
+        else if (qtyDebug)
+        {
+            // Diagnostics: list any paired EffectiveNumbers still missing component annotations
+            var missing = cards.Where(c => c.EffectiveNumber.IndexOf('(') > 0 && c.EffectiveNumber.EndsWith(")") && c.PrimaryPairedQuantity == null).Take(10).ToList();
+            if (missing.Count > 0)
+                _log?.Log("PairedQtyDiag missingAnnotations=" + string.Join(",", missing.Select(m => m.Set+":"+m.EffectiveNumber)), LogCategories.QtyEnrich);
+        }
+    }
+
+    private static bool IsAllDigits(string s)
+    {
+        for (int i=0;i<s.Length;i++) if (!char.IsDigit(s[i])) return false; return s.Length>0;
     }
 
     public int ToggleQuantity(
