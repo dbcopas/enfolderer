@@ -3,10 +3,44 @@ using System.Text.RegularExpressions;
 
 namespace Enfolderer.App.Core;
 
-public record CardEntry(string Name, string Number, string? Set, bool IsModalDoubleFaced, bool IsBackFace = false, string? FrontRaw = null, string? BackRaw = null, string? DisplayNumber = null, int Quantity = -1)
+public record CardEntry(
+    string Name,
+    string Number,
+    string? Set,
+    bool IsModalDoubleFaced,
+    bool IsBackFace = false,
+    string? FrontRaw = null,
+    string? BackRaw = null,
+    string? DisplayNumber = null,
+    int Quantity = -1,
+    // Paired number support: if DisplayNumber is like 296(361) we can preserve individual source quantities
+    int? PrimaryPairedQuantity = null,
+    int? SecondaryPairedQuantity = null
+    )
 {
 	public string EffectiveNumber => DisplayNumber ?? Number;
 	public string Display => string.IsNullOrWhiteSpace(EffectiveNumber) ? Name : $"{EffectiveNumber} {Name}";
+	public bool HasPairedNumbers
+	{
+		get
+		{
+			var eff = EffectiveNumber;
+			int open = eff.IndexOf('(');
+			return open > 0 && eff.EndsWith(")") && open < eff.Length - 2; // at least one digit inside parentheses
+		}
+	}
+
+	public string QuantityDisplay
+	{
+		get
+		{
+			if (!HasPairedNumbers || (PrimaryPairedQuantity is null && SecondaryPairedQuantity is null))
+				return Quantity < 0 ? string.Empty : Quantity.ToString();
+			string left = PrimaryPairedQuantity?.ToString() ?? "0";
+			string right = SecondaryPairedQuantity?.ToString() ?? "0";
+			return $"{left}({right})";
+		}
+	}
 	public static CardEntry FromCsv(string line)
 	{
 		if (string.IsNullOrWhiteSpace(line)) throw new ArgumentException("Empty line");

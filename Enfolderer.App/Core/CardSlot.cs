@@ -51,6 +51,8 @@ public class CardSlot : INotifyPropertyChanged
     private static readonly SemaphoreSlim FetchGate = new(4);
     public string Name { get; }
     public string Number { get; }
+    // Provide EffectiveNumber for bindings (mirrors CardEntry.EffectiveNumber; here Number already stores the effective form)
+    public string EffectiveNumber => Number;
     public string Set { get; }
     public string Tooltip { get; }
     public Brush Background { get; }
@@ -62,7 +64,24 @@ public class CardSlot : INotifyPropertyChanged
     public ImageSource? ImageSource { get => _imageSource; private set { _imageSource = value; OnPropertyChanged(); } }
     private int _quantity;
     public int Quantity { get => _quantity; set { if (_quantity != value) { _quantity = value; OnPropertyChanged(); OnPropertyChanged(nameof(QuantityDisplay)); } } }
-    public string QuantityDisplay => (IsPlaceholderBack || _quantity < 0) ? string.Empty : _quantity.ToString();
+
+    private int? _primaryPairedQuantity;
+    private int? _secondaryPairedQuantity;
+    public string QuantityDisplay
+    {
+        get
+        {
+            if (IsPlaceholderBack || _quantity < 0) return string.Empty;
+            // When paired, always display the explicit primary/secondary component quantities even if merged Quantity differs.
+            if (_primaryPairedQuantity.HasValue && _secondaryPairedQuantity.HasValue)
+            {
+                int left = _primaryPairedQuantity.Value;
+                int right = _secondaryPairedQuantity.Value;
+                return $"{left}({right})";
+            }
+            return _quantity.ToString();
+        }
+    }
     private bool _isSearchHighlight;
     public bool IsSearchHighlight { get => _isSearchHighlight; set { if (_isSearchHighlight != value) { _isSearchHighlight = value; OnPropertyChanged(); } } }
 
@@ -80,6 +99,9 @@ public class CardSlot : INotifyPropertyChanged
             _quantity = -1;
         else
             _quantity = entry.Quantity < 0 ? 0 : entry.Quantity;
+        // Capture paired quantities (so UI can display x(y)). We do NOT overwrite _quantity here; merged quantity is only for non-paired display.
+        _primaryPairedQuantity = entry.PrimaryPairedQuantity;
+        _secondaryPairedQuantity = entry.SecondaryPairedQuantity;
     }
 
     public CardSlot(string placeholder, int index)

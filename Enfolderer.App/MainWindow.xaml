@@ -54,7 +54,7 @@
                         <TextBlock Text="{Binding QuantityDisplay}" FontSize="11" Foreground="White" FontWeight="Bold" />
                     </Border>
                     <StackPanel Grid.Row="1" Margin="2" x:Name="InfoPanel">
-                        <TextBlock Text="{Binding Number}" FontSize="11" Foreground="#EEE" HorizontalAlignment="Center"/>
+                        <TextBlock Text="{Binding EffectiveNumber}" FontSize="11" Foreground="#EEE" HorizontalAlignment="Center"/>
                         <TextBlock Text="{Binding Name}" TextWrapping="Wrap" FontSize="11" 
                                    Foreground="White" HorizontalAlignment="Center" TextAlignment="Center" Margin="1"/>
                         <TextBlock Text="{Binding Set}" FontSize="9" Foreground="#CCC" HorizontalAlignment="Center" />
