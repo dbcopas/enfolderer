@@ -32,6 +32,19 @@ namespace Enfolderer.App;
 public partial class MainWindow : Window
 {
     private readonly BinderViewModel _vm;
+    private void SearchFocus_Executed(object sender, ExecutedRoutedEventArgs e)
+    {
+        try
+        {
+            var tb = this.FindName("SearchNameBox") as System.Windows.Controls.TextBox;
+            if (tb != null)
+            {
+                tb.Focus();
+                tb.SelectAll();
+            }
+        }
+        catch { }
+    }
 
     private async void UpdateMainDbFromCsv_Click(object sender, RoutedEventArgs e)
     {
@@ -116,6 +129,47 @@ public partial class MainWindow : Window
         {
             MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    // Tools menu handlers (delegate to view model)
+    private void Layout4x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "4x3"; }
+    private void Layout3x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "3x3"; }
+    private void Layout2x2_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "2x2"; }
+
+    private void SetPagesPerBinder_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string input = Microsoft.VisualBasic.Interaction.InputBox("Pages per binder?", "Set Pages/Binder", _vm.PagesPerBinder.ToString());
+            if (string.IsNullOrWhiteSpace(input)) return;
+            if (int.TryParse(input.Trim(), out int pages) && pages > 0 && pages <= 1000)
+            {
+                _vm.PagesPerBinder = pages;
+                _vm.SetStatus($"Pages/Binder set to {pages}");
+            }
+            else MessageBox.Show(this, "Invalid number.", "Pages/Binder", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex) { _vm.SetStatus("Pages/Binder error: " + ex.Message); }
+    }
+
+    private void JumpDialog_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string binder = Microsoft.VisualBasic.Interaction.InputBox("Binder number? (blank to keep current)", "Jump", "");
+            string page = Microsoft.VisualBasic.Interaction.InputBox("Page number? (blank to keep current)", "Jump", "");
+            bool binderChanged = false; bool pageChanged = false;
+            if (!string.IsNullOrWhiteSpace(binder) && int.TryParse(binder.Trim(), out int b) && b > 0)
+            {
+                _vm.JumpBinderInput = b.ToString(); binderChanged = true;
+            }
+            if (!string.IsNullOrWhiteSpace(page) && int.TryParse(page.Trim(), out int p) && p > 0)
+            {
+                _vm.JumpPageInput = p.ToString(); pageChanged = true;
+            }
+            if (binderChanged || pageChanged) _vm.JumpToPageCommand.Execute(null);
+        }
+        catch (Exception ex) { _vm.SetStatus("Jump error: " + ex.Message); }
     }
 
     // Auto-import all binder set codes not present in mainDb
@@ -636,11 +690,45 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         return false;
     }
 
+    // Exact set code jump (case-insensitive). Returns true if navigation occurred.
+    private bool TryJumpToSetExact(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code) || _orderedFaces.Count == 0) return false;
+        var comp = StringComparison.OrdinalIgnoreCase;
+        // Prefer exact code equality; locate first face with matching Set.
+        for (int i = 0; i < _orderedFaces.Count; i++)
+        {
+            var ce = _orderedFaces[i];
+            if (!string.IsNullOrWhiteSpace(ce.Set) && string.Equals(ce.Set.Trim(), code.Trim(), comp))
+            {
+                _lastSearchIndex = i;
+                RequestHighlight(i);
+                int slotsPerPage = SlotsPerPage;
+                int targetPage = (i / slotsPerPage) + 1;
+                int binderIndex = (targetPage - 1) / PagesPerBinder;
+                int binderOneBased = binderIndex + 1;
+                int pageWithinBinder = ((targetPage - 1) % PagesPerBinder) + 1;
+                if (_nav.CanJumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder))
+                    _nav.JumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder);
+                SetStatus($"Jumped to set '{code.ToUpperInvariant()}'");
+                return true;
+            }
+        }
+        return false;
+    }
+
     public void PerformSearchNext()
     {
         try
         {
-            if (TryFindNextByName(SearchName, out int idx))
+            // Heuristic: if search term length <= 3 attempt exact set jump first.
+            string term = SearchName?.Trim() ?? string.Empty;
+            if (term.Length > 0 && term.Length <= 3)
+            {
+                if (TryJumpToSetExact(term)) return; // done if set found
+            }
+
+            if (TryFindNextByName(term, out int idx))
             {
                 _lastSearchIndex = idx;
                 RequestHighlight(idx);
@@ -661,11 +749,14 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                     if (_nav.CanJumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder))
                         _nav.JumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder);
                 }
-                SetStatus($"Found '{SearchName}' at face {idx + 1}.");
+                SetStatus($"Found '{term}' at face {idx + 1}.");
             }
             else
             {
-                SetStatus(string.IsNullOrWhiteSpace(SearchName) ? "Enter a name to search." : $"No match for '{SearchName}'.");
+                if (term.Length <= 3)
+                    SetStatus($"No set or name match for '{term}'.");
+                else
+                    SetStatus(string.IsNullOrWhiteSpace(term) ? "Enter a name to search." : $"No match for '{term}'.");
             }
         }
         catch (Exception ex)
