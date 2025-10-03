@@ -6,8 +6,14 @@
     xmlns:local="clr-namespace:Enfolderer.App"
     xmlns:qty="clr-namespace:Enfolderer.App.Quantity"
     mc:Ignorable="d"
-    Title="MTG Binder" Height="900" Width="1400" MinWidth="1100" MinHeight="700"
+    Title="MTG Binder" Height="900" Width="1400" MinWidth="900" MinHeight="650" ResizeMode="CanResize" 
     Background="{Binding BinderBackground}">
+    <Window.InputBindings>
+        <KeyBinding Modifiers="Control" Key="F" Command="ApplicationCommands.Find" />
+    </Window.InputBindings>
+    <Window.CommandBindings>
+        <CommandBinding Command="ApplicationCommands.Find" Executed="SearchFocus_Executed" />
+    </Window.CommandBindings>
     <Window.Resources>
     <BooleanToVisibilityConverter x:Key="BoolToVis" />
     <qty:QuantityImageConverter x:Key="QuantityImageConverter" />
@@ -116,6 +122,19 @@
                 <Separator />
                 <MenuItem Header="E_xit" Click="Exit_Click" />
             </MenuItem>
+            <MenuItem Header="_Tools">
+                <MenuItem Header="Layout 4x3" Click="Layout4x3_Click" />
+                <MenuItem Header="Layout 3x3" Click="Layout3x3_Click" />
+                <MenuItem Header="Layout 2x2" Click="Layout2x2_Click" />
+                <Separator />
+                <MenuItem Header="Set Pages/Binder..." Click="SetPagesPerBinder_Click" />
+                <MenuItem Header="Jump to Binder/Page..." Click="JumpDialog_Click" />
+                <Separator />
+                <MenuItem Header="Auto Import Missing Sets" Click="AutoImportMissingSets_Click" />
+            </MenuItem>
+            <MenuItem Header="_Search">
+                <MenuItem Header="Focus Search (Ctrl+F)" Command="ApplicationCommands.Find" />
+            </MenuItem>
         </Menu>
         <StatusBar DockPanel.Dock="Bottom">
             <!-- Primary status (metadata resolving / all metadata loaded) -->
@@ -148,24 +167,8 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
-            <!-- Fixed layout navigation bar -->
-            <Grid Grid.Row="0" Margin="10" HorizontalAlignment="Stretch">
-                <Grid.ColumnDefinitions>
-                    <!-- Left nav buttons group -->
-                    <ColumnDefinition Width="Auto" />
-                    <!-- Spacer -->
-                    <ColumnDefinition Width="20" />
-                    <!-- Center label fixed width so outer buttons never move -->
-                    <ColumnDefinition Width="300" />
-                    <!-- Spacer -->
-                    <ColumnDefinition Width="20" />
-                    <!-- Right nav buttons group -->
-                    <ColumnDefinition Width="Auto" />
-                    <!-- Flexible space pushes jump panel to far right -->
-                    <ColumnDefinition Width="*" />
-                    <!-- Jump panel -->
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+            <!-- Simplified responsive navigation bar using WrapPanel -->
+            <Grid Grid.Row="0" Margin="6" HorizontalAlignment="Stretch">
                 <Grid.Resources>
                     <Style x:Key="NavButtonStyle" TargetType="Button">
                         <Setter Property="Width" Value="60" />
@@ -181,50 +184,29 @@
                         </Setter>
                     </Style>
                 </Grid.Resources>
-                <!-- Left group -->
-                <StackPanel Orientation="Horizontal" Grid.Column="0" VerticalAlignment="Center">
+                <WrapPanel Margin="0" ItemHeight="28" ItemWidth="Auto" VerticalAlignment="Center">
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Open..." Click="OpenCollection_Click" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Refresh" Click="RefreshQuantities_Click" ToolTip="Force re-apply quantities and rebuild current pages" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="⏪ Prev" Command="{Binding PrevBinderCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="⏮ First" Command="{Binding FirstCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="◀ Prev" Command="{Binding PrevCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Set ◀" Command="{Binding PrevSetCommand}" />
-                    <Button Style="{StaticResource NavButtonStyle}" Content="Open" Click="OpenCollection_Click" />
-                    <Button Style="{StaticResource NavButtonStyle}" Content="Refresh" Click="RefreshQuantities_Click" />
-                    <Button Style="{StaticResource NavButtonStyle}" Content="Auto mprt" Click="AutoImportMissingSets_Click" ToolTip="Import any binder set codes missing from mainDb via Scryfall" />
-                </StackPanel>
-                <!-- Center fixed-width page display -->
-                <Border Grid.Column="2" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding PageDisplay}" FontSize="16" FontWeight="Bold" TextAlignment="Center" TextTrimming="CharacterEllipsis" />
-                </Border>
-                <!-- Right group -->
-                <StackPanel Orientation="Horizontal" Grid.Column="4" VerticalAlignment="Center">
+                    <!-- Fixed-width container to prevent right-side control shifting when PageDisplay length changes -->
+                    <Border VerticalAlignment="Center" Margin="8,0" Padding="0" Width="220">
+                        <TextBlock Text="{Binding PageDisplay}" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center" />
+                    </Border>
                     <Button Style="{StaticResource NavButtonStyle}" Content="Next ▶" Command="{Binding NextCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Last ⏭" Command="{Binding LastCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Binder ⏩" Command="{Binding NextBinderCommand}" />
                     <Button Style="{StaticResource NavButtonStyle}" Content="Set ▶" Command="{Binding NextSetCommand}" />
-                </StackPanel>
-                <!-- Search panel (occupies flexible space before jump controls) -->
-                <StackPanel Orientation="Horizontal" Grid.Column="5" VerticalAlignment="Center" Margin="20,0,0,0">
-                    <TextBlock Text="Find:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                    <TextBox x:Name="SearchNameBox" Width="160" Text="{Binding SearchName, UpdateSourceTrigger=PropertyChanged}" KeyDown="SearchNameBox_KeyDown"/>
-                    <Button Content="Find ▶" Command="{Binding SearchNextCommand}" Margin="6,0,0,0" MouseRightButtonUp="SearchButton_MouseRightButtonUp" ToolTip="Left click: find next name match. Right click: find next set code match." />
-                </StackPanel>
-                <!-- Jump controls at far right -->
-                <StackPanel Orientation="Horizontal" Grid.Column="6" VerticalAlignment="Center" Margin="10,0,0,0">
-                    <TextBlock Text="Layout:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                    <ComboBox Width="70" SelectedValue="{Binding LayoutMode}" SelectedValuePath="Content" Margin="0,0,10,0">
-                        <ComboBoxItem Content="4x3" />
-                        <ComboBoxItem Content="3x3" />
-                        <ComboBoxItem Content="2x2" />
-                    </ComboBox>
-                    <TextBlock Text="Pages/Binder:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                    <TextBox Width="60" Text="{Binding PagesPerBinder, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Text="Binder:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                    <TextBox Width="40" Text="{Binding JumpBinderInput, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Text="Page:" VerticalAlignment="Center" Margin="10,0,4,0" />
-                    <TextBox Width="50" Text="{Binding JumpPageInput, UpdateSourceTrigger=PropertyChanged}" />
-                    <Button Content="Go" Command="{Binding JumpToPageCommand}" Margin="8,0,0,0" />
-                </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="Find:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <TextBox x:Name="SearchNameBox" Width="170" MinWidth="120" Text="{Binding SearchName, UpdateSourceTrigger=PropertyChanged}" KeyDown="SearchNameBox_KeyDown"/>
+                        <Button Content="Find ▶" Command="{Binding SearchNextCommand}" Margin="6,0,0,0" MouseRightButtonUp="SearchButton_MouseRightButtonUp" ToolTip="Left click: find next name match. Right click: find next set code match." />
+                    </StackPanel>
+                </WrapPanel>
             </Grid>
+            <!-- END responsive navigation bar -->
             <Grid Grid.Row="1" Margin="20" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
