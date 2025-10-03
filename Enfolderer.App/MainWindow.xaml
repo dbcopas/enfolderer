@@ -131,6 +131,8 @@
                 <MenuItem Header="Jump to Binder/Page..." Click="JumpDialog_Click" />
                 <Separator />
                 <MenuItem Header="Auto Import Missing Sets" Click="AutoImportMissingSets_Click" />
+                <Separator />
+                <MenuItem Header="Export Common Inventory From Excel..." Click="ExportCommonInventoryFromExcel_Click" />
             </MenuItem>
             <MenuItem Header="_Search">
                 <MenuItem Header="Focus Search (Ctrl+F)" Command="ApplicationCommands.Find" />

@@ -190,6 +190,27 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ExportCommonInventoryFromExcel_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Select Excel File (.xlsx)",
+                Filter = "Excel Files (*.xlsx)|*.xlsx"
+            };
+            if (dlg.ShowDialog(this) != true) return;
+            string outPath = Enfolderer.App.Utilities.ExcelCommonInventoryExporter.Export(dlg.FileName);
+            _vm.SetStatus($"Common inventory exported: {System.IO.Path.GetFileName(outPath)}");
+            MessageBox.Show(this, $"Export complete:\n{outPath}", "Excel Common Inventory", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Excel Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            _vm.SetStatus("Excel export error: " + ex.Message);
+        }
+    }
+
     public MainWindow()
     {
         // Invoke generated InitializeComponent if present; otherwise manual load (design-time / analysis env may lack XAML compile)
