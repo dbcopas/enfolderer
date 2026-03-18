@@ -78,3 +78,20 @@ WS 1-8
 # Final Fantasy Through the Ages
 =FCA
 1-64
+
+=MAR
+1-40
+44
+54-56
+63
+65
+67
+69
+77-80
+98
+
+=TLE
+1-61
+
+=PZA
+1-20
