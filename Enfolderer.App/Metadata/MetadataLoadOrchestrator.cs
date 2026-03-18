@@ -47,7 +47,7 @@ public class MetadataLoadOrchestrator
     {
         foreach (var p in load.PendingVariantPairs) pendingVariantPairs.Add(p);
         foreach (var ps in load.Specs)
-            pendingSpecs.Add(new CardSpec(ps.SetCode, ps.Number, ps.OverrideName, ps.ExplicitEntry, ps.NumberDisplayOverride){ Resolved = ps.Resolved });
+            pendingSpecs.Add(new CardSpec(ps.SetCode, ps.Number, ps.OverrideName, ps.ExplicitEntry, ps.NumberDisplayOverride, ps.FaceOverride){ Resolved = ps.Resolved });
 
     await _specResolution.ResolveAsync(load.InitialFetchList, load.InitialSpecIndexes, 5, specs as List<CardSpec> ?? new List<CardSpec>(specs), mfcBacks, setStatus);
         // Load collection BEFORE first card list build so automatic initial enrichment (custom/mainDb-only quantities) can occur immediately.

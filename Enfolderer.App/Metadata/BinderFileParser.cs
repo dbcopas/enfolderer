@@ -269,6 +269,33 @@ public sealed class BinderFileParser
                     continue;
                 }
             }
+            // SB/SF face-override suffix: e.g. 199-201SB (back only) or 199-201SF (front only)
+            // Must be checked before general RangeSuffixRegex to avoid treating SB/SF as a collector number suffix.
+            if (numberPart.EndsWith("SB", StringComparison.OrdinalIgnoreCase) || numberPart.EndsWith("SF", StringComparison.OrdinalIgnoreCase))
+            {
+                string faceOverride = numberPart[^2..].ToUpperInvariant(); // "SB" or "SF"
+                string corePart = numberPart[..^2];
+                if (corePart.Contains('-'))
+                {
+                    var dashParts = corePart.Split('-', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                    if (dashParts.Length == 2 && int.TryParse(dashParts[0], out int frs) && int.TryParse(dashParts[1], out int fre) && frs <= fre)
+                    {
+                        for (int n = frs; n <= fre; n++)
+                        {
+                            var numStr = n.ToString();
+                            parsedSpecs.Add(new BinderParsedSpec(currentSet, numStr, null, false, null, null, faceOverride));
+                            fetchList.Add(new FetchSpec(currentSet, numStr, null, parsedSpecs.Count - 1));
+                        }
+                        continue;
+                    }
+                }
+                else if (int.TryParse(corePart, out _))
+                {
+                    parsedSpecs.Add(new BinderParsedSpec(currentSet, corePart, nameOverride, false, null, null, faceOverride));
+                    fetchList.Add(new FetchSpec(currentSet, corePart, nameOverride, parsedSpecs.Count - 1));
+                    continue;
+                }
+            }
             var rangeSuffixMatch = RangeSuffixRegex.Match(numberPart);
             if (rangeSuffixMatch.Success)
             {
@@ -627,4 +654,4 @@ public sealed record BinderParseResult(
         new BinderParseResult(hash, false, new List<CardEntry>(), specs, fetch, initial, pendingPairs, dir, backImage, pagesOverride, layoutOverride, httpDebug);
 }
 
-public sealed record BinderParsedSpec(string SetCode, string Number, string? OverrideName, bool ExplicitEntry, string? NumberDisplayOverride, CardEntry? Resolved);
+public sealed record BinderParsedSpec(string SetCode, string Number, string? OverrideName, bool ExplicitEntry, string? NumberDisplayOverride, CardEntry? Resolved, string? FaceOverride = null);
