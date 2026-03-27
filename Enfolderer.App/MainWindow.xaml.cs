@@ -131,6 +131,48 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ExportWantList_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string path = Utilities.WantListExporter.Export(_vm.Cards);
+            _vm.SetStatus($"Want list exported: {System.IO.Path.GetFileName(path)}");
+            MessageBox.Show(this, $"Export complete:\n{path}", "Want List Export", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ExportWantListMoxfield_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string path = Utilities.WantListExporter.ExportMoxfield(_vm.Cards);
+            _vm.SetStatus($"Moxfield want list exported: {System.IO.Path.GetFileName(path)}");
+            MessageBox.Show(this, $"Export complete:\n{path}", "Moxfield Want List Export", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ExportWantListMoxfieldCsv_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string path = Utilities.WantListExporter.ExportMoxfieldCsv(_vm.Cards);
+            _vm.SetStatus($"Moxfield CSV exported: {System.IO.Path.GetFileName(path)}");
+            MessageBox.Show(this, $"Export complete:\n{path}", "Moxfield CSV Export", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     // Tools menu handlers (delegate to view model)
     private void Layout4x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "4x3"; }
     private void Layout3x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "3x3"; }
@@ -458,6 +500,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     }
     private readonly BinderSession _session = new();
     private List<CardEntry> _cards => _session.Cards;
+    public IReadOnlyList<CardEntry> Cards => _session.Cards;
     private List<CardEntry> _orderedFaces => _session.OrderedFaces; // reordered faces honoring placement constraints
     private List<CardSpec> _specs => _session.Specs; // raw specs in file order
     private System.Collections.Concurrent.ConcurrentDictionary<int, CardEntry> _mfcBacks => _session.MfcBacks; // synthetic back faces keyed by spec index

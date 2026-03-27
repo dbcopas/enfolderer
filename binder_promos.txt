@@ -124,7 +124,7 @@ T 1-2
 =sch
 1-22
 23e
-24-44
+24-45SF
 # Regional CHamp Quall 2022
 =prcq
 1-3
