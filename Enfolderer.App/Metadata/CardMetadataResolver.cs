@@ -43,8 +43,8 @@ public class CardMetadataResolver
         return Path.Combine(CardCacheDir, safeSet + "-" + safeNum + ".json");
     }
 
-    private record CardCacheEntry(string Set, string Number, string Name, bool IsMfc, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion, DateTime FetchedUtc);
-    public record CachedFace(string Name,string Number,string? Set,bool IsMfc,bool IsBack,string? FrontRaw,string? BackRaw,string? FrontImageUrl,string? BackImageUrl,string? Layout,int SchemaVersion);
+    private record CardCacheEntry(string Set, string Number, string Name, bool IsMfc, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion, DateTime FetchedUtc, decimal? PriceEur = null);
+    public record CachedFace(string Name,string Number,string? Set,bool IsMfc,bool IsBack,string? FrontRaw,string? BackRaw,string? FrontImageUrl,string? BackImageUrl,string? Layout,int SchemaVersion,decimal? PriceEur = null);
 
     public bool TryLoadCardFromCache(string setCode, string number, out CardEntry? entry)
     {
@@ -59,10 +59,12 @@ public class CardMetadataResolver
             if (string.IsNullOrEmpty(data.Layout)) return false;
             bool physTwoSided = data.Layout != null && _physicallyTwoSidedLayouts.Contains(data.Layout);
             bool effectiveMfc = data.IsMfc && physTwoSided;
-            var ce = new CardEntry(data.Name, data.Number, data.Set, effectiveMfc, false, data.FrontRaw, data.BackRaw, null);
+            var ce = new CardEntry(data.Name, data.Number, data.Set, effectiveMfc, false, data.FrontRaw, data.BackRaw, null, PriceEur: data.PriceEur);
             entry = ce;
             CardImageUrlStore.Set(data.Set, data.Number, data.FrontImageUrl, data.BackImageUrl);
             CardLayoutStore.Set(data.Set, data.Number, data.Layout);
+            if (data.PriceEur.HasValue)
+                CardPriceStore.Set(data.Set, data.Number, data.PriceEur.Value);
             return true;
         }
         catch (Exception ex)
@@ -80,7 +82,7 @@ public class CardMetadataResolver
             Directory.CreateDirectory(CardCacheDir);
             var (frontImg, backImg) = CardImageUrlStore.Get(ce.Set, ce.Number);
             var layout = CardLayoutStore.Get(ce.Set!, ce.Number);
-            var data = new CardCacheEntry(ce.Set!, ce.Number, ce.Name, ce.IsModalDoubleFaced && !ce.IsBackFace, ce.FrontRaw, ce.BackRaw, frontImg, backImg, layout, _schemaVersion, DateTime.UtcNow);
+            var data = new CardCacheEntry(ce.Set!, ce.Number, ce.Name, ce.IsModalDoubleFaced && !ce.IsBackFace, ce.FrontRaw, ce.BackRaw, frontImg, backImg, layout, _schemaVersion, DateTime.UtcNow, ce.PriceEur);
             var path = CardCachePath(ce.Set!, ce.Number);
             if (!File.Exists(path))
             {
@@ -90,6 +92,35 @@ public class CardMetadataResolver
         catch (Exception ex)
         {
             _log?.Log($"Persist per-card cache failed {ce.Set} {ce.Number}: {ex.Message}", "Cache.Card");
+        }
+    }
+
+    public void UpdateCardPriceInCache(string setCode, string number, decimal priceEur)
+    {
+        try
+        {
+            var path = CardCachePath(setCode, number);
+            if (File.Exists(path))
+            {
+                var json = File.ReadAllText(path);
+                var data = JsonSerializer.Deserialize<CardCacheEntry>(json);
+                if (data != null)
+                {
+                    var updated = data with { PriceEur = priceEur };
+                    File.WriteAllText(path, JsonSerializer.Serialize(updated));
+                    return;
+                }
+            }
+            // No per-card cache file yet; create one from available stores
+            Directory.CreateDirectory(CardCacheDir);
+            var (frontImg, backImg) = CardImageUrlStore.Get(setCode, number);
+            var layout = CardLayoutStore.Get(setCode, number);
+            var entry = new CardCacheEntry(setCode, number, number, false, null, null, frontImg, backImg, layout, _schemaVersion, DateTime.UtcNow, priceEur);
+            File.WriteAllText(path, JsonSerializer.Serialize(entry));
+        }
+        catch (Exception ex)
+        {
+            _log?.Log($"Update price in cache failed {setCode} {number}: {ex.Message}", "Cache.Card");
         }
     }
 
@@ -120,12 +151,14 @@ public class CardMetadataResolver
             {
                 bool physTwoSided = f.Layout != null && _physicallyTwoSidedLayouts.Contains(f.Layout);
                 bool effectiveMfc = f.IsMfc && physTwoSided && !f.IsBack;
-                var ce = new CardEntry(f.Name, f.Number, f.Set, effectiveMfc, f.IsBack, f.FrontRaw, f.BackRaw, null);
+                var ce = new CardEntry(f.Name, f.Number, f.Set, effectiveMfc, f.IsBack, f.FrontRaw, f.BackRaw, null, PriceEur: f.PriceEur);
                 intoCards.Add(ce);
                 if (!f.IsBack)
                     CardImageUrlStore.Set(f.Set ?? string.Empty, f.Number, f.FrontImageUrl, f.BackImageUrl);
                 if (!string.IsNullOrEmpty(f.Layout) && f.Set != null)
                     CardLayoutStore.Set(f.Set, f.Number, f.Layout);
+                if (f.PriceEur.HasValue && f.Set != null)
+                    CardPriceStore.Set(f.Set, f.Number, f.PriceEur.Value);
             }
             CacheLog($"HIT hash={hash} faces={faces.Count} schema={firstVersion}");
             return true;
@@ -148,7 +181,7 @@ public class CardMetadataResolver
                 {
                     layout = "back_placeholder"; // synthetic layout so cache can be reused
                 }
-                list.Add(new CachedFace(c.Name, c.Number, c.Set, c.IsModalDoubleFaced, c.IsBackFace, c.FrontRaw, c.BackRaw, frontImg, backImg, layout, _schemaVersion));
+                list.Add(new CachedFace(c.Name, c.Number, c.Set, c.IsModalDoubleFaced, c.IsBackFace, c.FrontRaw, c.BackRaw, frontImg, backImg, layout, _schemaVersion, c.PriceEur));
             }
             var json = JsonSerializer.Serialize(list);
             var path = MetaCachePath(hash);

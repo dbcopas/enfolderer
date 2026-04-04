@@ -61,8 +61,9 @@
                     </Border>
                     <StackPanel Grid.Row="1" Margin="2" x:Name="InfoPanel">
                         <TextBlock Text="{Binding EffectiveNumber}" FontSize="11" Foreground="#EEE" HorizontalAlignment="Center"/>
-                        <TextBlock Text="{Binding Name}" TextWrapping="Wrap" FontSize="11" 
+                        <TextBlock x:Name="CardNameText" Text="{Binding Name}" TextWrapping="Wrap" FontSize="11" 
                                    Foreground="White" HorizontalAlignment="Center" TextAlignment="Center" Margin="1"/>
+                        <TextBlock x:Name="PriceText" Text="{Binding PriceDisplay}" FontSize="10" Foreground="#FFAACCFF" FontWeight="Bold" HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding Set}" FontSize="9" Foreground="#CCC" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Grid>
@@ -74,6 +75,9 @@
                     <Setter TargetName="RootBorder" Property="Border.BorderThickness" Value="3" />
                     <Setter TargetName="RootBorder" Property="Panel.ZIndex" Value="10" />
                     <Setter TargetName="RootBorder" Property="Border.Background" Value="#66333300" />
+                    <Setter TargetName="CardNameText" Property="TextBlock.FontWeight" Value="Bold" />
+                    <Setter TargetName="CardNameText" Property="TextBlock.Foreground" Value="#FFFFD447" />
+                    <Setter TargetName="CardNameText" Property="TextBlock.FontSize" Value="12" />
                 </DataTrigger>
         <!-- Placeholder back image (not a real MFC back): suppress qty/outline/click -->
     <DataTrigger Binding="{Binding IsPlaceholderBack}" Value="True">

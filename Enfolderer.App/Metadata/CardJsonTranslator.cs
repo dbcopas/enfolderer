@@ -89,7 +89,16 @@ public static class CardJsonTranslator
             if (string.IsNullOrWhiteSpace(displayName)) displayName = number;
             CardImageUrlStore.Set(setCode, number, frontImg, backImg);
             CardLayoutStore.Set(setCode, number, layout);
-            return new CardEntry(displayName!, number, setCode, isMfc, false, frontRaw, backRaw);
+            decimal? priceEur = null;
+            if (root.TryGetProperty("prices", out var prices) && prices.ValueKind == JsonValueKind.Object)
+            {
+                if (prices.TryGetProperty("eur", out var eurProp) && eurProp.ValueKind == JsonValueKind.String
+                    && decimal.TryParse(eurProp.GetString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var eurVal))
+                    priceEur = eurVal;
+            }
+            if (priceEur.HasValue)
+                CardPriceStore.Set(setCode, number, priceEur.Value);
+            return new CardEntry(displayName!, number, setCode, isMfc, false, frontRaw, backRaw, PriceEur: priceEur);
         }
         catch { return null; }
     }

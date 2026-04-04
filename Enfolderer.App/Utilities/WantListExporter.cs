@@ -3,11 +3,17 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Enfolderer.App.Core;
+using Enfolderer.App.Imaging;
 
 namespace Enfolderer.App.Utilities;
 
 public static class WantListExporter
 {
+    private static string FormatPrice(CardEntry card)
+    {
+        var price = card.PriceEur ?? CardPriceStore.Get(card.Set, card.Number);
+        return price.HasValue ? price.Value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) : "";
+    }
     private static List<CardEntry> GetWantedCards(IReadOnlyList<CardEntry> cards)
     {
         if (cards == null || cards.Count == 0)
@@ -38,12 +44,13 @@ public static class WantListExporter
                 $"want_list_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
 
         using var writer = File.CreateText(path);
-        writer.WriteLine("set,name,collector number");
+        writer.WriteLine("set,name,collector number,price (EUR)");
         foreach (var setGroup in grouped)
         {
             foreach (var card in setGroup.OrderBy(c => c.EffectiveNumber, StringComparer.OrdinalIgnoreCase))
             {
-                writer.WriteLine($"{setGroup.Key},\"{card.Name}\",{card.EffectiveNumber}");
+                string price = FormatPrice(card);
+                writer.WriteLine($"{setGroup.Key},\"{card.Name}\",{card.EffectiveNumber},{price}");
             }
         }
 
@@ -95,7 +102,8 @@ public static class WantListExporter
         {
             string name = card.FrontRaw ?? card.Name;
             string set = (card.Set ?? "").ToLowerInvariant();
-            writer.WriteLine($"1,0,\"{name}\",{set},Near Mint,English,,,,{card.Number},false,false,");
+            string price = FormatPrice(card);
+            writer.WriteLine($"1,0,\"{name}\",{set},Near Mint,English,,,,{card.Number},false,false,{price}");
         }
 
         return path;

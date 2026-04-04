@@ -130,3 +130,25 @@ public static class CardLayoutStore
         _map.TryGetValue(Key(setCode, number), out var v); return v;
     }
 }
+
+/// <summary>
+/// In-memory EUR price store keyed by (set, number).
+/// Populated from Scryfall JSON, metadata cache loads, and on-demand price backfill.
+/// </summary>
+public static class CardPriceStore
+{
+    private static readonly ConcurrentDictionary<string, decimal> _map = new(StringComparer.OrdinalIgnoreCase);
+    private static string Key(string setCode, string number) => $"{setCode.ToLowerInvariant()}/{number}";
+
+    public static void Set(string? setCode, string? number, decimal priceEur)
+    {
+        if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
+        _map[Key(setCode, number)] = priceEur;
+    }
+
+    public static decimal? Get(string? setCode, string? number)
+    {
+        if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return null;
+        return _map.TryGetValue(Key(setCode, number), out var v) ? v : null;
+    }
+}

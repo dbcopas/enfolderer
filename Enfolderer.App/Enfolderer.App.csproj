@@ -55,4 +55,11 @@
     <Message Importance="High" Text="EnsureDbFilesInPublish: copied @(_DbToCopy) to $(PublishDir)" Condition="@(_DbToCopy) != ''" />
   </Target>
 
+  <!-- Run self-tests after build -->
+  <Target Name="RunSelfTests" AfterTargets="Build">
+    <Message Importance="High" Text="[SELF-TESTS] Running self-tests..." />
+    <Exec Command="dotnet exec &quot;$(TargetPath)&quot; --selftests" WorkingDirectory="$(TargetDir)" />
+    <Message Importance="High" Text="[SELF-TESTS] Passed." />
+  </Target>
+
 </Project>
