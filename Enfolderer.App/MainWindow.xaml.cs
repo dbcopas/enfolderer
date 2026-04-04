@@ -178,6 +178,10 @@ public partial class MainWindow : Window
     private void Layout3x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "3x3"; }
     private void Layout2x2_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "2x2"; }
 
+    private void PriceModeNone_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.PriceDisplayMode = "None"; }
+    private void PriceModeMissing_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.PriceDisplayMode = "Missing"; }
+    private void PriceModeAll_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.PriceDisplayMode = "All"; }
+
     private void SetPagesPerBinder_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -483,6 +487,26 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public int PagesPerBinder { get => _pagesPerBinder; set { if (value>0 && value!=_pagesPerBinder) { _pagesPerBinder = value; OnPropertyChanged(); RebuildViews(); Refresh(); } } }
     private string _layoutMode = "4x3"; // UI selection token
     public string LayoutMode { get => _layoutMode; set { if (!string.Equals(_layoutMode, value, StringComparison.OrdinalIgnoreCase)) { _layoutMode = value; OnPropertyChanged(); ApplyLayoutModeToken(); } } }
+    // Price display mode: "None", "Missing", "All"
+    private string _priceDisplayMode = "Missing";
+    public string PriceDisplayMode
+    {
+        get => _priceDisplayMode;
+        set
+        {
+            if (!string.Equals(_priceDisplayMode, value, StringComparison.OrdinalIgnoreCase))
+            {
+                _priceDisplayMode = value;
+                OnPropertyChanged();
+                RefreshVisiblePrices();
+            }
+        }
+    }
+    private void RefreshVisiblePrices()
+    {
+        foreach (var s in LeftSlots) s.RefreshPriceDisplay(_priceDisplayMode);
+        foreach (var s in RightSlots) s.RefreshPriceDisplay(_priceDisplayMode);
+    }
     private LayoutConfigService _layoutConfig = new();
     private void ApplyLayoutModeToken()
     {
@@ -521,6 +545,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly Enfolderer.App.Metadata.MetadataLoadOrchestrator _metadataOrchestrator;
     private readonly Enfolderer.App.Core.Abstractions.ICardArrangementService? _arrangementService; // injected arrangement adapter
     private Enfolderer.App.Metadata.PriceBackfillService? _priceBackfill;
+    private System.Threading.CancellationTokenSource? _backfillCts;
     public IImportService ImportService { get; private set; } = default!; // injected
     private TelemetryService? _telemetry;
     public HashSet<string> GetCurrentSetCodes()
@@ -867,7 +892,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _quantityToggleService = boot.QuantityToggle as Enfolderer.App.Quantity.QuantityToggleService ?? new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
         _cachePersistence = boot.CachePersistence; // ensure existing field assigned
         _arrangementService = boot.ArrangementService;
-    _priceBackfill = new Enfolderer.App.Metadata.PriceBackfillService(boot.CoreGraph.ResolverAdapter, msg => Application.Current?.Dispatcher?.BeginInvoke(() => SetStatus(msg)));
+    _priceBackfill = new Enfolderer.App.Metadata.PriceBackfillService(boot.CoreGraph.ResolverAdapter, msg => Application.Current?.Dispatcher?.BeginInvoke(() => SetStatus(msg)), () => PriceDisplayMode);
     ImportService = boot.ImportService;
     _pagePresenter = boot.PagePresenter;
     _pageBatcher = boot.PageBatcher;
@@ -1087,15 +1112,21 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         CommandManager.InvalidateRequerySuggested();
         // After refresh may have rebuilt slots; try to apply highlight
         ApplyHighlightIfVisible();
+        // Apply price display mode to newly-created slots
+        RefreshVisiblePrices();
         // Lazily backfill EUR prices for visible missing cards
         if (_priceBackfill != null && _httpFactory != null)
         {
+            // Cancel any previous backfill so only the latest Refresh()'s backfill runs
+            _backfillCts?.Cancel();
+            var cts = new System.Threading.CancellationTokenSource();
+            _backfillCts = cts;
             var visibleSlots = LeftSlots.Concat(RightSlots).ToList();
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await _priceBackfill.BackfillVisibleAsync(visibleSlots, _orderedFaces, _httpFactory.Client);
+                    await _priceBackfill.BackfillVisibleAsync(visibleSlots, _orderedFaces, _httpFactory.Client, cts.Token);
                 }
                 catch (Exception ex)
                 {

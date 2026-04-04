@@ -90,16 +90,29 @@ public static class CardJsonTranslator
             CardImageUrlStore.Set(setCode, number, frontImg, backImg);
             CardLayoutStore.Set(setCode, number, layout);
             decimal? priceEur = null;
+            string priceCurrency = "EUR";
             if (root.TryGetProperty("prices", out var prices) && prices.ValueKind == JsonValueKind.Object)
             {
-                if (prices.TryGetProperty("eur", out var eurProp) && eurProp.ValueKind == JsonValueKind.String
-                    && decimal.TryParse(eurProp.GetString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var eurVal))
-                    priceEur = eurVal;
+                (priceEur, priceCurrency) = TryParsePriceWithFallback(prices);
             }
             if (priceEur.HasValue)
-                CardPriceStore.Set(setCode, number, priceEur.Value);
-            return new CardEntry(displayName!, number, setCode, isMfc, false, frontRaw, backRaw, PriceEur: priceEur);
+                CardPriceStore.Set(setCode, number, priceEur.Value, currency: priceCurrency);
+            return new CardEntry(displayName!, number, setCode, isMfc, false, frontRaw, backRaw, PriceEur: priceEur, PriceCurrency: priceCurrency);
         }
         catch { return null; }
+    }
+
+    private static readonly string[] PriceFallbackKeys = ["eur", "eur_foil", "usd", "usd_foil"];
+    private static readonly string[] PriceFallbackCurrencies = ["EUR", "EUR", "USD", "USD"];
+
+    private static (decimal? Price, string Currency) TryParsePriceWithFallback(JsonElement prices)
+    {
+        for (int i = 0; i < PriceFallbackKeys.Length; i++)
+        {
+            if (prices.TryGetProperty(PriceFallbackKeys[i], out var prop) && prop.ValueKind == JsonValueKind.String
+                && decimal.TryParse(prop.GetString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var val))
+                return (val, PriceFallbackCurrencies[i]);
+        }
+        return (null, "EUR");
     }
 }

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Enfolderer.App.Core;
 using Enfolderer.App.Core.Abstractions;
@@ -23,11 +24,14 @@ public class PriceBackfillService
     private readonly ICardMetadataResolver _resolver;
     private readonly HashSet<string> _inFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly Action<string>? _setStatus;
+    private readonly Func<string>? _getDisplayMode;
+    private string _priceDisplayMode => _getDisplayMode?.Invoke() ?? "Missing";
 
-    public PriceBackfillService(ICardMetadataResolver resolver, Action<string>? setStatus = null)
+    public PriceBackfillService(ICardMetadataResolver resolver, Action<string>? setStatus = null, Func<string>? getDisplayMode = null)
     {
         _resolver = resolver;
         _setStatus = setStatus;
+        _getDisplayMode = getDisplayMode;
     }
 
     /// <summary>
@@ -37,18 +41,25 @@ public class PriceBackfillService
     public async Task BackfillVisibleAsync(
         IEnumerable<CardSlot> visibleSlots,
         List<CardEntry> orderedFaces,
-        HttpClient http)
+        HttpClient http,
+        CancellationToken ct = default)
     {
+        if (ct.IsCancellationRequested) return;
+
+        var mode = _priceDisplayMode;
+        if (mode == "None") return;
+
         var candidates = visibleSlots
-            .Where(s => s.Quantity == 0 && !s.IsPlaceholderBack && !string.IsNullOrEmpty(s.Set))
+            .Where(s => !s.IsPlaceholderBack && !string.IsNullOrEmpty(s.Set))
+            .Where(s => mode == "All" || s.Quantity == 0)
             .ToList();
 
-        LogHost.Sink?.Log($"[PriceBackfill] Visible slots: {visibleSlots.Count()}, missing (qty=0): {candidates.Count}", "Price");
+        LogHost.Sink?.Log($"[PriceBackfill] Visible slots: {visibleSlots.Count()}, candidates ({mode}): {candidates.Count}", "Price");
 
         if (candidates.Count == 0) return;
 
         // Check which ones already have prices in orderedFaces or the price store
-        var needPrice = new List<(CardSlot Slot, int GlobalIndex)>();
+        var needPrice = new List<(CardSlot Slot, int GlobalIndex, string FlightKey)>();
         var now = DateTime.UtcNow;
         var maxAge = TimeSpan.FromDays(7);
         foreach (var slot in candidates)
@@ -64,8 +75,11 @@ public class PriceBackfillService
                 if (age < maxAge)
                 {
                     // Fresh enough — just make sure the slot shows it
-                    if (string.IsNullOrEmpty(slot.PriceDisplay))
-                        System.Windows.Application.Current?.Dispatcher?.BeginInvoke(() => slot.PriceDisplay = $"€{cached.Value.Price:0.00}");
+                    if (string.IsNullOrEmpty(slot.PriceDisplay) && slot.RawPriceEur.HasValue)
+                    {
+                        var cachedMode = _priceDisplayMode;
+                        System.Windows.Application.Current?.Dispatcher?.BeginInvoke(() => slot.RefreshPriceDisplay(cachedMode));
+                    }
                     LogHost.Sink?.Log($"[PriceBackfill] Skip {entry.Set}/{entry.Number} - cached {age.TotalDays:0.0}d ago: {cached.Value.Price}€", "Price");
                     continue;
                 }
@@ -84,7 +98,7 @@ public class PriceBackfillService
                 if (_inFlight.Contains(key)) continue;
                 _inFlight.Add(key);
             }
-            needPrice.Add((slot, slot.GlobalIndex));
+            needPrice.Add((slot, slot.GlobalIndex, key));
         }
 
         if (needPrice.Count == 0)
@@ -97,28 +111,40 @@ public class PriceBackfillService
         NotifyStatus($"Fetching prices for {needPrice.Count} missing card(s)...");
         int fetched = 0;
 
-        foreach (var (slot, gi) in needPrice)
+        foreach (var (slot, gi, flightKey) in needPrice)
         {
+            if (ct.IsCancellationRequested)
+            {
+                LogHost.Sink?.Log("[PriceBackfill] Cancelled — newer Refresh() superseded this run.", "Price");
+                // Release remaining in-flight keys so the next run can fetch them
+                foreach (var (_, _, k) in needPrice) { lock (_inFlight) { _inFlight.Remove(k); } }
+                return;
+            }
             try
             {
                 var entry = orderedFaces[gi];
                 LogHost.Sink?.Log($"[PriceBackfill] Fetching {entry.Set}/{entry.Number} ({entry.Name})...", "Price");
-                var price = await FetchPriceEurAsync(http, entry.Set!, entry.Number);
-                if (price.HasValue)
+                var result = await FetchPriceEurAsync(http, entry.Set!, entry.Number);
+                if (result.HasValue)
                 {
+                    var (price, currency) = result.Value;
                     fetched++;
-                    LogHost.Sink?.Log($"[PriceBackfill] Got {entry.Set}/{entry.Number} = {price.Value}€", "Price");
-                    var updated = entry with { PriceEur = price };
+                    LogHost.Sink?.Log($"[PriceBackfill] Got {entry.Set}/{entry.Number} = {price} {currency}", "Price");
+                    var updated = entry with { PriceEur = price, PriceCurrency = currency };
                     orderedFaces[gi] = updated;
-                    CardPriceStore.Set(entry.Set, entry.Number, price.Value);
-                    _resolver.UpdateCardPriceInCache(entry.Set!, entry.Number, price.Value);
+                    CardPriceStore.Set(entry.Set, entry.Number, price, currency: currency);
+                    _resolver.UpdateCardPriceInCache(entry.Set!, entry.Number, price);
                     // Update the visible slot's price display on the UI thread
-                    var display = $"€{price.Value:0.00}";
-                    System.Windows.Application.Current?.Dispatcher?.BeginInvoke(() => slot.PriceDisplay = display);
+                    System.Windows.Application.Current?.Dispatcher?.BeginInvoke(() =>
+                    {
+                        slot.RawPriceEur = price;
+                        slot.PriceCurrency = currency;
+                        slot.RefreshPriceDisplay(_priceDisplayMode);
+                    });
                 }
                 else
                 {
-                    LogHost.Sink?.Log($"[PriceBackfill] No EUR price for {entry.Set}/{entry.Number}", "Price");
+                    LogHost.Sink?.Log($"[PriceBackfill] No price for {entry.Set}/{entry.Number}", "Price");
                 }
             }
             catch (Exception ex)
@@ -127,9 +153,7 @@ public class PriceBackfillService
             }
             finally
             {
-                var entry = orderedFaces[gi];
-                var key = $"{entry.Set}|{entry.Number}".ToLowerInvariant();
-                lock (_inFlight) { _inFlight.Remove(key); }
+                lock (_inFlight) { _inFlight.Remove(flightKey); }
             }
         }
         NotifyStatus($"Prices fetched: {fetched}/{needPrice.Count} cards.");
@@ -142,7 +166,7 @@ public class PriceBackfillService
         try { _setStatus?.Invoke(msg); } catch { }
     }
 
-    private static async Task<decimal?> FetchPriceEurAsync(HttpClient http, string setCode, string number)
+    private static async Task<(decimal Price, string Currency)?> FetchPriceEurAsync(HttpClient http, string setCode, string number)
     {
         var url = ScryfallUrlHelper.BuildCardApiUrl(setCode, number);
         if (string.IsNullOrEmpty(url))
@@ -175,7 +199,16 @@ public class PriceBackfillService
 
             if (prices.TryGetProperty("eur", out var eurProp) && eurProp.ValueKind == JsonValueKind.String
                 && decimal.TryParse(eurProp.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var eurVal))
-                return eurVal;
+                return (eurVal, "EUR");
+            if (prices.TryGetProperty("eur_foil", out var eurFoilProp) && eurFoilProp.ValueKind == JsonValueKind.String
+                && decimal.TryParse(eurFoilProp.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var eurFoilVal))
+                return (eurFoilVal, "EUR");
+            if (prices.TryGetProperty("usd", out var usdProp) && usdProp.ValueKind == JsonValueKind.String
+                && decimal.TryParse(usdProp.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var usdVal))
+                return (usdVal, "USD");
+            if (prices.TryGetProperty("usd_foil", out var usdFoilProp) && usdFoilProp.ValueKind == JsonValueKind.String
+                && decimal.TryParse(usdFoilProp.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var usdFoilVal))
+                return (usdFoilVal, "USD");
         }
         else
         {
