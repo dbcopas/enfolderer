@@ -88,6 +88,32 @@ public class CardSlot : INotifyPropertyChanged
     private string _priceDisplay = string.Empty;
     public string PriceDisplay { get => _priceDisplay; set { if (_priceDisplay != value) { _priceDisplay = value; OnPropertyChanged(); } } }
 
+    private bool _isMissingPrice;
+    public bool IsMissingPrice { get => _isMissingPrice; set { if (_isMissingPrice != value) { _isMissingPrice = value; OnPropertyChanged(); } } }
+
+    // Raw price stored for mode-switching recalculation
+    internal decimal? RawPriceEur { get; set; }
+    internal string PriceCurrency { get; set; } = "EUR";
+
+    public void RefreshPriceDisplay(string mode)
+    {
+        if (!RawPriceEur.HasValue || IsPlaceholderBack)
+        {
+            PriceDisplay = string.Empty;
+            return;
+        }
+        bool isMissing = Quantity == 0;
+        bool show = mode switch
+        {
+            "All" => true,
+            "Missing" => isMissing,
+            _ => false
+        };
+        var symbol = string.Equals(PriceCurrency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : "\u20ac";
+        PriceDisplay = show ? $"{symbol}{RawPriceEur.Value:0.00}" : string.Empty;
+        IsMissingPrice = isMissing;
+    }
+
     public CardSlot(CardEntry entry, int index)
     {
         Name = entry.Name;
@@ -105,10 +131,10 @@ public class CardSlot : INotifyPropertyChanged
         // Capture paired quantities (so UI can display x(y)). We do NOT overwrite _quantity here; merged quantity is only for non-paired display.
         _primaryPairedQuantity = entry.PrimaryPairedQuantity;
         _secondaryPairedQuantity = entry.SecondaryPairedQuantity;
-        // Populate price from entry or in-memory store
-        var price = entry.PriceEur ?? Enfolderer.App.Imaging.CardPriceStore.Get(entry.Set, entry.Number);
-        if (price.HasValue && _quantity == 0)
-            _priceDisplay = $"€{price.Value:0.00}";
+        // Populate raw price from entry or in-memory store
+        RawPriceEur = entry.PriceEur ?? Enfolderer.App.Imaging.CardPriceStore.Get(entry.Set, entry.Number);
+        PriceCurrency = entry.PriceCurrency ?? Enfolderer.App.Imaging.CardPriceStore.GetCurrency(entry.Set, entry.Number) ?? "EUR";
+        IsMissingPrice = _quantity == 0;
     }
 
     public CardSlot(string placeholder, int index)

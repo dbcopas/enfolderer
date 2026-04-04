@@ -63,7 +63,7 @@
                         <TextBlock Text="{Binding EffectiveNumber}" FontSize="11" Foreground="#EEE" HorizontalAlignment="Center"/>
                         <TextBlock x:Name="CardNameText" Text="{Binding Name}" TextWrapping="Wrap" FontSize="11" 
                                    Foreground="White" HorizontalAlignment="Center" TextAlignment="Center" Margin="1"/>
-                        <TextBlock x:Name="PriceText" Text="{Binding PriceDisplay}" FontSize="10" Foreground="#FFAACCFF" FontWeight="Bold" HorizontalAlignment="Center" />
+                        <TextBlock x:Name="PriceText" Text="{Binding PriceDisplay}" FontSize="10" Foreground="#FF66DD66" FontWeight="Bold" HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding Set}" FontSize="9" Foreground="#CCC" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Grid>
@@ -109,8 +109,18 @@
                 <DataTrigger Binding="{Binding QuantityDisplay}" Value="">
                     <Setter TargetName="QtyBadge" Property="UIElement.Visibility" Value="Collapsed" />
                 </DataTrigger>
+                <!-- Missing card price shown in red -->
+                <DataTrigger Binding="{Binding IsMissingPrice}" Value="True">
+                    <Setter TargetName="PriceText" Property="TextBlock.Foreground" Value="#FFFF6666" />
+                </DataTrigger>
             </DataTemplate.Triggers>
         </DataTemplate>
+        <ControlTemplate x:Key="PriceToggleTemplate" TargetType="Button">
+            <Border Background="{TemplateBinding Background}" CornerRadius="3"
+                    Padding="{TemplateBinding Padding}" BorderBrush="#555" BorderThickness="1">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+        </ControlTemplate>
     </Window.Resources>
     <DockPanel>
         <Menu DockPanel.Dock="Top">
@@ -210,6 +220,57 @@
                         <TextBlock Text="Find:" VerticalAlignment="Center" Margin="0,0,4,0" />
                         <TextBox x:Name="SearchNameBox" Width="170" MinWidth="120" Text="{Binding SearchName, UpdateSourceTrigger=PropertyChanged}" KeyDown="SearchNameBox_KeyDown"/>
                         <Button Content="Find ▶" Command="{Binding SearchNextCommand}" Margin="6,0,0,0" MouseRightButtonUp="SearchButton_MouseRightButtonUp" ToolTip="Left click: find next name match. Right click: find next set code match." />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="€" VerticalAlignment="Center" Margin="0,0,4,0" Foreground="#999" FontWeight="Bold" FontSize="12"/>
+                        <Button Content="Off" Click="PriceModeNone_Click" Padding="6,2" Margin="1,0" FontSize="10" Cursor="Hand">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Background" Value="#333"/>
+                                    <Setter Property="Foreground" Value="#777"/>
+                                    <Setter Property="Template" Value="{StaticResource PriceToggleTemplate}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding PriceDisplayMode}" Value="None">
+                                            <Setter Property="Background" Value="#FFD447"/>
+                                            <Setter Property="Foreground" Value="Black"/>
+                                            <Setter Property="FontWeight" Value="Bold"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="Missing" Click="PriceModeMissing_Click" Padding="6,2" Margin="1,0" FontSize="10" Cursor="Hand">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Background" Value="#333"/>
+                                    <Setter Property="Foreground" Value="#777"/>
+                                    <Setter Property="Template" Value="{StaticResource PriceToggleTemplate}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding PriceDisplayMode}" Value="Missing">
+                                            <Setter Property="Background" Value="#FFD447"/>
+                                            <Setter Property="Foreground" Value="Black"/>
+                                            <Setter Property="FontWeight" Value="Bold"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="All" Click="PriceModeAll_Click" Padding="6,2" Margin="1,0" FontSize="10" Cursor="Hand">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Background" Value="#333"/>
+                                    <Setter Property="Foreground" Value="#777"/>
+                                    <Setter Property="Template" Value="{StaticResource PriceToggleTemplate}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding PriceDisplayMode}" Value="All">
+                                            <Setter Property="Background" Value="#FFD447"/>
+                                            <Setter Property="Foreground" Value="Black"/>
+                                            <Setter Property="FontWeight" Value="Bold"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                     </StackPanel>
                 </WrapPanel>
             </Grid>

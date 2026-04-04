@@ -12,7 +12,10 @@ public static class WantListExporter
     private static string FormatPrice(CardEntry card)
     {
         var price = card.PriceEur ?? CardPriceStore.Get(card.Set, card.Number);
-        return price.HasValue ? price.Value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) : "";
+        if (!price.HasValue) return "";
+        var currency = card.PriceCurrency ?? CardPriceStore.GetCurrency(card.Set, card.Number) ?? "EUR";
+        var symbol = string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : "\u20ac";
+        return $"{symbol}{price.Value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}";
     }
     private static List<CardEntry> GetWantedCards(IReadOnlyList<CardEntry> cards)
     {

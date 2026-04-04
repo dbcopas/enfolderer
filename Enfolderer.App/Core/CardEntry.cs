@@ -16,7 +16,8 @@ public record CardEntry(
     // Paired number support: if DisplayNumber is like 296(361) we can preserve individual source quantities
     int? PrimaryPairedQuantity = null,
     int? SecondaryPairedQuantity = null,
-    decimal? PriceEur = null
+    decimal? PriceEur = null,
+    string PriceCurrency = "EUR"
     )
 {
 	public string EffectiveNumber => DisplayNumber ?? Number;
