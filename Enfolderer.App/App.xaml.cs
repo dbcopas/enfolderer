@@ -51,6 +51,8 @@ public partial class App : Application
 			return; // unreachable
 		}
 		base.OnStartup(e);
+		// Load persisted price data
+		Enfolderer.App.Imaging.CardPriceStore.LoadFromDisk();
 		// Optional parse performance profiling (Phase 4). Trigger with PERF_PARSE=1 env var.
 		var perfVar = Environment.GetEnvironmentVariable("PERF_PARSE");
 		if (!string.IsNullOrEmpty(perfVar))

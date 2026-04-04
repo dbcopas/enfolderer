@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Windows.Media.Imaging;
 
 namespace Enfolderer.App.Imaging;
@@ -132,23 +134,64 @@ public static class CardLayoutStore
 }
 
 /// <summary>
-/// In-memory EUR price store keyed by (set, number).
+/// In-memory EUR price store keyed by (set, number), backed by a JSON file on disk.
 /// Populated from Scryfall JSON, metadata cache loads, and on-demand price backfill.
 /// </summary>
 public static class CardPriceStore
 {
-    private static readonly ConcurrentDictionary<string, decimal> _map = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, (decimal Price, DateTime FetchedUtc)> _map = new(StringComparer.OrdinalIgnoreCase);
     private static string Key(string setCode, string number) => $"{setCode.ToLowerInvariant()}/{number}";
+    private static string PersistPath => Path.Combine(ImageCacheStore.CacheRoot, "prices.json");
+    private static bool _dirty;
 
-    public static void Set(string? setCode, string? number, decimal priceEur)
+    public static void Set(string? setCode, string? number, decimal priceEur, DateTime? fetchedUtc = null)
     {
         if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return;
-        _map[Key(setCode, number)] = priceEur;
+        _map[Key(setCode, number)] = (priceEur, fetchedUtc ?? DateTime.UtcNow);
+        _dirty = true;
     }
 
     public static decimal? Get(string? setCode, string? number)
     {
         if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return null;
+        return _map.TryGetValue(Key(setCode, number), out var v) ? v.Price : null;
+    }
+
+    public static (decimal Price, DateTime FetchedUtc)? GetWithTimestamp(string? setCode, string? number)
+    {
+        if (string.IsNullOrWhiteSpace(setCode) || string.IsNullOrWhiteSpace(number)) return null;
         return _map.TryGetValue(Key(setCode, number), out var v) ? v : null;
+    }
+
+    private record PriceRecord(string Key, decimal Price, DateTime FetchedUtc);
+
+    public static void LoadFromDisk()
+    {
+        try
+        {
+            var path = PersistPath;
+            if (!File.Exists(path)) return;
+            var json = File.ReadAllText(path);
+            var records = JsonSerializer.Deserialize<List<PriceRecord>>(json);
+            if (records == null) return;
+            foreach (var r in records)
+                _map[r.Key] = (r.Price, r.FetchedUtc);
+        }
+        catch { }
+    }
+
+    public static void SaveToDisk()
+    {
+        if (!_dirty) return;
+        try
+        {
+            var records = new List<PriceRecord>(_map.Count);
+            foreach (var kvp in _map)
+                records.Add(new PriceRecord(kvp.Key, kvp.Value.Price, kvp.Value.FetchedUtc));
+            Directory.CreateDirectory(ImageCacheStore.CacheRoot);
+            File.WriteAllText(PersistPath, JsonSerializer.Serialize(records));
+            _dirty = false;
+        }
+        catch { }
     }
 }

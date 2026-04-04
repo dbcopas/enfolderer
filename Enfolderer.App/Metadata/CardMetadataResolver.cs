@@ -43,8 +43,8 @@ public class CardMetadataResolver
         return Path.Combine(CardCacheDir, safeSet + "-" + safeNum + ".json");
     }
 
-    private record CardCacheEntry(string Set, string Number, string Name, bool IsMfc, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion, DateTime FetchedUtc, decimal? PriceEur = null);
-    public record CachedFace(string Name,string Number,string? Set,bool IsMfc,bool IsBack,string? FrontRaw,string? BackRaw,string? FrontImageUrl,string? BackImageUrl,string? Layout,int SchemaVersion,decimal? PriceEur = null);
+    private record CardCacheEntry(string Set, string Number, string Name, bool IsMfc, string? FrontRaw, string? BackRaw, string? FrontImageUrl, string? BackImageUrl, string? Layout, int SchemaVersion, DateTime FetchedUtc, decimal? PriceEur = null, DateTime? PriceFetchedUtc = null);
+    public record CachedFace(string Name,string Number,string? Set,bool IsMfc,bool IsBack,string? FrontRaw,string? BackRaw,string? FrontImageUrl,string? BackImageUrl,string? Layout,int SchemaVersion,decimal? PriceEur = null,DateTime? PriceFetchedUtc = null);
 
     public bool TryLoadCardFromCache(string setCode, string number, out CardEntry? entry)
     {
@@ -64,7 +64,7 @@ public class CardMetadataResolver
             CardImageUrlStore.Set(data.Set, data.Number, data.FrontImageUrl, data.BackImageUrl);
             CardLayoutStore.Set(data.Set, data.Number, data.Layout);
             if (data.PriceEur.HasValue)
-                CardPriceStore.Set(data.Set, data.Number, data.PriceEur.Value);
+                CardPriceStore.Set(data.Set, data.Number, data.PriceEur.Value, data.PriceFetchedUtc);
             return true;
         }
         catch (Exception ex)
@@ -100,13 +100,14 @@ public class CardMetadataResolver
         try
         {
             var path = CardCachePath(setCode, number);
+            var now = DateTime.UtcNow;
             if (File.Exists(path))
             {
                 var json = File.ReadAllText(path);
                 var data = JsonSerializer.Deserialize<CardCacheEntry>(json);
                 if (data != null)
                 {
-                    var updated = data with { PriceEur = priceEur };
+                    var updated = data with { PriceEur = priceEur, PriceFetchedUtc = now };
                     File.WriteAllText(path, JsonSerializer.Serialize(updated));
                     return;
                 }
@@ -115,7 +116,7 @@ public class CardMetadataResolver
             Directory.CreateDirectory(CardCacheDir);
             var (frontImg, backImg) = CardImageUrlStore.Get(setCode, number);
             var layout = CardLayoutStore.Get(setCode, number);
-            var entry = new CardCacheEntry(setCode, number, number, false, null, null, frontImg, backImg, layout, _schemaVersion, DateTime.UtcNow, priceEur);
+            var entry = new CardCacheEntry(setCode, number, number, false, null, null, frontImg, backImg, layout, _schemaVersion, DateTime.UtcNow, priceEur, now);
             File.WriteAllText(path, JsonSerializer.Serialize(entry));
         }
         catch (Exception ex)
@@ -158,7 +159,7 @@ public class CardMetadataResolver
                 if (!string.IsNullOrEmpty(f.Layout) && f.Set != null)
                     CardLayoutStore.Set(f.Set, f.Number, f.Layout);
                 if (f.PriceEur.HasValue && f.Set != null)
-                    CardPriceStore.Set(f.Set, f.Number, f.PriceEur.Value);
+                    CardPriceStore.Set(f.Set, f.Number, f.PriceEur.Value, f.PriceFetchedUtc);
             }
             CacheLog($"HIT hash={hash} faces={faces.Count} schema={firstVersion}");
             return true;
@@ -181,7 +182,8 @@ public class CardMetadataResolver
                 {
                     layout = "back_placeholder"; // synthetic layout so cache can be reused
                 }
-                list.Add(new CachedFace(c.Name, c.Number, c.Set, c.IsModalDoubleFaced, c.IsBackFace, c.FrontRaw, c.BackRaw, frontImg, backImg, layout, _schemaVersion, c.PriceEur));
+                var priceFetchedUtc = c.PriceEur.HasValue ? CardPriceStore.GetWithTimestamp(c.Set, c.Number)?.FetchedUtc : null;
+                list.Add(new CachedFace(c.Name, c.Number, c.Set, c.IsModalDoubleFaced, c.IsBackFace, c.FrontRaw, c.BackRaw, frontImg, backImg, layout, _schemaVersion, c.PriceEur, priceFetchedUtc));
             }
             var json = JsonSerializer.Serialize(list);
             var path = MetaCachePath(hash);
