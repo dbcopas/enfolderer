@@ -15,6 +15,7 @@ public interface ICardMetadataResolver
     void MarkCacheComplete(string? hash);
     bool TryLoadCardFromCache(string setCode, string number, out CardEntry? entry);
     void PersistCardToCache(CardEntry ce);
+    void UpdateCardPriceInCache(string setCode, string number, decimal priceEur);
     Task ResolveSpecsAsync(
         List<Enfolderer.App.Metadata.FetchSpec> fetchList,
         System.Collections.Generic.HashSet<int> targetIndexes,

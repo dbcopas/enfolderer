@@ -520,6 +520,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private readonly SpecResolutionService _specResolutionService;
     private readonly Enfolderer.App.Metadata.MetadataLoadOrchestrator _metadataOrchestrator;
     private readonly Enfolderer.App.Core.Abstractions.ICardArrangementService? _arrangementService; // injected arrangement adapter
+    private Enfolderer.App.Metadata.PriceBackfillService? _priceBackfill;
     public IImportService ImportService { get; private set; } = default!; // injected
     private TelemetryService? _telemetry;
     public HashSet<string> GetCurrentSetCodes()
@@ -866,6 +867,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _quantityToggleService = boot.QuantityToggle as Enfolderer.App.Quantity.QuantityToggleService ?? new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
         _cachePersistence = boot.CachePersistence; // ensure existing field assigned
         _arrangementService = boot.ArrangementService;
+    _priceBackfill = new Enfolderer.App.Metadata.PriceBackfillService(boot.CoreGraph.ResolverAdapter, msg => Application.Current?.Dispatcher?.BeginInvoke(() => SetStatus(msg)));
     ImportService = boot.ImportService;
     _pagePresenter = boot.PagePresenter;
     _pageBatcher = boot.PageBatcher;
@@ -1085,6 +1087,22 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         CommandManager.InvalidateRequerySuggested();
         // After refresh may have rebuilt slots; try to apply highlight
         ApplyHighlightIfVisible();
+        // Lazily backfill EUR prices for visible missing cards
+        if (_priceBackfill != null && _httpFactory != null)
+        {
+            var visibleSlots = LeftSlots.Concat(RightSlots).ToList();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _priceBackfill.BackfillVisibleAsync(visibleSlots, _orderedFaces, _httpFactory.Client);
+                }
+                catch (Exception ex)
+                {
+                    Enfolderer.App.Core.Logging.LogHost.Sink?.Log($"[PriceBackfill] Top-level exception: {ex}", "Price");
+                }
+            });
+        }
     }
 
     private void UpdateBinderBackground(int binderNumber)

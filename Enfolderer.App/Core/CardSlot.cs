@@ -85,6 +85,9 @@ public class CardSlot : INotifyPropertyChanged
     private bool _isSearchHighlight;
     public bool IsSearchHighlight { get => _isSearchHighlight; set { if (_isSearchHighlight != value) { _isSearchHighlight = value; OnPropertyChanged(); } } }
 
+    private string _priceDisplay = string.Empty;
+    public string PriceDisplay { get => _priceDisplay; set { if (_priceDisplay != value) { _priceDisplay = value; OnPropertyChanged(); } } }
+
     public CardSlot(CardEntry entry, int index)
     {
         Name = entry.Name;
@@ -102,6 +105,10 @@ public class CardSlot : INotifyPropertyChanged
         // Capture paired quantities (so UI can display x(y)). We do NOT overwrite _quantity here; merged quantity is only for non-paired display.
         _primaryPairedQuantity = entry.PrimaryPairedQuantity;
         _secondaryPairedQuantity = entry.SecondaryPairedQuantity;
+        // Populate price from entry or in-memory store
+        var price = entry.PriceEur ?? Enfolderer.App.Imaging.CardPriceStore.Get(entry.Set, entry.Number);
+        if (price.HasValue && _quantity == 0)
+            _priceDisplay = $"€{price.Value:0.00}";
     }
 
     public CardSlot(string placeholder, int index)
