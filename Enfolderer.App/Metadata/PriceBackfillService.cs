@@ -49,20 +49,32 @@ public class PriceBackfillService
 
         // Check which ones already have prices in orderedFaces or the price store
         var needPrice = new List<(CardSlot Slot, int GlobalIndex)>();
+        var now = DateTime.UtcNow;
+        var maxAge = TimeSpan.FromDays(7);
         foreach (var slot in candidates)
         {
             if (slot.GlobalIndex < 0 || slot.GlobalIndex >= orderedFaces.Count) continue;
             var entry = orderedFaces[slot.GlobalIndex];
-            if (entry.PriceEur.HasValue)
+
+            // Check the price store (has timestamp)
+            var cached = CardPriceStore.GetWithTimestamp(entry.Set, entry.Number);
+            if (cached.HasValue)
             {
-                LogHost.Sink?.Log($"[PriceBackfill] Skip {entry.Set}/{entry.Number} - already on entry: {entry.PriceEur.Value}€", "Price");
-                continue;
+                var age = now - cached.Value.FetchedUtc;
+                if (age < maxAge)
+                {
+                    // Fresh enough — just make sure the slot shows it
+                    if (string.IsNullOrEmpty(slot.PriceDisplay))
+                        System.Windows.Application.Current?.Dispatcher?.BeginInvoke(() => slot.PriceDisplay = $"€{cached.Value.Price:0.00}");
+                    LogHost.Sink?.Log($"[PriceBackfill] Skip {entry.Set}/{entry.Number} - cached {age.TotalDays:0.0}d ago: {cached.Value.Price}€", "Price");
+                    continue;
+                }
+                LogHost.Sink?.Log($"[PriceBackfill] Stale {entry.Set}/{entry.Number} - cached {age.TotalDays:0.0}d ago, re-fetching", "Price");
             }
-            // Already fetched on a different page visit
-            var storePrice = CardPriceStore.Get(entry.Set, entry.Number);
-            if (storePrice.HasValue)
+            else if (entry.PriceEur.HasValue)
             {
-                LogHost.Sink?.Log($"[PriceBackfill] Skip {entry.Set}/{entry.Number} - in price store: {storePrice.Value}€", "Price");
+                // Has price on entry but not in store (shouldn't happen often) — treat as fresh
+                LogHost.Sink?.Log($"[PriceBackfill] Skip {entry.Set}/{entry.Number} - on entry: {entry.PriceEur.Value}€", "Price");
                 continue;
             }
 
@@ -121,6 +133,8 @@ public class PriceBackfillService
             }
         }
         NotifyStatus($"Prices fetched: {fetched}/{needPrice.Count} cards.");
+        if (fetched > 0)
+            CardPriceStore.SaveToDisk();
     }
 
     private void NotifyStatus(string msg)
