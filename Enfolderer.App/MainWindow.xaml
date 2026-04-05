@@ -129,9 +129,8 @@
                 <MenuItem Header="Import Scryfall Set Into mainDb" Click="ImportScryfallSet_Click" />
                 <Separator />
                 <MenuItem Header="Export _Playset Needs..." Click="ExportPlaysetNeedsGeneric_Click" />
-                <MenuItem Header="Export _Want List..." Click="ExportWantList_Click" />
                 <MenuItem Header="Export Want List (_Moxfield)..." Click="ExportWantListMoxfield_Click" />
-                <MenuItem Header="Export Want List (Moxfield _CSV)..." Click="ExportWantListMoxfieldCsv_Click" />
+                <MenuItem Header="Export _Collection (Moxfield)..." Click="ExportWantListMoxfieldCsv_Click" />
                 <Separator />
                 <MenuItem Header="Backfill missing 0-qty rows (id &lt; 150000)" Click="BackfillZeroQty_Click" />
                 <MenuItem Header="Set Qty = CardId (all rows)" Click="SetQtyEqualsCardId_Click" />
@@ -168,6 +167,9 @@
             <!-- Current page indicator -->
             <StatusBarItem>
                 <TextBlock Text="{Binding PageDisplay}" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock Text="{Binding SetMissingPrice}" />
             </StatusBarItem>
             <!-- Transient image / metadata fetch flash placed AFTER page to avoid left edge jumping -->
             <StatusBarItem>

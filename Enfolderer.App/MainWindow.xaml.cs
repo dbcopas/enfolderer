@@ -131,20 +131,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ExportWantList_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            string path = Utilities.WantListExporter.Export(_vm.Cards);
-            _vm.SetStatus($"Want list exported: {System.IO.Path.GetFileName(path)}");
-            MessageBox.Show(this, $"Export complete:\n{path}", "Want List Export", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, ex.Message, "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
     private void ExportWantListMoxfield_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -164,8 +150,8 @@ public partial class MainWindow : Window
         try
         {
             string path = Utilities.WantListExporter.ExportMoxfieldCsv(_vm.Cards);
-            _vm.SetStatus($"Moxfield CSV exported: {System.IO.Path.GetFileName(path)}");
-            MessageBox.Show(this, $"Export complete:\n{path}", "Moxfield CSV Export", MessageBoxButton.OK, MessageBoxImage.Information);
+            _vm.SetStatus($"Moxfield collection exported: {System.IO.Path.GetFileName(path)}");
+            MessageBox.Show(this, $"Export complete:\n{path}", "Moxfield Collection Export", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
@@ -474,6 +460,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public ObservableCollection<CardSlot> RightSlots { get; } = new();
     private string _pageDisplay = string.Empty;
     public string PageDisplay { get => _pageDisplay; private set { if (_pageDisplay!=value) { _pageDisplay = value; OnPropertyChanged(); } } }
+    private string _setMissingPrice = string.Empty;
+    public string SetMissingPrice { get => _setMissingPrice; private set { if (_setMissingPrice!=value) { _setMissingPrice = value; OnPropertyChanged(); } } }
     private Brush _binderBackground = Brushes.Black;
     public Brush BinderBackground { get => _binderBackground; private set { if (_binderBackground!=value) { _binderBackground = value; OnPropertyChanged(); } } }
     private readonly BinderThemeService _binderTheme = new();
@@ -1104,6 +1092,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     var result = _pagePresenter.Present(_nav, LeftSlots, RightSlots, _orderedFaces, SlotsPerPage, PagesPerBinder, _httpFactory!.Client, _binderTheme);
         PageDisplay = result.PageDisplay; OnPropertyChanged(nameof(PageDisplay));
         BinderBackground = result.BinderBackground; OnPropertyChanged(nameof(BinderBackground));
+        UpdateSetMissingPrice();
         if (_nav.Views.Count>0)
         {
             var v = _nav.Views[_nav.CurrentIndex];
@@ -1139,6 +1128,40 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private void UpdateBinderBackground(int binderNumber)
     {
     BinderBackground = _binderTheme.CreateBinderBackground(binderNumber - 1);
+    }
+
+    private void UpdateSetMissingPrice()
+    {
+        // Find the last non-empty slot on the right page to determine the "current set"
+        CardSlot? bottomRight = null;
+        for (int i = RightSlots.Count - 1; i >= 0; i--)
+        {
+            if (!string.IsNullOrEmpty(RightSlots[i].Set))
+            {
+                bottomRight = RightSlots[i];
+                break;
+            }
+        }
+        if (bottomRight == null || string.IsNullOrEmpty(bottomRight.Set))
+        {
+            SetMissingPrice = string.Empty;
+            return;
+        }
+        string setCode = bottomRight.Set;
+        decimal total = 0m;
+        int missingCount = 0;
+        foreach (var card in _cards)
+        {
+            if (card.IsBackFace) continue;
+            if (!string.Equals(card.Set, setCode, StringComparison.OrdinalIgnoreCase)) continue;
+            if (card.Quantity != 0) continue;
+            missingCount++;
+            var price = card.PriceEur ?? Imaging.CardPriceStore.Get(card.Set, card.Number);
+            if (price.HasValue) total += price.Value;
+        }
+        string currency = Imaging.CardPriceStore.GetCurrency(setCode, bottomRight.Number) ?? "EUR";
+        string symbol = string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : "\u20ac";
+        SetMissingPrice = $"{setCode.ToUpperInvariant()} missing: {missingCount} cards, {symbol}{total:0.00}";
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
