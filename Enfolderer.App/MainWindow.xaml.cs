@@ -26,6 +26,7 @@ using Enfolderer.App.Metadata; // orchestrator & provider types
 using Enfolderer.App.Core;
 using Enfolderer.App.Core.Abstractions;
 using Enfolderer.App.Utilities;
+using Enfolderer.App.Lands;
 
 namespace Enfolderer.App;
 
@@ -289,6 +290,28 @@ public partial class MainWindow : Window
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void OpenLandsViewer_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Open Lands XLSX File",
+                Filter = "Excel Files (*.xlsx)|*.xlsx|All Files (*.*)|*.*"
+            };
+            if (dlg.ShowDialog(this) == true)
+            {
+                var win = new LandsWindow(dlg.FileName);
+                win.Owner = this;
+                win.Show();
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Lands Viewer Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
 
     private void BackfillZeroQty_Click(object sender, RoutedEventArgs e)
     {

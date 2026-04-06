@@ -151,6 +151,9 @@
             <MenuItem Header="_Search">
                 <MenuItem Header="Focus Search (Ctrl+F)" Command="ApplicationCommands.Find" />
             </MenuItem>
+            <MenuItem Header="_Lands">
+                <MenuItem Header="Open Lands Viewer..." Click="OpenLandsViewer_Click" />
+            </MenuItem>
         </Menu>
         <StatusBar DockPanel.Dock="Bottom">
             <!-- Primary status (metadata resolving / all metadata loaded) -->
