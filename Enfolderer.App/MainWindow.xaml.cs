@@ -297,8 +297,8 @@ public partial class MainWindow : Window
         {
             var dlg = new Microsoft.Win32.OpenFileDialog
             {
-                Title = "Open Lands XLSX File",
-                Filter = "Excel Files (*.xlsx)|*.xlsx|All Files (*.*)|*.*"
+                Title = "Open Lands CSV File",
+                Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*"
             };
             if (dlg.ShowDialog(this) == true)
             {

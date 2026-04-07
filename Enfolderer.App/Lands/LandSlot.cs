@@ -22,7 +22,6 @@ public class LandSlot : INotifyPropertyChanged
     public string Name { get; }
     public string CollectorNumber { get; }
     public string Set { get; }
-    public string Artist { get; }
     public string Tooltip { get; }
 
     private ImageSource? _imageSource;
@@ -54,8 +53,7 @@ public class LandSlot : INotifyPropertyChanged
         Name = entry.Name;
         CollectorNumber = entry.CollectorNumber;
         Set = entry.Set;
-        Artist = entry.Artist;
-        Tooltip = $"{entry.Name} ({entry.Set} #{entry.CollectorNumber}) - {entry.Artist}";
+        Tooltip = $"{entry.Name} ({entry.Set} #{entry.CollectorNumber})";
         _isOwned = isOwned;
     }
 

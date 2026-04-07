@@ -38,8 +38,6 @@
                             <Run Text=" #" />
                             <Run Text="{Binding CollectorNumber, Mode=OneTime}" />
                         </TextBlock>
-                        <TextBlock Text="{Binding Artist}" FontSize="9" Foreground="#999"
-                                   HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                 </Grid>
             </Border>
