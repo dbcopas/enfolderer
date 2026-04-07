@@ -147,10 +147,10 @@ public class LandsViewModel : INotifyPropertyChanged
         _ = ShowCurrentAsync();
     }
 
-    public async Task LoadAsync(string xlsxPath)
+    public async Task LoadAsync(string csvPath)
     {
         Status = "Loading lands...";
-        _allLands = await Task.Run(() => LandsXlsxParser.Parse(xlsxPath));
+        _allLands = await Task.Run(() => LandsCsvParser.Parse(csvPath));
 
         var ownershipPath = Path.Combine(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), "lands_owned.txt");
         _ownership = new LandsOwnershipStore(ownershipPath);

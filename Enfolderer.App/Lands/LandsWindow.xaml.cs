@@ -9,12 +9,12 @@ public partial class LandsWindow : Window
 {
     private readonly LandsViewModel _vm;
 
-    public LandsWindow(string xlsxPath)
+    public LandsWindow(string csvPath)
     {
         InitializeComponent();
         _vm = new LandsViewModel();
         DataContext = _vm;
-        Loaded += async (_, _) => await _vm.LoadAsync(xlsxPath);
+        Loaded += async (_, _) => await _vm.LoadAsync(csvPath);
     }
 
     private void LandSlot_Click(object sender, MouseButtonEventArgs e)
