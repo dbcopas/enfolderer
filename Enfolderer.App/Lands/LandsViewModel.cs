@@ -27,8 +27,16 @@ public class LandsViewModel : INotifyPropertyChanged
     private HttpClient? _client;
 
     private const int CardsPerSide = 9;          // 3×3 grid
-    private const int SidesPerBinder = 40;        // 20 pages × 2 sides
-    private const int CardsPerBinder = CardsPerSide * SidesPerBinder; // 360
+
+    // Per-binder page counts (read from CSV) and cumulative side offsets.
+    private int[] _binderPageCounts = Array.Empty<int>();
+    private int[] _binderSideOffsets = Array.Empty<int>();
+
+    private int SidesForBinder(int binderIdx) =>
+        binderIdx < _binderPageCounts.Length ? _binderPageCounts[binderIdx] * 2 : 40;
+
+    private int FirstSideOfBinder(int binderIdx) =>
+        binderIdx < _binderSideOffsets.Length ? _binderSideOffsets[binderIdx] : 0;
 
     // Binder color codes in order: W, W, U, U, B, B, R, R, G, G
     private static readonly string[] BinderColors = { "W", "W", "U", "U", "B", "B", "R", "R", "G", "G" };
@@ -150,7 +158,18 @@ public class LandsViewModel : INotifyPropertyChanged
     public async Task LoadAsync(string csvPath)
     {
         Status = "Loading lands...";
-        _allLands = await Task.Run(() => LandsCsvParser.Parse(csvPath));
+        var result = await Task.Run(() => LandsCsvParser.Parse(csvPath));
+        _allLands = result.Entries;
+        _binderPageCounts = result.BinderPageCounts;
+
+        // Build cumulative side offsets from page counts
+        _binderSideOffsets = new int[_binderPageCounts.Length];
+        int offset = 0;
+        for (int i = 0; i < _binderPageCounts.Length; i++)
+        {
+            _binderSideOffsets[i] = offset;
+            offset += _binderPageCounts[i] * 2;
+        }
 
         var ownershipPath = Path.Combine(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), "lands_owned.txt");
         _ownership = new LandsOwnershipStore(ownershipPath);
@@ -174,13 +193,15 @@ public class LandsViewModel : INotifyPropertyChanged
     {
         _spreads.Clear();
         int totalSides = (int)Math.Ceiling(_allLands.Count / (double)CardsPerSide);
-        int totalBinders = (int)Math.Ceiling(totalSides / (double)SidesPerBinder);
-        if (totalBinders == 0) totalBinders = 1;
+        int totalBinders = _binderPageCounts.Length > 0
+            ? _binderPageCounts.Length
+            : Math.Max(1, (int)Math.Ceiling(totalSides / 40.0));
 
         for (int b = 0; b < totalBinders; b++)
         {
-            int firstSide = b * SidesPerBinder;
-            int lastSide = Math.Min(firstSide + SidesPerBinder, totalSides) - 1;
+            int firstSide = FirstSideOfBinder(b);
+            int sidesInThisBinder = SidesForBinder(b);
+            int lastSide = Math.Min(firstSide + sidesInThisBinder, totalSides) - 1;
             int sidesInBinder = lastSide - firstSide + 1;
 
             if (sidesInBinder <= 0) continue;
@@ -285,21 +306,21 @@ public class LandsViewModel : INotifyPropertyChanged
             string pageLabel;
             if (spread.LeftGlobalSide.HasValue && spread.RightGlobalSide.HasValue)
             {
-                int leftInBinder = spread.LeftGlobalSide.Value - binderIdx * SidesPerBinder;
-                int rightInBinder = spread.RightGlobalSide.Value - binderIdx * SidesPerBinder;
+                int leftInBinder = spread.LeftGlobalSide.Value - FirstSideOfBinder(binderIdx);
+                int rightInBinder = spread.RightGlobalSide.Value - FirstSideOfBinder(binderIdx);
                 var (lp, ls) = SideToPageInfo(leftInBinder);
                 var (rp, rs) = SideToPageInfo(rightInBinder);
                 pageLabel = $"Page {lp} {ls}  |  Page {rp} {rs}";
             }
             else if (spread.RightGlobalSide.HasValue)
             {
-                int sideInBinder = spread.RightGlobalSide.Value - binderIdx * SidesPerBinder;
+                int sideInBinder = spread.RightGlobalSide.Value - FirstSideOfBinder(binderIdx);
                 var (p, sd) = SideToPageInfo(sideInBinder);
                 pageLabel = $"Page {p} {sd} (Front Cover)";
             }
             else
             {
-                int sideInBinder = spread.LeftGlobalSide!.Value - binderIdx * SidesPerBinder;
+                int sideInBinder = spread.LeftGlobalSide!.Value - FirstSideOfBinder(binderIdx);
                 var (p, sd) = SideToPageInfo(sideInBinder);
                 pageLabel = $"Page {p} {sd} (Back Cover)";
             }

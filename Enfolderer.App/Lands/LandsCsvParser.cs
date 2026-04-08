@@ -1,17 +1,20 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace Enfolderer.App.Lands;
+
+internal record LandsCsvResult(int[] BinderPageCounts, List<LandEntry> Entries);
 
 internal static class LandsCsvParser
 {
     /// <summary>
     /// Reads land entries from a semicolon-delimited CSV file.
-    /// Expected header: Set;№;Name
-    /// Position is determined by index in the list, not by a column value.
+    /// Line 1: comma-separated binder page counts (e.g. "20,20,20,20,20,20,20,24,20,20")
+    /// Remaining lines: card data (Set;№;Name).
     /// </summary>
-    public static List<LandEntry> Parse(string csvPath)
+    public static LandsCsvResult Parse(string csvPath)
     {
         if (!File.Exists(csvPath))
             throw new FileNotFoundException("Lands CSV not found.", csvPath);
@@ -19,10 +22,16 @@ internal static class LandsCsvParser
         var results = new List<LandEntry>();
         using var reader = new StreamReader(csvPath);
 
-        // Skip header line
-        var header = reader.ReadLine();
-        if (header is null)
-            return results;
+        // Line 1: binder page counts
+        var sizesLine = reader.ReadLine();
+        int[] binderPageCounts = Array.Empty<int>();
+        if (sizesLine is not null)
+        {
+            binderPageCounts = sizesLine.Split(',')
+                .Select(s => int.TryParse(s.Trim(), out var v) ? v : 0)
+                .Where(v => v > 0)
+                .ToArray();
+        }
 
         string? line;
         while ((line = reader.ReadLine()) is not null)
@@ -44,6 +53,6 @@ internal static class LandsCsvParser
             results.Add(new LandEntry(set, numStr, name));
         }
 
-        return results;
+        return new LandsCsvResult(binderPageCounts, results);
     }
 }
