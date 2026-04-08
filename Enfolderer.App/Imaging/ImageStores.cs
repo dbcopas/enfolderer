@@ -72,12 +72,36 @@ public static class ImageCacheStore
 
 /// <summary>
 /// Stores resolved front/back image URLs per card (setCode + collector number) to avoid
-/// refetching metadata when switching faces.
+/// refetching metadata when switching faces. Persisted to disk so URLs survive across sessions.
 /// </summary>
 public static class CardImageUrlStore
 {
     private static readonly ConcurrentDictionary<string, (string? front, string? back)> _map = new(StringComparer.OrdinalIgnoreCase);
     private static string Key(string setCode, string number) => $"{setCode.ToLowerInvariant()}/{number}";
+
+    private static readonly string _persistPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Enfolderer", "cache", "image_urls.json");
+
+    static CardImageUrlStore()
+    {
+        try
+        {
+            if (File.Exists(_persistPath))
+            {
+                var json = File.ReadAllText(_persistPath);
+                var entries = JsonSerializer.Deserialize<Dictionary<string, string?[]>>(json);
+                if (entries is not null)
+                {
+                    foreach (var (key, urls) in entries)
+                    {
+                        if (urls is { Length: >= 2 })
+                            _map[key] = (urls[0], urls[1]);
+                    }
+                }
+            }
+        }
+        catch { }
+    }
 
     public static void Set(string setCode, string number, string? front, string? back)
     {
@@ -88,6 +112,20 @@ public static class CardImageUrlStore
     public static (string? front, string? back) Get(string setCode, string number)
     {
         if (_map.TryGetValue(Key(setCode, number), out var v)) return v; return (null, null);
+    }
+
+    public static void SaveToDisk()
+    {
+        try
+        {
+            var dict = new Dictionary<string, string?[]>(_map.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, (front, back)) in _map)
+                dict[key] = new[] { front, back };
+            var json = JsonSerializer.Serialize(dict);
+            Directory.CreateDirectory(Path.GetDirectoryName(_persistPath)!);
+            File.WriteAllText(_persistPath, json);
+        }
+        catch { }
     }
 }
 
