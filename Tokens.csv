@@ -1,0 +1,2698 @@
+TUGL;89;Pegasus
+TUGL;90;Soldier
+TUGL;91;Zombie
+TUGL;92;Goblin
+TUGL;93;Sheep
+TUGL;94;Squirrel
+MPR;2;Saproling
+MPR;3;Elephant
+MPR;4;Bird
+MPR;5;Spirit
+MPR;6;Goblin Soldier
+MPR;7;Bear
+MPR;8;Beast
+PR2;3;Squirrel
+PR2;4;Zombie
+PR2;5;Elephant
+PR2;6;Wurm
+PR2;7;Dragon
+PR2;8;Soldier
+P03;2;Insect
+P03;3;Sliver
+P03;4;Bear
+P03;5;Goblin
+P03;6;Demon
+P03;7;Rukh
+P04;2;Angel
+P04;3;Pentavite
+P04;4;Myr
+P04;5;Beast
+P04;6;Spirit
+PCSP;1;Marit Lage
+T10E;1;Soldier
+T10E;2;Zombie
+T10E;3;Dragon
+T10E;4;Goblin
+T10E;5;Saproling
+T10E;6;Wasp
+TLRW;1;Avatar
+TLRW;2;Elemental
+TLRW;3;Kithkin Soldier
+TLRW;4;Merfolk Wizard
+TLRW;5;Goblin Rogue
+TLRW;6;Elemental Shaman
+TLRW;7;Beast
+TLRW;8;Elemental
+TLRW;9;Elf Warrior
+TLRW;10;Wolf
+TLRW;11;Shapeshifter
+TDD1;T1;Elemental
+TDD1;T2;Elf Warrior
+TDD1;T3;Goblin
+TMOR;1;Giant Warrior
+TMOR;2;Faerie Rogue
+TMOR;3;Treefolk Shaman
+TSHM;1;Kithkin Soldier
+TSHM;2;Spirit
+TSHM;3;Rat
+TSHM;4;Elemental
+TSHM;5;Elf Warrior
+TSHM;6;Spider
+TSHM;7;Wolf
+TSHM;8;Faerie Rogue
+TSHM;9;Elemental
+TSHM;10;Giant Warrior
+TSHM;11;Goblin Warrior
+TSHM;12;Elf Warrior
+TEVE;1;Goat
+TEVE;2;Bird
+TEVE;3;Beast
+TEVE;4;Spirit
+TEVE;5;Elemental
+TEVE;6;Worm
+TEVE;7;Goblin Soldier
+TALA;1;Soldier
+TALA;2;Homunculus
+TALA;3;Thopter
+TALA;4;Skeleton
+TALA;5;Zombie
+TALA;6;Dragon
+TALA;7;Goblin
+TALA;8;Ooze
+TALA;9;Saproling
+TALA;10;Beast
+TDD2;1;Elemental Shaman
+TCON;1;Angel
+TCON;2;Elemental
+TDDC;1;Spirit
+TDDC;2;Demon
+TDDC;3;Thrull
+TARB;1;Bird Soldier
+TARB;2;Lizard
+TARB;3;Dragon
+TARB;4;Zombie Wizard
+TM10;1;Avatar
+TM10;2;Soldier
+TM10;3;Zombie
+TM10;4;Goblin
+TM10;5;Beast
+TM10;6;Insect
+TM10;7;Wolf
+TM10;8;Gargoyle
+TZEN;1;Angel
+TZEN;2;Bird
+TZEN;3;Kor Soldier
+TZEN;4;Illusion
+TZEN;5;Merfolk
+TZEN;6;Vampire
+TZEN;7;Zombie Giant
+TZEN;8;Elemental
+TZEN;9;Beast
+TZEN;10;Snake
+TZEN;11;Wolf
+TDDD;T1;Beast
+TDDD;T2;Beast
+TDDD;T3;Elephant
+TWWK;1;Soldier Ally
+TWWK;2;Dragon
+TWWK;3;Ogre
+TWWK;4;Elephant
+TWWK;5;Plant
+TWWK;6;Construct
+TDDE;1;Hornet
+TDDE;2;Minion
+TDDE;3;Saproling
+TROE;1a;Eldrazi Spawn
+TROE;1b;Eldrazi Spawn
+TROE;1c;Eldrazi Spawn
+TROE;2;Elemental
+TROE;3;Hellion
+TROE;4;Ooze
+TROE;5;Tuktuk the Returned
+TM11;1;Avatar
+TM11;2;Bird
+TM11;3;Zombie
+TM11;4;Beast
+TM11;5;Ooze
+TM11;6;Ooze
+TDDF;1;Soldier
+TSOM;1;Cat
+TSOM;2;Soldier
+TSOM;3;Goblin
+TSOM;4;Insect
+TSOM;5;Wolf
+TSOM;6;Golem
+TSOM;7;Myr
+TSOM;8;Wurm
+TSOM;9;Wurm
+TMBS;1;Germ
+TMBS;2;Zombie
+TMBS;3;Golem
+TMBS;4;Horror
+TMBS;5;Thopter
+TDDG;1;Goblin
+TNPH;1;Beast
+TNPH;2;Goblin
+TNPH;3;Golem
+TNPH;4;Myr
+TM12;1;Bird
+TM12;2;Soldier
+TM12;3;Zombie
+TM12;4;Beast
+TM12;5;Saproling
+TM12;6;Wurm
+TM12;7;Pentavite
+TDDH;1;Griffin
+TDDH;2;Saproling
+TISD;1;Angel
+TISD;2;Spirit
+TISD;3;Homunculus
+TISD;4;Demon
+TISD;5;Vampire
+TISD;6;Wolf
+TISD;7;Zombie
+TISD;8;Zombie
+TISD;9;Zombie
+TISD;10;Ooze
+TISD;11;Spider
+TISD;12;Wolf
+F12;1a;Human // Wolf
+J12;9;Centaur
+L12;1;Goblin
+L12;2;Knight
+TDKA;1;Human
+TDKA;2;Vampire
+PHEL;1★;Angel // Demon
+TAVR;1;Angel
+TAVR;2;Human
+TAVR;3;Spirit
+TAVR;4;Spirit
+TAVR;5;Demon
+TAVR;6;Zombie
+TAVR;7;Human
+TM13;1;Cat
+TM13;2;Goat
+TM13;3;Soldier
+TM13;4;Drake
+TM13;5;Zombie
+TM13;6;Goblin
+TM13;7;Hellion
+TM13;8;Beast
+TM13;9;Saproling
+TM13;10;Wurm
+TDDJ;1;Saproling
+TRTR;1;Bird
+TRTR;2;Knight
+TRTR;3;Soldier
+TRTR;4;Assassin
+TRTR;5;Dragon
+TRTR;6;Goblin
+TRTR;7;Centaur
+TRTR;8;Ooze
+TRTR;9;Rhino
+TRTR;10;Saproling
+TRTR;11;Wurm
+TRTR;12;Elemental
+J13;9;Golem
+L13;1;Soldier
+L13;2;Bird
+L13;3;Sliver
+L13;4;Soldier
+TGTC;1;Angel
+TGTC;2;Rat
+TGTC;3;Frog Lizard
+TGTC;4;Cleric
+TGTC;5;Horror
+TGTC;6;Soldier
+TGTC;7;Spirit
+TDDK;1;Spirit
+TDGM;1;Elemental
+TMMA;1;Giant Warrior
+TMMA;2;Kithkin Soldier
+TMMA;3;Soldier
+TMMA;4;Illusion
+TMMA;5;Bat
+TMMA;6;Goblin Rogue
+TMMA;7;Spider
+TMMA;8;Zombie
+TMMA;9;Dragon
+TMMA;10;Goblin
+TMMA;11;Elemental
+TMMA;12;Saproling
+TMMA;13;Treefolk Shaman
+TMMA;14;Faerie Rogue
+TMMA;15;Worm
+TM14;1;Sliver
+TM14;2;Angel
+TM14;3;Cat
+TM14;4;Goat
+TM14;5;Zombie
+TM14;6;Dragon
+TM14;7;Elemental
+TM14;8;Elemental
+TM14;9;Beast
+TM14;10;Saproling
+TM14;11;Wolf
+TDDL;1;Griffin
+TDDL;2;Beast
+TTHS;1;Cleric
+TTHS;2;Soldier
+TTHS;3;Soldier
+TTHS;4;Bird
+TTHS;5;Elemental
+TTHS;6;Harpy
+TTHS;7;Soldier
+TTHS;8;Boar
+TTHS;9;Satyr
+TTHS;10;Golem
+L14;1;Soldier
+L14;2;Minotaur
+L14;3;Squid
+L14;4;Warrior
+TBNG;1;Bird
+TBNG;2;Cat Soldier
+TBNG;3;Soldier
+TBNG;4;Bird
+TBNG;5;Kraken
+TBNG;6;Zombie
+TBNG;7;Elemental
+TBNG;8;Centaur
+TBNG;9;Wolf
+TBNG;10;Gold
+TDDM;1;Assassin
+TJOU;1;Sphinx
+TJOU;2;Zombie
+TJOU;3;Minotaur
+TJOU;4;Hydra
+TJOU;5;Spider
+TJOU;6;Snake
+TMD1;1;Soldier
+TMD1;2;Spirit
+TMD1;3;Myr
+TCNS;1;Spirit
+TCNS;2;Demon
+TCNS;3;Zombie
+TCNS;4;Ogre
+TCNS;5;Elephant
+TCNS;6;Squirrel
+TCNS;7;Wolf
+TCNS;8;Construct
+PPC1;T1;Wolf
+TM15;1;Sliver
+TM15;2;Soldier
+TM15;3;Spirit
+TM15;4;Squid
+TM15;5;Beast
+TM15;6;Zombie
+TM15;7;Dragon
+TM15;8;Goblin
+TM15;9;Beast
+TM15;10;Insect
+TM15;11;Treefolk Warrior
+TM15;12;Land Mine
+DDN;82;Goblin
+TKTK;1;Bird
+TKTK;2;Spirit
+TKTK;3;Warrior
+TKTK;4;Warrior
+TKTK;5;Vampire
+TKTK;6;Zombie
+TKTK;7;Goblin
+TKTK;8;Bear
+TKTK;9;Snake
+TKTK;10;Spirit Warrior
+TC14;1;Angel
+TC14;2;Cat
+TC14;3;Goat
+TC14;4;Kor Soldier
+TC14;5;Pegasus
+TC14;6;Soldier
+TC14;7;Spirit
+TC14;8;Fish
+TC14;9;Kraken
+TC14;10;Whale
+TC14;11;Zombie
+TC14;12;Demon
+TC14;13;Demon
+TC14;14;Germ
+TC14;15;Horror
+TC14;16;Zombie
+TC14;17;Goblin
+TC14;18;Ape
+TC14;19;Beast
+TC14;20;Beast
+TC14;21;Elemental
+TC14;22;Elephant
+TC14;23;Elf Druid
+TC14;24;Elf Warrior
+TC14;25;Treefolk
+TC14;26;Wolf
+TC14;27;Gargoyle
+TC14;28;Myr
+TC14;29;Pentavite
+TC14;30;Stoneforged Blade
+TC14;31;Tuktuk the Returned
+TC14;32;Wurm
+TC14;33;Wurm
+TEVG;1;Elemental
+TEVG;2;Elf Warrior
+TEVG;3;Goblin
+TGVL;8;Beast
+TGVL;9;Beast
+TGVL;10;Elephant
+TGVL;11;Bat
+TDVD;5;Spirit
+TDVD;6;Demon
+TDVD;7;Thrull
+TJVC;4;Elemental Shaman
+L15;1;Monk
+TFRF;1;Monk
+TFRF;2;Spirit
+TFRF;3;Warrior
+DDO;66;Soldier
+DDO;67;Kraken
+TDTK;1;Warrior
+TDTK;2;Djinn Monk
+TDTK;3;Zombie
+TDTK;4;Zombie Horror
+TDTK;5;Dragon
+TDTK;6;Goblin
+TMM2;1;Eldrazi Spawn
+TMM2;2;Eldrazi Spawn
+TMM2;3;Eldrazi Spawn
+TMM2;4;Soldier
+TMM2;5;Spirit
+TMM2;6;Faerie Rogue
+TMM2;7;Germ
+TMM2;8;Thrull
+TMM2;9;Elephant
+TMM2;10;Insect
+TMM2;11;Saproling
+TMM2;12;Snake
+TMM2;13;Wolf
+TMM2;14;Worm
+TMM2;15;Golem
+TMM2;16;Myr
+TORI;1;Angel
+TORI;2;Knight
+TORI;3;Soldier
+TORI;4;Demon
+TORI;5;Zombie
+TORI;6;Goblin
+TORI;7;Ashaya, the Awoken World
+TORI;8;Elemental
+TORI;9;Elf Warrior
+TORI;10;Thopter
+TORI;11;Thopter
+DDP;76;Eldrazi Spawn
+DDP;77;Eldrazi Spawn
+DDP;78;Eldrazi Spawn
+DDP;79;Hellion
+DDP;80;Plant
+TBFZ;1;Eldrazi
+TBFZ;2;Eldrazi Scion
+TBFZ;3;Eldrazi Scion
+TBFZ;4;Eldrazi Scion
+TBFZ;5;Knight Ally
+TBFZ;6;Kor Ally
+TBFZ;7;Octopus
+TBFZ;8;Dragon
+TBFZ;9;Elemental
+TBFZ;10;Plant
+TBFZ;11;Elemental
+TC15;1;Shapeshifter
+TC15;2;Angel
+TC15;3;Cat
+TC15;4;Knight
+TC15;5;Knight
+TC15;6;Drake
+TC15;7;Germ
+TC15;8;Zombie
+TC15;9;Dragon
+TC15;10;Elemental Shaman
+TC15;11;Lightning Rager
+TC15;12;Bear
+TC15;13;Beast
+TC15;14;Elephant
+TC15;15;Frog Lizard
+TC15;16;Saproling
+TC15;17;Snake
+TC15;18;Spider
+TC15;19;Wolf
+TC15;20;Elemental
+TC15;21;Snake
+TC15;22;Spirit
+TC15;23;Spirit
+TC15;24;Gold
+L16;5;Servo // Thopter
+TOGW;1;Eldrazi Scion
+TOGW;2;Eldrazi Scion
+TOGW;3;Eldrazi Scion
+TOGW;4;Eldrazi Scion
+TOGW;5;Eldrazi Scion
+TOGW;6;Eldrazi Scion
+TOGW;7;Angel
+TOGW;8;Zombie
+TOGW;9;Elemental
+TOGW;10;Elemental
+TOGW;11;Plant
+DDQ;77;Angel
+DDQ;78;Human
+DDQ;79;Spirit
+DDQ;80;Zombie
+TSOI;1;Angel
+TSOI;2;Human Soldier
+TSOI;3;Spirit
+TSOI;4;Vampire Knight
+TSOI;5;Zombie
+TSOI;6;Devil
+TSOI;7;Insect
+TSOI;8;Ooze
+TSOI;9;Wolf
+TSOI;10;Human Cleric
+TSOI;11;Clue
+TSOI;12;Clue
+TSOI;13;Clue
+TSOI;14;Clue
+TSOI;15;Clue
+TSOI;16;Clue
+TEMA;1;Spirit
+TEMA;2;Soldier
+TEMA;3;Spirit
+TEMA;4;Wall
+TEMA;5;Serf
+TEMA;6;Zombie
+TEMA;7;Carnivore
+TEMA;8;Dragon
+TEMA;9;Elemental
+TEMA;10;Goblin
+TEMA;11;Elephant
+TEMA;12;Elf Warrior
+TEMA;13;Wurm
+TEMA;14;Elemental
+TEMA;15;Goblin Soldier
+TEMN;1;Eldrazi Horror
+TEMN;2;Human Wizard
+TEMN;3;Zombie
+TEMN;4;Zombie
+TEMN;5;Zombie
+TEMN;6;Zombie
+TEMN;7;Human
+TEMN;8;Spider
+PEMN;1Z;Zombie // Zombie
+V16;16;Marit Lage
+TCN2;2;Soldier
+TCN2;3;Soldier
+TCN2;4;Spirit
+TCN2;5;Assassin
+TCN2;6;Zombie
+TCN2;7;Dragon
+TCN2;8;Goblin
+TCN2;9;Lizard
+TCN2;10;Beast
+TCN2;11;Insect
+TCN2;12;Construct
+DDR;71;Eldrazi Scion
+DDR;72;Demon
+DDR;73;Zombie Giant
+DDR;74;Elemental
+DDR;75;Plant
+TKLD;1;Beast
+TKLD;2;Construct
+TKLD;3;Construct
+TKLD;4;Servo
+TKLD;5;Servo
+TKLD;6;Servo
+TKLD;7;Thopter
+TKLD;8;Thopter
+TKLD;9;Thopter
+TC16;1;Spirit
+TC16;2;Bird
+TC16;3;Elemental
+TC16;4;Goat
+TC16;5;Soldier
+TC16;6;Spirit
+TC16;7;Bird
+TC16;8;Squid
+TC16;9;Thopter
+TC16;10;Germ
+TC16;11;Zombie
+TC16;12;Goblin
+TC16;13;Ogre
+TC16;14;Beast
+TC16;15;Elf Warrior
+TC16;16;Saproling
+TC16;17;Saproling
+TC16;18;Worm
+TC16;19;Horror
+TC16;20;Myr
+TPCA;1;Eldrazi
+TPCA;2;Eldrazi Spawn
+TPCA;3;Eldrazi Spawn
+TPCA;4;Eldrazi Spawn
+TPCA;5;Angel
+TPCA;6;Goat
+TPCA;7;Germ
+TPCA;8;Spider
+TPCA;9;Zombie
+TPCA;10;Dragon
+TPCA;11;Goblin
+TPCA;12;Hellion
+TPCA;13;Beast
+TPCA;14;Boar
+TPCA;15;Insect
+TPCA;16;Ooze
+TPCA;17;Ooze
+TPCA;18;Plant
+TPCA;19;Saproling
+F17;10;Vampire // Treasure
+F17;11;Dinosaur // Treasure
+F17;12;Pirate // Treasure
+L17;1;Gremlin // Energy Reserve
+TAER;1;Gremlin
+TAER;2;Ragavan
+TAER;3;Etherium Cell
+TMM3;1;Angel
+TMM3;2;Bird
+TMM3;3;Soldier
+TMM3;4;Spirit
+TMM3;5;Spider
+TMM3;6;Zombie
+TMM3;7;Dragon
+TMM3;8;Goblin
+TMM3;9;Beast
+TMM3;10;Beast
+TMM3;11;Centaur
+TMM3;12;Elephant
+TMM3;13;Ooze
+TMM3;14;Saproling
+TMM3;15;Wurm
+TMM3;16;Elemental
+TMM3;17;Giant Warrior
+TMM3;18;Goblin Warrior
+TMM3;19;Soldier
+TMM3;20;Golem
+TDDS;1;Drake
+TDDS;2;Elemental
+TDDS;3;Goblin
+TDDS;4;Beast
+TDDS;5;Elephant
+TDDS;6;Elf Warrior
+TDDS;7;Wurm
+TAKH;1;Angel of Sanctions
+TAKH;2;Anointer Priest
+TAKH;3;Aven Initiate
+TAKH;4;Aven Wind Guide
+TAKH;5;Glyph Keeper
+TAKH;6;Heart-Piercer Manticore
+TAKH;7;Honored Hydra
+TAKH;8;Labyrinth Guardian
+TAKH;9;Oketra's Attendant
+TAKH;10;Sacred Cat
+TAKH;11;Tah-Crop Skirmisher
+TAKH;12;Temmet, Vizier of Naktamun
+TAKH;13;Trueheart Duelist
+TAKH;14;Unwavering Initiate
+TAKH;15;Vizier of Many Faces
+TAKH;16;Cat
+TAKH;17;Warrior
+TAKH;18;Drake
+TAKH;19;Insect
+TAKH;20;Zombie
+TAKH;21;Beast
+TAKH;22;Hippo
+TAKH;23;Snake
+TAKH;24;Wurm
+TCMA;1;Kithkin Soldier
+TCMA;2;Knight
+TCMA;3;Spirit
+TCMA;4;Germ
+TCMA;5;Zombie
+TCMA;6;Dragon
+TCMA;7;Beast
+TCMA;8;Beast
+TCMA;9;Elemental
+TCMA;10;Elephant
+TCMA;11;Elf Druid
+TCMA;12;Elf Warrior
+TCMA;13;Saproling
+TCMA;14;Spider
+TCMA;15;Treefolk
+TCMA;16;Wolf
+TCMA;17;Wolf
+TCMA;18;Drake
+TCMA;19;Gargoyle
+THOU;1;Adorned Pouncer
+THOU;2;Champion of Wits
+THOU;3;Dreamstealer
+THOU;4;Earthshaker Khenra
+THOU;5;Proven Combatant
+THOU;6;Resilient Khenra
+THOU;7;Sinuous Striker
+THOU;8;Steadfast Sentinel
+THOU;9;Sunscourge Champion
+THOU;10;Horse
+THOU;11;Snake
+THOU;12;Insect
+TC17;1;Cat
+TC17;2;Bat
+TC17;3;Rat
+TC17;4;Vampire
+TC17;5;Zombie
+TC17;6;Dragon
+TC17;7;Dragon
+TC17;8;Cat Warrior
+TC17;9;Cat Dragon
+TC17;10;Gold
+TC17;11;Eldrazi Spawn
+TE01;1;Soldier
+TE01;2;Spirit
+TE01;3;Horror
+TE01;4;Beast
+TE01;5;Beast
+H17;4;Dragon
+TXLN;1;Vampire
+TXLN;2;Illusion
+TXLN;3;Merfolk
+TXLN;4;Pirate
+TXLN;5;Dinosaur
+TXLN;6;Plant
+TXLN;7;Treasure
+TXLN;8;Treasure
+TXLN;9;Treasure
+TXLN;10;Treasure
+TDDT;1;Elemental
+TDDT;2;Wall
+TDDT;3;Goblin
+E02;T1;Saproling
+TIMA;1;Angel
+TIMA;2;Bird
+TIMA;3;Spirit
+TIMA;4;Djinn Monk
+TIMA;5;Dragon
+TIMA;6;Dragon
+TIMA;7;Beast
+TUST;1;Angel // Angel
+TUST;2;Goat
+TUST;3;Spirit // Spirit
+TUST;4;Faerie Spy
+TUST;5;Storm Crow
+TUST;6;Thopter // Thopter
+TUST;7;Rogue
+TUST;8;Vampire // Vampire
+TUST;9;Zombie // Zombie
+TUST;10;Brainiac
+TUST;11;Elemental // Elemental
+TUST;12;Goblin
+TUST;13;Beast // Beast
+TUST;14;Saproling // Saproling
+TUST;15;Squirrel
+TUST;16;Dragon
+TUST;17;Elemental // Elemental
+TUST;18;Clue // Clue
+TUST;19;Construct
+TUST;20;Gnome
+F18;1;Merfolk // Treasure
+F18;2;City's Blessing // Elemental
+F18;3;Illusion // Saproling
+TRIX;1;Elemental
+TRIX;2;Elemental
+TRIX;3;Saproling
+TRIX;4;Golem
+PLNY;1;Treasure
+TA25;1;Spirit
+TA25;2;Angel
+TA25;3;Soldier
+TA25;4;Spirit
+TA25;5;Fish
+TA25;5★;Fish // Kraken
+TA25;6;Kraken
+TA25;7;Whale
+TA25;8;Skeleton
+TA25;9;Goblin
+TA25;10;Kobolds of Kher Keep
+TA25;11;Elf Warrior
+TA25;12;Insect
+TA25;13;Wolf
+TA25;14;Stangg Twin
+TDDU;1;Elf Warrior
+TDDU;2;Myr
+TDDU;3;Thopter
+TDDU;4;Thopter
+TDOM;1;Knight
+TDOM;2;Knight
+TDOM;3;Soldier
+TDOM;4;Cleric
+TDOM;5;Zombie Knight
+TDOM;6;Nightmare Horror
+TDOM;7;Demon
+TDOM;8;Elemental
+TDOM;9;Goblin
+TDOM;10;Karox Bladewing
+TDOM;11;Saproling
+TDOM;12;Saproling
+TDOM;13;Saproling
+TDOM;14;Construct
+TCM2;1;Shapeshifter
+TCM2;2;Bird
+TCM2;3;Goat
+TCM2;4;Knight
+TCM2;5;Spirit
+TCM2;6;Germ
+TCM2;7;Zombie
+TCM2;8;Elemental Shaman
+TCM2;9;Goblin
+TCM2;10;Lightning Rager
+TCM2;11;Saproling
+TCM2;12;Myr
+TCM2;13;Pentavite
+TCM2;14;Triskelavite
+TCM2;15;Tuktuk the Returned
+TCM2;16;Wurm
+TCM2;17;Wurm
+TBBD;1;Spirit
+TBBD;2;Warrior
+TBBD;3;Zombie
+TBBD;4;Zombie Giant
+TBBD;5;Beast
+TBBD;6;Myr
+GS1;T1;Mowu // Mowu
+TM19;1;Angel
+TM19;2;Avatar
+TM19;3;Cat
+TM19;4;Knight
+TM19;5;Ox
+TM19;6;Soldier
+TM19;7;Bat
+TM19;8;Zombie
+TM19;9;Dragon
+TM19;10;Dragon
+TM19;11;Goblin
+TM19;12;Beast
+TM19;13;Elf Warrior
+TM19;14;Thopter
+TC18;2;Shapeshifter
+TC18;3;Angel
+TC18;4;Mask
+TC18;5;Cat
+TC18;6;Soldier
+TC18;7;Myr
+TC18;8;Thopter
+TC18;9;Zombie
+TC18;10;Dragon Egg
+TC18;11;Dragon
+TC18;12;Survivor
+TC18;13;Beast
+TC18;14;Beast
+TC18;15;Cat Warrior
+TC18;16;Elemental
+TC18;17;Plant
+TC18;18;Worm
+TC18;19;Clue
+TC18;20;Construct
+TC18;21;Construct
+TC18;22;Horror
+TC18;23;Myr
+TC18;24;Servo
+TC18;25;Thopter
+TC18;26;Thopter
+TMED;G1;Soldier
+TMED;R1;Construct
+TMED;W1;Beast
+TMED;G2;Zombie
+TMED;W2;Dragon
+TMED;G3;Construct
+TGRN;1;Angel
+TGRN;2;Soldier
+TGRN;3;Bird Illusion
+TGRN;4;Goblin
+TGRN;5;Insect
+TGRN;6;Elf Knight
+TGK1;1;Copy // Horror
+TGK1;2;Soldier // Soldier
+TGK1;3;Weird // Goblin
+TGK1;4;Goblin // Soldier
+TGK1;5;Saproling // Insect
+TGK1;6;Soldier // Goblin
+TGK1;8;Saproling // Elf Knight
+TGK1;9;Wurm // Saproling
+TGK1;10;Elemental // Centaur
+TGK1;11;Voja // Saproling
+TUMA;1;Citizen
+TUMA;2;Spirit
+TUMA;3;Drake
+TUMA;4;Homunculus
+TUMA;5;Faerie Rogue
+TUMA;6;Marit Lage
+TUMA;7;Wurm
+TUMA;8;Zombie
+TUMA;9;Elemental
+TUMA;10;Elemental
+TUMA;11;Soldier
+TUMA;12;Spark Elemental
+TUMA;13;Elemental
+TUMA;14;Ooze
+TUMA;15;Spider
+TUMA;16;Spirit
+TRNA;1;Human
+TRNA;2;Illusion
+TRNA;3;Zombie
+TRNA;4;Goblin
+TRNA;5;Centaur
+TRNA;6;Frog Lizard
+TRNA;7;Ooze
+TRNA;8;Beast
+TRNA;9;Sphinx
+TRNA;10;Spirit
+TRNA;11;Thopter
+TRNA;12;Treasure
+TGK2;1;Bird
+TGK2;2;Spirit
+TGK2;3;Bat
+TGK2;4;Cleric
+TGK2;5;Dragon
+TGK2;6;Goblin
+TGK2;7;Saproling
+TGK2;8;Wurm
+TGK2;9;Ooze
+TWAR;1;Spirit
+TWAR;2;Angel
+TWAR;3;Soldier
+TWAR;4;Wall
+TWAR;5;Wizard
+TWAR;6;Assassin
+TWAR;7;Zombie
+TWAR;8;Zombie Army
+TWAR;9;Zombie Army
+TWAR;10;Zombie Army
+TWAR;11;Zombie Warrior
+TWAR;12;Devil
+TWAR;13;Dragon
+TWAR;14;Goblin
+TWAR;15;Wolf
+TWAR;16;Citizen
+TWAR;17;Voja, Friend to Elves
+TWAR;18;Servo
+TMH1;1;Shapeshifter
+TMH1;2;Angel
+TMH1;3;Bird
+TMH1;4;Soldier
+TMH1;5;Illusion
+TMH1;6;Marit Lage
+TMH1;7;Zombie
+TMH1;8;Elemental
+TMH1;9;Elemental
+TMH1;10;Goblin
+TMH1;11;Bear
+TMH1;12;Elephant
+TMH1;13;Rhino
+TMH1;14;Spider
+TMH1;15;Squirrel
+TMH1;16;Spirit
+TMH1;17;Construct
+TMH1;18;Golem
+TMH1;19;Myr
+TM20;1;Ajani's Pridemate
+TM20;2;Soldier
+TM20;3;Spirit
+TM20;4;Elemental Bird
+TM20;5;Demon
+TM20;6;Zombie
+TM20;7;Elemental
+TM20;8;Wolf
+TM20;9;Golem
+TM20;10;Treasure
+TC19;1;Bird
+TC19;2;Bird
+TC19;3;Human
+TC19;4;Pegasus
+TC19;5;Spirit
+TC19;6;Angel of Sanctions
+TC19;7;Heart-Piercer Manticore
+TC19;8;Drake
+TC19;9;Assassin
+TC19;10;Zombie
+TC19;11;Zombie
+TC19;12;Dragon
+TC19;13;Beast
+TC19;14;Beast
+TC19;15;Centaur
+TC19;16;Egg
+TC19;17;Plant
+TC19;18;Rhino
+TC19;19;Saproling
+TC19;20;Snake
+TC19;21;Wurm
+TC19;22;Gargoyle
+TC19;23;Horror
+TC19;24;Sculpture
+TC19;25;Treasure
+TC19;26;Eldrazi
+TELD;1;Goat
+TELD;2;Human
+TELD;3;Knight
+TELD;4;Mouse
+TELD;5;Faerie
+TELD;6;Rat
+TELD;7;Dwarf
+TELD;8;Bear
+TELD;9;Boar
+TELD;10;Giant
+TELD;11;Human Cleric
+TELD;12;Human Rogue
+TELD;13;Human Warrior
+TELD;14;Wolf
+TELD;15;Food
+TELD;16;Food
+TELD;17;Food
+TELD;18;Food
+TGN2;1;Dragon
+TGN2;2;Dragon
+TGN2;3;Dinosaur
+SLD;13;Faerie Rogue
+SLD;14;Faerie Rogue
+SLD;15;Faerie Rogue
+SLD;16;Faerie Rogue
+SLD;27;Cat
+SLD;28;Cat
+TTHB;1;Goat
+TTHB;2;Human Soldier
+TTHB;3;Pegasus
+TTHB;4;Kraken
+TTHB;5;Reflection
+TTHB;6;Tentacle
+TTHB;7;Zombie
+TTHB;8;Elemental
+TTHB;9;Satyr
+TTHB;10;Spider
+TTHB;11;Wolf
+TTHB;12;Nightmare
+TTHB;13;Gold
+TTHB;14;Wall
+TUND;1;Beeble
+TUND;2;Goblin
+TUND;3;Squirrel
+TUND;4;Dragon
+TUND;5;Giant Teddy Bear
+TC20;1;Angel
+TC20;2;Bird
+TC20;3;Elemental
+TC20;4;Human
+TC20;5;Soldier
+TC20;6;Spirit
+TC20;7;Bird Illusion
+TC20;8;Drake
+TC20;9;Zombie
+TC20;10;Elemental
+TC20;11;Beast
+TC20;12;Hydra
+TC20;13;Insect
+TC20;14;Saproling
+TC20;15;Snake
+TC20;16;Dinosaur Cat
+TC20;17;Goblin Warrior
+TC20;18;Insect
+TC20;19;Treasure
+TIKO;1;Cat
+TIKO;2;Cat Bird
+TIKO;3;Human Soldier
+TIKO;4;Human Soldier
+TIKO;5;Human Soldier
+TIKO;6;Kraken
+TIKO;7;Shark
+TIKO;8;Dinosaur
+TIKO;9;Feather
+TIKO;10;Beast
+TIKO;11;Dinosaur Beast
+TM21;1;Angel
+TM21;2;Bird
+TM21;3;Griffin
+TM21;4;Knight
+TM21;5;Soldier
+TM21;6;Demon
+TM21;7;Zombie
+TM21;8;Goblin Wizard
+TM21;9;Pirate
+TM21;10;Beast
+TM21;11;Cat
+TM21;12;Saproling
+TM21;13;Weird
+TM21;14;Construct
+TM21;15;Treasure
+TM21;19;Dog
+TM21;20;Cat
+T2XM;1;Eldrazi Spawn
+T2XM;2;Shapeshifter
+T2XM;3;Angel
+T2XM;4;Cat
+T2XM;5;Human Soldier
+T2XM;6;Soldier
+T2XM;7;Myr
+T2XM;8;Thopter
+T2XM;9;Demon
+T2XM;10;Germ
+T2XM;11;Marit Lage
+T2XM;12;Ape
+T2XM;13;Beast
+T2XM;14;Elephant
+T2XM;15;Ooze
+T2XM;16;Plant
+T2XM;17;Saproling
+T2XM;18;Squirrel
+T2XM;19;Wolf
+T2XM;20;Elemental
+T2XM;21;Elf Warrior
+T2XM;22;Clue
+T2XM;23;Golem
+T2XM;24;Myr
+T2XM;25;Servo
+T2XM;26;Thopter
+T2XM;27;Treasure
+T2XM;28;Tuktuk the Returned
+T2XM;29;Wurm
+T2XM;30;Wurm
+T2XM;31;Copy
+TZNR;1;Angel Warrior
+TZNR;2;Cat
+TZNR;3;Cat Beast
+TZNR;4;Kor Warrior
+TZNR;5;Drake
+TZNR;6;Illusion
+TZNR;7;Insect
+TZNR;8;Plant
+TZNR;9;Hydra
+TZNR;10;Construct
+TZNR;11;Goblin Construct
+TZNR;12;Copy
+TZNC;1;Bird
+TZNC;2;Kor Ally
+TZNC;3;Faerie Rogue
+TZNC;4;Germ
+TZNC;5;Goblin Rogue
+TZNC;6;Rat
+TZNC;7;Beast
+TZNC;8;Elemental
+TZNC;9;Saproling
+TZNC;10;Elemental
+TZNC;11;Thopter
+SLD;148;Walker
+SLD;149;Walker
+SLD;150;Walker
+SLD;151;Walker
+SLD;152;Walker
+SLD;153;Treasure
+TCMR;1;Angel
+TCMR;2;Soldier
+TCMR;3;Spirit
+TCMR;4;Salamander Warrior
+TCMR;5;Thrull
+TCMR;6;Zombie
+TCMR;7;Dragon
+TCMR;8;Elf Warrior
+TCMR;9;Golem
+TCMR;10;Horror
+TCMR;11;Rock
+TCMR;12;Treasure
+TCMR;13;Copy
+TCMR;15;Cat
+TCMR;16;Soldier
+TCMR;17;Illusion
+TCMR;18;Beast
+TCMR;19;Beast
+TCMR;20;Elephant
+TCMR;21;Plant
+TCMR;22;Saproling
+TCMR;23;Copy
+SLD;200;Squirrel
+PL21;2★;Minotaur
+TKHC;1;Bird
+TKHC;2;Kithkin Soldier
+TKHC;3;Pegasus
+TKHC;4;Soldier
+TKHC;5;Boar
+TKHC;6;Elemental
+TKHC;7;Servo
+TKHC;8;Thopter
+TKHM;1;Shard
+TKHM;2;Angel Warrior
+TKHM;3;Human Warrior
+TKHM;4;Spirit
+TKHM;5;Bird
+TKHM;6;Giant Wizard
+TKHM;7;Koma's Coil
+TKHM;8;Shapeshifter
+TKHM;9;Zombie Berserker
+TKHM;10;Demon Berserker
+TKHM;11;Dragon
+TKHM;12;Dwarf Berserker
+TKHM;13;Bear
+TKHM;14;Cat
+TKHM;15;Elf Warrior
+TKHM;16;Troll Warrior
+TKHM;17;Icy Manalith
+TKHM;18;Replicated Ring
+TKHM;19;Treasure
+SLD;219;Goblin
+TTSR;1;Griffin
+TTSR;2;Soldier
+TTSR;3;Cloud Sprite
+TTSR;4;Bat
+TTSR;5;Knight
+TTSR;6;Spider
+TTSR;7;Giant
+TTSR;8;Goblin
+TTSR;9;Kobolds of Kher Keep
+TTSR;10;Ape
+TTSR;11;Insect
+TTSR;12;Llanowar Elves
+TTSR;13;Saproling
+TTSR;14;Assembly-Worker
+TTSR;15;Metallic Sliver
+TC21;1;Eldrazi
+TC21;2;Drake
+TC21;3;Fish
+TC21;4;Kraken
+TC21;5;Whale
+TC21;6;Champion of Wits
+TC21;7;Demon
+TC21;8;Horror
+TC21;9;Zombie
+TC21;10;Beast
+TC21;11;Beast
+TC21;12;Boar
+TC21;13;Elephant
+TC21;14;Frog Lizard
+TC21;15;Fungus Beast
+TC21;16;Hydra
+TC21;17;Insect
+TC21;18;Saproling
+TC21;19;Wurm
+TC21;20;Elemental
+TC21;21;Spirit
+TC21;22;Construct
+TC21;23;Construct
+TC21;24;Food
+TC21;25;Golem
+TC21;26;Golem
+TC21;27;Golem
+TC21;28;Myr
+TC21;29;Thopter
+TC21;30;Copy
+TSTX;1;Avatar
+TSTX;2;Elemental
+TSTX;3;Fractal
+TSTX;4;Inkling
+TSTX;5;Pest
+TSTX;6;Spirit
+TSTX;7;Treasure
+TMH2;1;Bird
+TMH2;2;Crab
+TMH2;3;Phyrexian Germ
+TMH2;4;Timeless Dragon
+TMH2;5;Timeless Witness
+TMH2;6;Zombie
+TMH2;7;Zombie Army
+TMH2;8;Goblin
+TMH2;9;Beast
+TMH2;10;Elemental
+TMH2;11;Squirrel
+TMH2;12;Golem
+TMH2;13;Insect
+TMH2;14;Clue
+TMH2;15;Clue
+TMH2;16;Construct
+TMH2;17;Food
+TMH2;18;Food
+TMH2;19;Thopter
+TMH2;20;Treasure
+TMH2;21;Treasure
+TAFC;1;Angel
+TAFC;2;Knight
+TAFC;3;Illusion
+TAFC;4;Champion of Wits
+TAFC;5;Rat
+TAFC;6;Dragon
+TAFC;7;Beast
+TAFC;8;Saproling
+TAFC;9;Dragon Spirit
+TAFC;10;Clue
+TAFC;11;Servo
+TAFC;12;Thopter
+TAFR;1;Angel
+TAFR;2;Icingdeath, Frost Tongue
+TAFR;3;Dog Illusion
+TAFR;4;Faerie Dragon
+TAFR;5;The Atropal
+TAFR;6;Skeleton
+TAFR;7;Spider
+TAFR;8;Vecna
+TAFR;9;Zombie
+TAFR;10;Boo
+TAFR;11;Devil
+TAFR;12;Goblin
+TAFR;13;Guenhwyvar
+TAFR;14;Wolf
+TAFR;15;Treasure
+TMIC;1;Eldrazi Spawn
+TMIC;2;Human Soldier
+TMIC;3;Knight
+TMIC;4;Zombie
+TMIC;5;Zombie
+TMIC;6;Zombie Army
+TMIC;7;Beast
+TMIC;8;Centaur
+TMIC;9;Elephant
+TMIC;10;Rhino
+TMIC;11;Snake
+TMID;1;Human
+TMID;2;Spirit
+TMID;3;Bird
+TMID;4;Bat
+TMID;5;Zombie
+TMID;6;Devil
+TMID;7;Elemental
+TMID;8;Beast
+TMID;9;Insect
+TMID;10;Ooze
+TMID;11;Spider
+TMID;12;Treefolk
+TMID;13;Wolf
+TMID;14;Vampire
+TMID;15;Zombie
+TMID;16;Clue
+SLD;348;Clue
+HHO;21★;Treasure
+TVOC;1;Spirit
+TVOC;2;Angel
+TVOC;3;Spirit
+TVOC;4;Bat
+TVOC;5;Clue
+TVOC;6;Thopter
+TVOW;1;Human
+TVOW;2;Spirit
+TVOW;3;Spirit
+TVOW;4;Spirit Cleric
+TVOW;5;Zombie
+TVOW;6;Slug
+TVOW;7;Vampire
+TVOW;8;Zombie
+TVOW;9;Dragon Illusion
+TVOW;10;Human
+TVOW;11;Wolf
+TVOW;12;Boar
+TVOW;13;Insect
+TVOW;14;Wolf
+TVOW;15;Human Soldier
+TVOW;16;Vampire
+TVOW;17;Blood
+TVOW;18;Treasure
+TVOW;19;Copy
+CC2;9;Snake // Zombie
+TNEC;1;Shrine
+TNEC;2;Angel
+TNEC;3;Phyrexian Germ
+TNEC;4;Elemental
+TNEC;5;Goblin
+TNEC;6;Smoke Blessing
+TNEC;7;Beast
+TNEC;8;Elephant
+TNEC;9;Plant
+TNEC;10;Saproling
+TNEC;11;Myr
+TNEC;12;Thopter
+TNEO;1;Pilot
+TNEO;2;Spirit
+TNEO;3;Samurai
+TNEO;4;Ninja
+TNEO;5;Rat Rogue
+TNEO;6;Construct
+TNEO;7;Dragon Spirit
+TNEO;8;Goblin Shaman
+TNEO;9;Spirit
+TNEO;10;Human Monk
+TNEO;11;Spirit
+TNEO;12;Spirit
+TNEO;13;Keimi
+TNEO;14;Mechtitan
+TNEO;15;Construct
+TNEO;16;Tamiyo's Notebook
+TNEO;17;Treasure
+Q07;T12;Goblin // Blood
+TNCC;1;Eldrazi
+TNCC;2;Eldrazi Spawn
+TNCC;4;Cat Beast
+TNCC;5;Elemental
+TNCC;6;Goat
+TNCC;7;Human
+TNCC;8;Human Soldier
+TNCC;9;Soldier
+TNCC;10;Drake
+TNCC;11;Faerie
+TNCC;12;Squid
+TNCC;13;Tentacle
+TNCC;14;Champion of Wits
+TNCC;15;Demon
+TNCC;16;Zombie
+TNCC;17;Devil
+TNCC;18;Elemental
+TNCC;19;Lightning Rager
+TNCC;20;Ogre
+TNCC;21;Beast
+TNCC;22;Elephant
+TNCC;23;Elf Warrior
+TNCC;24;Insect
+TNCC;25;Ooze
+TNCC;26;Ooze
+TNCC;27;Plant
+TNCC;28;Saproling
+TNCC;29;Spider
+TNCC;30;Treefolk
+TNCC;31;Wurm
+TNCC;32;Elemental
+TNCC;33;Soldier
+TNCC;34;Clue
+TNCC;35;Food
+TNCC;36;Thopter
+TSNC;1;Copy
+TSNC;2;Angel
+TSNC;3;Spirit
+TSNC;4;Fish
+TSNC;5;Wizard
+TSNC;6;Ogre Warrior
+TSNC;7;Rogue
+TSNC;8;Devil
+TSNC;9;Cat
+TSNC;10;Dog
+TSNC;11;Rhino Warrior
+TSNC;12;Citizen
+TSNC;13;Treasure
+TSNC;14;Treasure
+TSNC;15;Treasure
+TSNC;16;Treasure
+TSNC;17;Treasure
+PTSNC;1;Treasure
+PTSNC;2;Treasure
+PTSNC;3;Treasure
+PTSNC;4;Treasure
+PTSNC;5;Treasure
+PTSNC;6;Treasure
+TCLB;1;Goat
+TCLB;2;Knight
+TCLB;3;Pegasus
+TCLB;4;Rabbit
+TCLB;5;Soldier
+TCLB;6;Faerie Dragon
+TCLB;7;Demon
+TCLB;8;Skeleton
+TCLB;9;Boo
+TCLB;10;Devil
+TCLB;11;Dragon
+TCLB;12;Boar
+TCLB;13;Ox
+TCLB;14;Saproling
+TCLB;15;Squirrel
+TCLB;16;Construct
+TCLB;17;Treasure
+TCLB;18;Volo's Journal
+TCLB;19;Copy
+TCLB;21;Eldrazi Horror
+TCLB;22;Shapeshifter
+TCLB;23;Shapeshifter
+TCLB;24;Shapeshifter
+TCLB;25;Angel Warrior
+TCLB;26;Human
+TCLB;27;Kor Warrior
+TCLB;28;Shapeshifter
+TCLB;29;Squid
+TCLB;30;Wizard
+TCLB;31;Horror
+TCLB;32;Warrior
+TCLB;33;Dragon
+TCLB;34;Goblin
+TCLB;35;Kobolds of Kher Keep
+TCLB;36;Ogre
+TCLB;37;Pirate
+TCLB;38;Beast
+TCLB;39;Centaur
+TCLB;40;Insect
+TCLB;41;Phyrexian Beast
+TCLB;42;Spider
+TCLB;43;Wolf
+TCLB;44;Wurm
+TCLB;45;Inkling
+TCLB;46;Satyr
+TCLB;47;Clue
+TCLB;48;Gold
+SLD;1018;Icingdeath, Frost Tongue
+T2X2;1;Eldrazi Scion
+T2X2;2;Spirit
+T2X2;3;Angel
+T2X2;4;Aven Initiate
+T2X2;5;Knight
+T2X2;6;Monk
+T2X2;7;Soldier
+T2X2;8;Spirit
+T2X2;9;Vampire
+T2X2;10;Drake
+T2X2;11;Faerie Rogue
+T2X2;12;Zombie
+T2X2;13;Elemental
+T2X2;14;Bear
+T2X2;15;Boar
+T2X2;16;Egg
+T2X2;17;Saproling
+T2X2;18;Spider
+T2X2;19;Cat Dragon
+T2X2;20;Worm
+T2X2;21;Phyrexian Golem
+T2X2;22;Treasure
+TDMC;1;Griffin
+TDMC;2;Human
+TDMC;3;Knight
+TDMC;4;Warrior
+TDMC;5;Zombie Knight
+TDMC;6;Ragavan
+TDMC;7;Bear
+TDMC;8;Egg
+TDMC;9;Elephant
+TDMC;10;Hydra
+TDMC;11;Snake
+TDMC;12;Kavu
+TDMU;1;Angel
+TDMU;2;Bird
+TDMU;3;Knight
+TDMU;4;Soldier
+TDMU;5;Merfolk
+TDMU;6;Bird
+TDMU;7;Insect
+TDMU;8;Phyrexian
+TDMU;9;Zombie
+TDMU;10;Dragon
+TDMU;11;Elemental
+TDMU;12;Goblin
+TDMU;13;Kobolds of Kher Keep
+TDMU;14;Monk
+TDMU;15;Badger
+TDMU;16;Beast
+TDMU;17;Cat Warrior
+TDMU;18;Saproling
+TDMU;19;Wurm
+TDMU;20;Sand Warrior
+TDMU;21;Stangg Twin
+TDMU;22;Ornithopter
+TDMU;23;Powerstone
+TDMU;24;Treasure
+WDMU;1;Angel
+WDMU;2;Bird
+WDMU;3;Zombie
+WDMU;4;Dragon
+WDMU;5;Beast
+PTDMU;1;Soldier
+PTDMU;2;Angel
+PTDMU;3;Zombie
+T40K;1;Astartes Warrior
+T40K;1★;Astartes Warrior
+T40K;2;Soldier
+T40K;2★;Soldier
+T40K;3;Soldier
+T40K;3★;Soldier
+T40K;4;Soldier
+T40K;4★;Soldier
+T40K;5;Space Marine Devastator
+T40K;6;Ultramarines Honour Guard
+T40K;7;Zephyrim
+T40K;8;Sicarian Infiltrator
+T40K;9;Tyranid Gargoyle
+T40K;10;Vanguard Suppressor
+T40K;11;Arco-Flagellant
+T40K;12;Astartes Warrior
+T40K;13;Cherubael
+T40K;14;Necron Warrior
+T40K;14★;Necron Warrior
+T40K;15;Plaguebearer of Nurgle
+T40K;15★;Plaguebearer of Nurgle
+T40K;16;Spawn
+T40K;16★;Spawn
+T40K;17;Tyranid
+T40K;17★;Tyranid
+T40K;18;Tyranid
+T40K;19;Tyranid Warrior
+T40K;20;Blue Horror
+T40K;21;Clue
+T40K;22;Insect
+T40K;23;Robot
+TUNF;1;Cat
+TUNF;2;Clown Robot
+TUNF;3;Clown Robot
+TUNF;4;Contortionist // Contortionist
+TUNF;5;Storm Crow
+TUNF;6;Zombie Employee
+TUNF;7;Balloon
+TUNF;8;Squirrel
+TUNF;9;Teddy Bear
+TUNF;10;Food
+TUNF;11;Food
+TUNF;12;Treasure
+TUNF;13;Treasure
+TGN3;1;Angel
+TGN3;2;Human Soldier
+TGN3;3;Soldier
+TGN3;4;Bird Illusion
+TGN3;5;Drake
+TGN3;6;Demon
+TGN3;7;Zombie
+TGN3;8;Dragon
+TGN3;9;Elf Warrior
+TGN3;10;Treasure
+TBRC;1;Copy
+TBRC;2;Eldrazi
+TBRC;3;Goat
+TBRC;4;Faerie
+TBRC;5;Phyrexian Myr
+TBRC;6;Thopter
+TBRC;7;Inkling
+TBRC;8;Construct
+TBRC;9;Mishra's Warform
+TBRC;10;Myr
+TBRC;11;Phyrexian Horror
+TBRC;12;Scrap
+TBRC;13;Servo
+TBRC;14;Elemental
+TBRO;1;Spirit
+TBRO;2;Bear
+TBRO;3;Forest Dryad
+TBRO;4;Construct
+TBRO;5;Construct
+TBRO;6;Golem
+TBRO;7;Powerstone
+TBRO;8;Soldier
+TBRO;9;Soldier
+TBRO;10;Thopter
+TBRO;11;Zombie
+PTBRO;1;Construct
+PTBRO;2;Urzan Automaton
+PTBRO;3;Artifact Zombie
+TBOT;1;Laserbeak
+TBOT;2;Ravage
+PBRO;T1;Construct
+PBRO;T2;Construct
+T30A;1;Human
+T30A;2;Human Warrior
+T30A;3;Soldier
+T30A;4;Bird
+T30A;5;Human Wizard
+T30A;6;Demon
+T30A;7;Skeleton
+T30A;8;Beast
+T30A;9;Wolf
+T30A;10;Human Cleric
+T30A;11;Clue
+T30A;12;Clue
+T30A;13;Treasure
+T30A;14;Treasure
+T30A;15;Treasure
+T30A;16;Wasp
+SLD;1139;Saproling
+TSCD;1;Eldrazi
+TSCD;2;Bird
+TSCD;3;Cat
+TSCD;4;Cat Beast
+TSCD;5;Cat Bird
+TSCD;6;Human Warrior
+TSCD;7;Pegasus
+TSCD;8;Soldier
+TSCD;9;Spirit
+TSCD;10;Faerie
+TSCD;11;Thopter
+TSCD;12;Demon
+TSCD;13;Zombie
+TSCD;14;Zombie Army
+TSCD;15;Zombie Knight
+TSCD;16;Dragon
+TSCD;17;Karox Bladewing
+TSCD;18;Ogre
+TSCD;19;Beast
+TSCD;20;Elephant
+TSCD;21;Elf Warrior
+TSCD;22;Insect
+TSCD;23;Saproling
+TSCD;24;Thopter
+TSCD;25;Treasure
+TDMR;1;Bird
+TDMR;2;Griffin
+TDMR;3;Cat
+TDMR;4;Marit Lage
+TDMR;5;Zombie
+TDMR;6;Elemental
+TDMR;7;Goblin
+TDMR;8;Cat
+TDMR;9;Elephant
+TDMR;10;Insect
+TDMR;11;Saproling
+TDMR;12;Sheep
+TDMR;13;Squirrel
+TDMR;14;Construct
+WONE;1;Cat
+WONE;2;Samurai
+WONE;3;Phyrexian Mite
+WONE;4;Phyrexian Goblin
+WONE;5;Cat
+WONE;6;Samurai
+TONC;1;Eldrazi
+TONC;2;Angel
+TONC;3;Angel
+TONC;4;Bird
+TONC;5;Human
+TONC;6;Human Soldier
+TONC;7;Soldier
+TONC;8;Soldier
+TONC;9;Spirit
+TONC;10;Dragon
+TONC;11;Goblin
+TONC;12;Kobolds of Kher Keep
+TONC;13;Beast
+TONC;14;Elephant
+TONC;15;Phyrexian Insect
+TONC;16;Phyrexian Wurm
+TONC;17;Soldier
+TONC;18;Golem
+TONC;19;Myr
+TONC;20;Phyrexian Horror
+TONC;21;Thopter
+TONC;23;Phyrexian Germ
+TONE;1;Cat
+TONE;2;Samurai
+TONE;3;Phyrexian Goblin
+TONE;4;Phyrexian Horror
+TONE;5;Rebel
+TONE;6;Phyrexian Beast
+TONE;7;Phyrexian Horror
+TONE;8;Drone
+TONE;9;The Hollow Sentinel
+TONE;10;Phyrexian Golem
+TONE;11;Phyrexian Mite
+TONE;12;Phyrexian Mite
+PL23;2;Food
+TMOM;1;Monk
+TMOM;2;Soldier
+TMOM;3;Vampire
+TMOM;4;Kraken
+TMOM;5;Zombie
+TMOM;6;First Mate Ragavan
+TMOM;7;Dinosaur
+TMOM;8;Phyrexian Saproling
+TMOM;9;Elemental
+TMOM;10;Knight
+TMOM;11;Phyrexian Hydra
+TMOM;12;Phyrexian Hydra
+TMOM;13;Spirit
+TMOM;14;Spirit
+TMOM;15;Warrior
+TMOM;16;Incubator // Phyrexian
+TMOM;17;Incubator // Phyrexian
+TMOM;18;Incubator // Phyrexian
+TMOM;19;Thopter
+TMOM;20;Treasure
+TMOM;21;Treasure
+TMUL;1;Phyrexian Myr
+TMUL;2;Elemental
+WMOM;1;Monk
+WMOM;2;Soldier
+WMOM;3;Knight
+WMOM;4;Zombie
+WMOM;5;Dinosaur
+WMOM;6;Thopter
+WMOM;7;Vampire
+WMOM;8;Spirit
+WMOM;9;Treasure
+WMOM;10;Phyrexian Saproling
+WMOM;11;Spirit
+WMOM;12;Treasure
+TMOC;1;Eldrazi
+TMOC;2;Sliver
+TMOC;3;Angel
+TMOC;4;Angel
+TMOC;5;Bird
+TMOC;6;Human
+TMOC;7;Knight
+TMOC;8;Soldier
+TMOC;9;Spirit
+TMOC;10;Warrior
+TMOC;11;Faerie
+TMOC;12;Shapeshifter
+TMOC;13;Spirit
+TMOC;14;Squid
+TMOC;15;Tentacle
+TMOC;16;Thopter
+TMOC;17;Assassin
+TMOC;18;Demon
+TMOC;19;Phyrexian Germ
+TMOC;20;Vampire Knight
+TMOC;21;Zombie Knight
+TMOC;22;Elemental
+TMOC;23;Feather
+TMOC;24;Goblin
+TMOC;25;Gremlin
+TMOC;26;Human
+TMOC;27;Kobolds of Kher Keep
+TMOC;28;Beast
+TMOC;29;Butterfly
+TMOC;30;Elephant
+TMOC;31;Insect
+TMOC;32;Blood
+TMOC;33;Clue
+TMOC;34;Construct
+TMOC;35;Food
+TMOC;36;Gold
+TMOC;37;Golem
+TMOC;38;Myr
+TMOC;39;Phyrexian Golem
+TMOC;40;Phyrexian Horror
+TMOC;41;Replicated Ring
+TMOC;42;Servo
+TLTC;1;Bird
+TLTC;2;Goat
+TLTC;4;Human
+TLTC;5;Soldier
+TLTC;6;Bird
+TLTC;7;Wraith
+TLTC;8;Goblin
+TLTC;9;Human Knight
+TLTC;10;Beast
+TLTC;11;Elf Warrior
+TLTC;12;Insect
+TLTC;13;Treefolk
+TLTC;14;Dragon
+TLTR;1;Human Soldier
+TLTR;2;Human Soldier
+TLTR;3;Spirit
+TLTR;4;Tentacle
+TLTR;5;Orc Army
+TLTR;6;Orc Army
+TLTR;7;Smaug
+TLTR;8;Ballistic Boulder
+TLTR;9;Food
+TLTR;10;Food
+TLTR;11;Food
+TLTR;12;Treasure
+TLTR;14;Human Soldier
+TLTR;15;Human Soldier
+TLTR;16;Spirit
+TLTR;17;Tentacle
+TLTR;18;Orc Army
+TLTR;19;Orc Army
+TLTR;20;Smaug
+TLTR;21;Ballistic Boulder
+TLTR;22;Food
+TLTR;23;Food
+TLTR;24;Food
+TLTR;25;Treasure
+TCMM;1;Eldrazi
+TCMM;2;Eldrazi Scion
+TCMM;3;Eldrazi Spawn
+TCMM;4;Bird
+TCMM;5;Cat
+TCMM;6;Human Soldier
+TCMM;7;Knight
+TCMM;8;Kor Soldier
+TCMM;9;Soldier
+TCMM;10;Spirit
+TCMM;11;Bird Illusion
+TCMM;12;Drake
+TCMM;13;Zombie
+TCMM;14;Assassin
+TCMM;15;Demon
+TCMM;16;Phyrexian Germ
+TCMM;17;Rat
+TCMM;18;Thrull
+TCMM;19;Zombie
+TCMM;20;Dragon
+TCMM;21;Dragon
+TCMM;22;Dragon Egg
+TCMM;23;Dwarf Berserker
+TCMM;24;Elemental
+TCMM;25;Elemental
+TCMM;26;Elemental
+TCMM;27;Goblin
+TCMM;28;Ogre
+TCMM;29;Satyr
+TCMM;30;Cat
+TCMM;31;Elephant
+TCMM;32;Elf Druid
+TCMM;33;Insect
+TCMM;34;Phyrexian Beast
+TCMM;35;Saproling
+TCMM;36;Spider
+TCMM;37;Elemental
+TCMM;38;Graveborn
+TCMM;39;Spirit
+TCMM;40;Clue
+TCMM;41;Construct
+TCMM;42;Construct
+TCMM;43;Myr
+TCMM;44;Phyrexian Myr
+TCMM;45;Servo
+TCMM;46;Stoneforged Blade
+TCMM;47;Thopter
+TCMM;48;Treasure
+TCMM;54;Copy
+TCMM;55;Copy
+TCMM;57;Sliver
+TCMM;58;Spirit
+TCMM;59;Angel
+TCMM;60;Avacyn
+TCMM;61;Cat Beast
+TCMM;62;Cleric
+TCMM;63;Human Warrior
+TCMM;64;Kor Ally
+TCMM;65;Ox
+TCMM;66;Pegasus
+TCMM;67;Wall
+TCMM;68;Sliver Army
+TCMM;69;Zombie Army
+TCMM;70;Dragon
+TCMM;71;Wizard
+TCMM;72;Elf Warrior
+TCMM;73;Wurm
+TCMM;74;Construct
+TCMM;75;Construct
+TCMM;76;Phyrexian Golem
+SLD;1340;Angel
+SLD;1341;Spirit
+SLD;1306;Wurm
+TWOC;1;Monster // Virtuous
+TWOC;2;Royal // Virtuous
+TWOC;4;Copy
+TWOC;7;Human Soldier
+TWOC;9;Pegasus
+TWOC;10;Faerie
+TWOC;11;Faerie Rogue
+TWOC;12;Pirate
+TWOC;15;Saproling
+TWOC;16;Faerie Rogue
+TWOE;1;Bird
+TWOE;2;Human
+TWOE;3;Knight
+TWOE;4;Mouse
+TWOE;5;Faerie
+TWOE;6;Nightmare
+TWOE;7;Rat
+TWOE;8;Beast
+TWOE;9;Elemental
+TWOE;10;Food
+TWOE;11;Food
+TWOE;12;Food
+TWOE;13;Food
+TWOE;14;Treasure
+TWOE;15;Monster // Sorcerer
+TWOE;16;Royal // Young Hero
+TWOE;17;Wicked // Cursed
+WWOE;1;Human
+WWOE;2;Bird
+WWOE;3;Rat
+WWOE;4;Goblin
+WWOE;5;Elf Druid
+SLD;1357;Zombie
+TWHO;1;Copy
+TWHO;2;Alien
+TWHO;3;Alien Rhino
+TWHO;4;Horse
+TWHO;5;Human
+TWHO;6;Human
+TWHO;7;Human Noble
+TWHO;8;Soldier
+TWHO;9;Warrior
+TWHO;10;Fish
+TWHO;11;Alien Angel
+TWHO;12;Dalek
+TWHO;13;Human Rogue
+TWHO;14;Alien Warrior
+TWHO;15;Mark of the Rani
+TWHO;16;Alien Salamander
+TWHO;17;Beast
+TWHO;18;Mutant
+TWHO;19;Alien Insect
+TWHO;20;Dinosaur
+TWHO;21;Clue
+TWHO;22;Clue
+TWHO;23;Clue
+TWHO;25;Food
+TWHO;26;Food
+TWHO;27;Food
+TWHO;28;Treasure
+TWHO;29;Treasure
+TWHO;30;Treasure
+TWHO;31;Treasure
+TWHO;32;Osgood, Operation Double
+TWHO;33;Copy
+TWHO;34;Alien
+TWHO;35;Alien Rhino
+TWHO;36;Horse
+TWHO;37;Human
+TWHO;38;Human
+TWHO;39;Human Noble
+TWHO;40;Soldier
+TWHO;41;Warrior
+TWHO;42;Fish
+TWHO;43;Alien Angel
+TWHO;44;Dalek
+TWHO;45;Human Rogue
+TWHO;46;Alien Warrior
+TWHO;47;Mark of the Rani
+TWHO;48;Alien Salamander
+TWHO;49;Beast
+TWHO;50;Mutant
+TWHO;51;Alien Insect
+TWHO;52;Dinosaur
+TWHO;53;Clue
+TWHO;54;Clue
+TWHO;55;Clue
+TWHO;57;Food
+TWHO;58;Food
+TWHO;59;Food
+TWHO;60;Treasure
+TWHO;61;Treasure
+TWHO;62;Treasure
+TWHO;63;Treasure
+TWHO;64;Osgood, Operation Double
+TLCC;1;Shapeshifter
+TLCC;2;Bird
+TLCC;3;Merfolk
+TLCC;4;Salamander Warrior
+TLCC;5;Pirate
+TLCC;6;Vampire
+TLCC;7;Ragavan
+TLCC;8;Beast
+TLCC;9;Boar
+TLCC;10;Dinosaur
+TLCC;11;Dinosaur Beast
+TLCC;12;Elephant
+TLCC;13;Frog Lizard
+TLCC;14;Vampire
+TLCC;15;Blood
+TLCI;1;Copy
+TLCI;2;Angel
+TLCI;3;Gnome Soldier
+TLCI;4;Vampire
+TLCI;5;Merfolk
+TLCI;6;Bat
+TLCI;7;Fungus
+TLCI;8;Skeleton Pirate
+TLCI;9;Dinosaur
+TLCI;10;Dinosaur
+TLCI;11;Dinosaur Egg
+TLCI;12;Fungus Dinosaur
+TLCI;13;Golem
+TLCI;14;Spirit
+TLCI;15;Vampire Demon
+TLCI;16;Gnome
+TLCI;17;Map
+TLCI;18;Treasure
+TREX;1;Dinosaur
+TREX;2;Treasure
+SLD;1507;Treasure
+SLD;1398;Egg
+SLD;1398★;Egg
+SLD;1334;Hydra
+TRVR;1;Bird
+TRVR;2;Angel
+TRVR;3;Angel
+TRVR;4;Spirit
+TRVR;5;Bird Illusion
+TRVR;6;Zombie
+TRVR;7;Dragon
+TRVR;8;Goblin
+TRVR;9;Goblin
+TRVR;10;Centaur
+TRVR;11;Rhino
+TRVR;12;Saproling
+TRVR;13;Wurm
+TRVR;14;Beast
+TRVR;15;Elf Knight
+TRVR;16;Soldier
+TRVR;17;Sphinx
+TRVR;18;Spirit
+TRVR;19;Voja
+SLD;1516;Dog
+SLD;1517;Cat
+PLST;TAFR-1;Angel
+PLST;TGRN-1;Angel
+PLST;TNPH-1;Beast
+PLST;TXLN-1;Vampire
+PLST;TBNG-2;Cat Soldier
+PLST;TCMR-2;Soldier
+PLST;TGRN-2;Soldier
+PLST;TZNR-3;Cat Beast
+PLST;TISD-5;Vampire
+PLST;TORI-5;Zombie
+PLST;TSTX-5;Pest
+PLST;TISD-6;Wolf
+PLST;TXLN-6;Plant
+PLST;TORI-7;Ashaya, the Awoken World
+PLST;TKHM-8;Shapeshifter
+PLST;TSNC-9;Cat
+PLST;TSNC-10;Dog
+PLST;TSOI-10;Human Cleric
+PLST;TTSR-10;Ape
+PLST;TXLN-10;Treasure
+PLST;TSHM-12;Elf Warrior
+PLST;TSNC-12;Citizen
+PLST;TMID-13;Wolf
+PLST;TAKH-16;Cat
+PLST;TMID-16;Clue
+PLST;TAKH-17;Warrior
+PLST;T2XM-2;Shapeshifter
+PLST;TC17-1;Cat
+PLST;TC17-3;Rat
+PLST;TM20-1;Ajani's Pridemate
+PLST;TM21-3;Griffin
+PLST;TMH2-17;Food
+PLST;TM21-11;Cat
+PLST;TC21-25;Golem
+PLST;TC21-26;Golem
+PLST;TC21-27;Golem
+PL24;3;Dragon
+WMKM;1;Zombie
+WMKM;2;Spirit
+WMKM;3;Thopter
+WMKM;4;Treasure
+TMKC;1;Eldrazi
+TMKC;2;Human Soldier
+TMKC;3;Soldier
+TMKC;4;Spirit
+TMKC;5;Vizier of Many Faces
+TMKC;6;Drake
+TMKC;7;Koma's Coil
+TMKC;8;Salamander Warrior
+TMKC;9;Tentacle
+TMKC;10;Phyrexian Germ
+TMKC;11;Zombie
+TMKC;12;Kobolds of Kher Keep
+TMKC;13;Lightning Rager
+TMKC;14;Ogre
+TMKC;15;Cat
+TMKC;16;Insect
+TMKC;17;Insect
+TMKC;18;Rhino Warrior
+TMKC;19;Saproling
+TMKC;20;Snake
+TMKC;21;Tiny
+TMKC;22;Clue
+TMKC;23;Construct
+TMKC;24;Food
+TMKC;25;Gold
+TMKC;26;Treasure
+TMKC;27;Copy
+TMKM;1;Dog
+TMKM;2;Human
+TMKM;3;Merfolk
+TMKM;4;Bat
+TMKM;5;Skeleton
+TMKM;6;Goblin
+TMKM;7;Imp
+TMKM;8;Ooze
+TMKM;9;Plant
+TMKM;10;Detective
+TMKM;11;Spider
+TMKM;12;Spirit
+TMKM;13;Voja Fenstalker
+TMKM;14;Clue
+TMKM;15;Clue
+TMKM;16;Clue
+TMKM;17;Clue
+TMKM;18;Clue
+TMKM;19;Thopter
+TMKM;20;Thopter
+TPIP;1;Copy
+TPIP;2;Human Knight
+TPIP;3;Human Soldier
+TPIP;4;Soldier
+TPIP;5;Warrior
+TPIP;6;Alien
+TPIP;7;Zombie Mutant
+TPIP;8;Settlement
+TPIP;9;Squirrel
+TPIP;10;Soldier
+TPIP;11;Clue
+TPIP;12;Food
+TPIP;13;Food
+TPIP;14;Food
+TPIP;15;Junk
+TPIP;16;Robot
+TPIP;17;Thopter
+TPIP;18;Treasure
+TPIP;19;Treasure
+TPIP;20;Wasteland Survival Guide
+TBIG;1;Bat
+TBIG;2;Blood
+TBIG;3;Construct
+TBIG;4;Food
+TBIG;5;Gnome
+TBIG;6;Golem
+TBIG;7;Map
+TOTC;1;Eldrazi
+TOTC;2;Eldrazi Scion
+TOTC;3;Angel
+TOTC;4;Bird Illusion
+TOTC;5;Drake
+TOTC;6;Shark
+TOTC;7;Assassin
+TOTC;8;Rat
+TOTC;9;Rogue
+TOTC;10;Zombie
+TOTC;11;Dragon
+TOTC;12;Dragon Egg
+TOTC;13;Dragon Elemental
+TOTC;14;Elemental
+TOTC;15;Ape
+TOTC;16;Boar
+TOTC;17;Elemental
+TOTC;18;Insect
+TOTC;19;Plant
+TOTC;20;Plant Warrior
+TOTC;21;Elemental
+TOTC;22;Inkling
+TOTC;23;Sand Warrior
+TOTC;24;Blood
+TOTC;25;Food
+TOTC;26;Soldier
+TOTC;27;Thopter
+TOTP;1;Human Cleric
+TOTP;2;Human Rogue
+TOTP;3;Human Warrior
+TOTP;4;Pest
+TOTP;5;Food
+TOTJ;1;Copy
+TOTJ;2;Angel
+TOTJ;3;Ox
+TOTJ;4;Sheep
+TOTJ;5;Spirit
+TOTJ;6;Beau
+TOTJ;7;Bird
+TOTJ;8;Vampire Rogue
+TOTJ;9;Dinosaur
+TOTJ;10;Mercenary
+TOTJ;11;Scorpion Dragon
+TOTJ;12;Elemental
+TOTJ;13;Elk
+TOTJ;14;Varmint
+TOTJ;15;Zombie Rogue
+TOTJ;16;Clue
+TOTJ;17;Meteorite
+TOTJ;18;Treasure
+TM3C;1;Eldrazi
+TM3C;2;Eldrazi Angel
+TM3C;3;Eldrazi Scion
+TM3C;4;Shapeshifter
+TM3C;5;Spirit
+TM3C;6;Illusion
+TM3C;7;Phyrexian Myr
+TM3C;8;Shapeshifter
+TM3C;9;Aetherborn
+TM3C;10;Beast
+TM3C;11;Marit Lage
+TM3C;12;Dragon
+TM3C;13;Goblin
+TM3C;14;Ape
+TM3C;15;Beast
+TM3C;16;Beast
+TM3C;17;Boar
+TM3C;18;Elephant
+TM3C;19;Forest Dryad
+TM3C;20;Hydra
+TM3C;21;Saproling
+TM3C;22;Tarmogoyf
+TM3C;23;Sand Warrior
+TM3C;24;Construct
+TM3C;25;Myr
+TM3C;26;Thopter
+TMH3;1;Copy
+TMH3;2;Eldrazi Spawn
+TMH3;3;Angel
+TMH3;4;Cat
+TMH3;5;Cat Warrior
+TMH3;6;Fox
+TMH3;7;Soldier
+TMH3;8;Spirit
+TMH3;9;Bird
+TMH3;10;Fish
+TMH3;11;Kraken
+TMH3;12;Moonfolk
+TMH3;13;Thopter
+TMH3;14;Whale
+TMH3;15;Fanatic of Rhonas
+TMH3;16;Phyrexian Germ
+TMH3;17;Phyrexian Wurm
+TMH3;18;Phyrexian Wurm
+TMH3;19;Rat
+TMH3;20;Snake
+TMH3;21;Zombie
+TMH3;22;Zombie Army
+TMH3;23;Gremlin
+TMH3;24;Spellgorger Weird
+TMH3;25;Insect
+TMH3;26;Plant
+TMH3;27;Insect
+TMH3;28;Spirit
+TMH3;29;Blood
+TMH3;30;Clue
+TMH3;31;Food
+TMH3;32;Phyrexian Golem
+TMH3;33;Servo
+TMH3;34;Treasure
+TMH3;37;Copy
+TMH3;38;Eldrazi Spawn
+TMH3;39;Zombie
+TMH3;40;Gremlin
+TMH3;42;Plant
+TMH3;43;Insect
+TMH3;45;Treasure
+SLD;1613;Wolf
+TACR;1;Copy
+TACR;2;Shapeshifter
+TACR;3;Human Rogue
+TACR;4;Assassin
+TACR;5;Phobos
+TACR;6;Treasure
+SLD;1681;Marit Lage
+PLG24;2J-b;Toy
+TBLB;1;Flowerfoot Swordmaster
+TBLB;2;Intrepid Rabbit
+TBLB;3;Rabbit
+TBLB;4;Wall
+TBLB;5;Warren Warleader
+TBLB;6;Finch Formation
+TBLB;7;Fish
+TBLB;8;Splash Lasher
+TBLB;9;Thundertrap Trainer
+TBLB;10;Bat
+TBLB;11;Darkstar Augur
+TBLB;12;Iridescent Vinelasher
+TBLB;13;Rat
+TBLB;14;Snail
+TBLB;15;Starscape Cleric
+TBLB;16;Thornplate Intimidator
+TBLB;17;Coruscation Mage
+TBLB;18;Manifold Mouse
+TBLB;19;Steampath Charger
+TBLB;20;Bushy Bodyguard
+TBLB;21;Pawpatch Recruit
+TBLB;22;Rust-Shield Rampager
+TBLB;23;Squirrel
+TBLB;24;Tender Wildguide
+TBLB;25;Otter
+TBLB;26;Cragflame
+TBLB;27;Food
+TBLB;28;Sword
+TBLB;29;Treasure
+TBLC;1;Copy
+TBLC;2;Eldrazi
+TBLC;3;Bird
+TBLC;4;Elemental
+TBLC;5;Goat
+TBLC;6;Human
+TBLC;7;Human Soldier
+TBLC;8;Soldier
+TBLC;9;Spirit
+TBLC;10;Steelburr Champion
+TBLC;11;Bird
+TBLC;12;Faerie
+TBLC;13;Illusion
+TBLC;14;Octopus
+TBLC;15;Shapeshifter
+TBLC;16;Shark
+TBLC;17;Squid
+TBLC;18;Storm Crow
+TBLC;19;Rat
+TBLC;20;Agate Instigator
+TBLC;21;Goblin
+TBLC;22;Hamster
+TBLC;23;Prosperous Bandit
+TBLC;24;Beast
+TBLC;25;Beast
+TBLC;26;Cat
+TBLC;27;Elephant
+TBLC;28;Frog Lizard
+TBLC;29;Raccoon
+TBLC;30;Saproling
+TBLC;31;Spider
+TBLC;32;Wolf
+TBLC;33;Citizen
+TBLC;34;Pest
+TBLC;35;Wolf
+TBLC;36;Blood
+TBLC;37;Clue
+TBLC;38;Phyrexian Golem
+TBLC;39;Thopter
+PLG24;5J-b;Treasure
+TDSC;1;Shapeshifter
+TDSC;2;Angel
+TDSC;3;Human Soldier
+TDSC;4;Shark
+TDSC;5;Bird
+TDSC;6;Demon
+TDSC;7;Devil
+TDSC;8;Beast
+TDSC;9;Elemental
+TDSC;10;Insect
+TDSC;11;Insect
+TDSC;12;Insect
+TDSC;13;Ooze
+TDSC;14;Ooze
+TDSC;15;Phyrexian Beast
+TDSC;16;Spider
+TDSC;17;Treefolk
+TDSC;18;Wurm
+TDSC;19;Wurm
+TDSC;20;Fractal
+TDSC;21;Inkling
+TDSC;22;Insect
+TDSC;23;Scarecrow
+TDSK;1;Copy
+TDSK;2;Shard
+TDSK;3;Beast
+TDSK;4;Glimmer
+TDSK;5;Insect
+TDSK;6;Spirit
+TDSK;7;Toy
+TDSK;8;Spirit
+TDSK;9;Demon
+TDSK;10;Horror
+TDSK;11;Gremlin
+TDSK;12;Spider
+TDSK;13;Insect
+TDSK;14;Primo, the Indivisible
+TDSK;15;Treasure
+TDSK;16;Everywhere
+SLD;1736;Treasure
+SLD;1752;Warrior
+TFDN;1;Cat
+TFDN;2;Cat
+TFDN;3;Human
+TFDN;4;Knight
+TFDN;5;Rabbit
+TFDN;6;Soldier
+TFDN;7;Spirit
+TFDN;8;Drake
+TFDN;9;Faerie
+TFDN;10;Fish
+TFDN;11;Koma's Coil
+TFDN;12;Ninja
+TFDN;13;Scion of the Deep
+TFDN;14;Rat
+TFDN;15;Zombie
+TFDN;16;Dragon
+TFDN;17;Dragon
+TFDN;18;Goblin
+TFDN;19;Elf Warrior
+TFDN;20;Raccoon
+TFDN;21;Insect
+TFDN;22;Food
+TFDN;23;Treasure
+TFDN;26;Copy
+TFDN;27;Cat
+TFDN;28;Cat Beast
+TFDN;29;Dog
+TFDN;30;Rat
+TFDN;31;Phyrexian Goblin
+TFDN;32;Beast
+TFDN;33;Beast
+PLST;TONE-2;Samurai
+PLST;TNEC-12;Thopter
+PLST;TNEO-17;Treasure
+SLD;1835;Shrine
+SLD;1852;Spirit
+PLST;LCI-1;Copy
+PLST;CMM-40;Clue
+TINR;1;Eldrazi Horror
+TINR;2;Human
+TINR;3;Human Soldier
+TINR;4;Spirit
+TINR;5;Human Wizard
+TINR;6;Demon
+TINR;7;Vampire
+TINR;8;Vampire
+TINR;9;Wolf
+TINR;10;Zombie
+TINR;11;Zombie
+TINR;12;Zombie
+TINR;13;Elemental
+TINR;14;Human
+TINR;15;Insect
+TINR;16;Spider
+TINR;17;Treefolk
+TINR;18;Wolf
+TINR;19;Human Cleric
+TINR;20;Human Soldier
+TINR;21;Blood
+TINR;22;Clue
+SLD;1969;Mechtitan // Mechtitan
+PL25;2;Snake
+TDFT;1;Pilot
+TDFT;2;Cat
+TDFT;3;Zombie
+TDFT;4;Dinosaur Dragon
+TDFT;5;Goblin
+TDFT;6;Elephant
+TDFT;7;Insect
+TDFT;8;Servo
+TDFT;9;Thopter
+TDFT;10;Thopter
+TDFT;11;Treasure
+TDFT;12;Vehicle
+TDRC;1;Angel of Sanctions
+TDRC;2;Vizier of Many Faces
+TDRC;3;Zombie
+TDRC;4;Shapeshifter
+TDRC;5;Champion of Wits
+TDRC;6;Timeless Dragon
+TDRC;7;Zombie
+TDRC;8;Zombie Army
+TDRC;9;Zombie Warrior
+TDRC;10;Beast
+TDRC;11;Beast
+TDRC;12;Construct
+TDRC;13;Golem
+TDRC;14;Golem
+TDRC;15;Golem
+TDRC;16;Nalaar Aetherjet
+SLD;1432;Treasure
+SLD;1938;Food
+SLD;2010;Food
+SLD;2011;Food
+SLD;2012;Food
+SLD;2013;Food
+TTDC;1;Eldrazi
+TTDC;2;Angel
+TTDC;3;Dog
+TTDC;4;Goat
+TTDC;5;Human
+TTDC;6;Spirit
+TTDC;7;Wall
+TTDC;8;Salamander Warrior
+TTDC;9;Rat
+TTDC;10;Snake
+TTDC;11;Timeless Witness
+TTDC;12;Dragon Egg
+TTDC;13;Dragon
+TTDC;14;Dragon
+TTDC;15;Dragon Illusion
+TTDC;16;Elemental
+TTDC;17;Elemental
+TTDC;18;First Mate Ragavan
+TTDC;19;Karox Bladewing
+TTDC;20;Beast
+TTDC;21;Frog Lizard
+TTDC;22;Insect
+TTDC;23;Insect
+TTDC;24;Plant
+TTDC;25;Spider
+TTDC;26;Citizen
+TTDC;27;Elemental
+TTDC;28;Inkling
+TTDC;29;Gold
+TTDC;30;Myr
+TTDC;31;Servo
+TTDC;32;Soldier
+TTDC;33;Thopter
+TTDM;1;Copy
+TTDM;2;Bird
+TTDM;3;Monk
+TTDM;4;Soldier
+TTDM;5;Soldier
+TTDM;6;Spirit
+TTDM;7;Spirit
+TTDM;8;Spirit
+TTDM;9;Spirit
+TTDM;10;Zombie Druid
+TTDM;11;Dragon
+TTDM;12;Goblin
+TTDM;13;Warrior
+TTDM;14;Elephant
+TTDM;15;Reliquary Dragon
+TTDM;16;Treasure
+PLST;TLCC-1;Shapeshifter
+PLST;TMKM-1;Dog
+PLST;TOTJ-1;Copy
+PLST;TMOC-2;Sliver
+PLST;TOTJ-3;Ox
+PLST;TDMC-8;Egg
+PLST;TZNR-8;Plant
+PLST;TIKO-10;Beast
+PLST;TWOC-11;Faerie Rogue
+PLST;TWOE-11;Food
+PLST;TMKM-15;Clue
+PLST;TWOC-15;Saproling
+PLST;TKHM-19;Treasure
+PLST;TMKC-21;Tiny
+PLST;TM21-20;Cat
+SLD;1906;Shapeshifter
+SLD;1907;Shapeshifter
+SLD;1908;Shapeshifter
+SLD;1909;Shapeshifter
+WFIN;2;Clue
+WFIN;3;Treasure
+TFIC;1;Human Soldier
+TFIC;2;Soldier
+TFIC;3;Spirit
+TFIC;4;Bird
+TFIC;5;Squid
+TFIC;6;Zombie
+TFIC;7;Rebel
+TFIC;8;The Blackjack
+TFIC;9;Clue
+TFIN;1;Copy
+TFIN;2;Hero
+TFIN;3;Hero
+TFIN;4;Hero
+TFIN;5;Hero
+TFIN;6;Hero
+TFIN;7;Hero
+TFIN;8;Hero
+TFIN;9;Hero
+TFIN;10;Knight
+TFIN;11;Moogle
+TFIN;12;Robot Warrior
+TFIN;13;Horror
+TFIN;14;Wizard
+TFIN;15;Wizard
+TFIN;16;Bird
+TFIN;17;Bird
+TFIN;18;Frog
+TFIN;19;Angelo
+TFIN;20;Darkstar
+TFIN;21;Elemental
+TFIN;22;Food
+TFIN;23;Treasure
+TFIN;25;Copy
+TFIN;26;Hero
+TFIN;27;Hero
+TFIN;28;Hero
+TFIN;29;Hero
+TFIN;30;Hero
+TFIN;31;Hero
+TFIN;32;Hero
+TFIN;33;Hero
+TFIN;34;Moogle
+TFIN;35;Wizard
+TFIN;36;Treasure
+SLD;2064;Food
+SLD;2065;Treasure
+SLD;2094;Treasure
+SLD;2101;Myr
+TEOC;1;Copy
+TEOC;2;Shapeshifter
+TEOC;3;Bird
+TEOC;4;Insect
+TEOC;5;Beast
+TEOC;6;Beast
+TEOC;7;Elemental
+TEOC;8;Elemental
+TEOC;9;Pest
+TEOC;10;Clue
+TEOC;11;Gnome
+TEOC;12;Golem
+TEOC;13;Golem
+TEOC;14;Golem
+TEOC;15;Incubator // Phyrexian
+TEOC;16;Thopter
+TEOE;1;Sliver
+TEOE;2;Human Soldier
+TEOE;3;Drone
+TEOE;4;Lander
+TEOE;5;Lander
+TEOE;6;Lander
+TEOE;7;Lander
+TEOE;8;Lander
+TEOE;9;Munitions
+TEOE;10;Robot
+TSPM;1;Copy
+TSPM;2;Illusion Villain
+TSPM;3;Spider
+TSPM;4;Human Citizen
+TSPM;5;Food
+TSPM;6;Robot
+TSPM;7;Treasure
+SLD;2180;Blood
+SLD;2201;Cordyceps Infected
+SLD;2206;Cordyceps Infected
+TTLA;1;Copy
+TTLA;2;Copy
+TTLA;3;Spirit
+TTLA;4;Ally
+TTLA;5;Ally
+TTLA;6;Ally
+TTLA;7;Ally
+TTLA;8;Ally
+TTLA;9;Dragon
+TTLA;10;Monk
+TTLA;11;Soldier
+TTLA;12;Bear
+TTLA;13;Ballistic Boulder
+TTLA;14;Clue
+TTLA;15;Clue
+TTLA;16;Clue
+TTLA;17;Clue
+TTLA;18;Clue
+TTLA;19;Food
+TTLA;20;Food
+TTLA;21;Food
+TTLA;22;Treasure
+TTLE;1;Marit Lage
+TTLE;2;Soldier
+TECC;1;Copy
+TECC;2;Elemental
+TECC;3;Zombie
+TECC;4;Elf Warrior
+TECC;5;Plant
+TECC;6;Rhino Warrior
+TECC;7;Saproling
+TECC;8;Snake
+TECC;9;Elemental
+TECC;10;Elemental
+TECC;11;Scarecrow
+TECL;1;Shapeshifter
+TECL;2;Elk
+TECL;3;Treefolk
+TECL;4;Elf
+TECL;5;Faerie
+TECL;6;Goblin
+TECL;7;Kithkin
+TECL;8;Merfolk
+TECL;9;Worm
+TECL;10;Treasure
+TECL;11;Mutavault
+PL26;2;Treasure
+TTMC;1;Ooze
+TTMC;2;Clue
+TTMC;3;Treasure
+TTMT;1;Copy
+TTMT;2;Dinosaur Soldier
+TTMT;3;Ninja Turtle Spirit
+TTMT;4;Insect Warrior
+TTMT;5;Ninja
+TTMT;6;Rat
+TTMT;7;Mutant
+TTMT;8;Food
+TTMT;9;Mutagen
+TTMT;10;Robot

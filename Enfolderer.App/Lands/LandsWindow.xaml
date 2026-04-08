@@ -73,6 +73,7 @@
                 <Button Style="{StaticResource NavButtonStyle}" Content="Last ⏭" Command="{Binding LastCommand}" />
                 <Button Style="{StaticResource NavButtonStyle}" Content="Binder ⏩" Command="{Binding NextBinderCommand}" />
                 <StackPanel Orientation="Horizontal" Margin="16,0,0,0" VerticalAlignment="Center">
+                    <TextBlock Text="🔍" Foreground="#AAA" VerticalAlignment="Center" Margin="0,0,6,0" FontSize="14" />
                     <TextBlock Text="Set:" Foreground="#CCC" VerticalAlignment="Center" Margin="0,0,4,0" />
                     <TextBox x:Name="FilterSetBox" Width="60" Text="{Binding FilterSet, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBlock Text="Name:" Foreground="#CCC" VerticalAlignment="Center" Margin="8,0,4,0" />

@@ -154,6 +154,9 @@
             <MenuItem Header="_Lands">
                 <MenuItem Header="Open Lands Viewer..." Click="OpenLandsViewer_Click" />
             </MenuItem>
+            <MenuItem Header="_Tokens">
+                <MenuItem Header="Open Tokens Viewer..." Click="OpenTokensViewer_Click" />
+            </MenuItem>
         </Menu>
         <StatusBar DockPanel.Dock="Bottom">
             <!-- Primary status (metadata resolving / all metadata loaded) -->
