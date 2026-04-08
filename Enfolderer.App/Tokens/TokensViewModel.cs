@@ -24,7 +24,7 @@ public class TokensViewModel : INotifyPropertyChanged
     private HttpClient? _client;
 
     private const int CardsPerSide = 9;          // 3×3 grid
-    private const int SidesPerBinder = 40;        // 20 pages × 2 sides
+    private const int SidesPerBinder = 20;        // 10 pages × 2 sides
 
     private static readonly Color DefaultBg = Color.FromRgb(30, 30, 40);
 
