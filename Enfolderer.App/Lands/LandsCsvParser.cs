@@ -8,8 +8,8 @@ internal static class LandsCsvParser
 {
     /// <summary>
     /// Reads land entries from a semicolon-delimited CSV file.
-    /// Expected header: Set;Slot Num;№;Name
-    /// Columns used: Set (0), collector number (2), Name (3). Slot Num (1) is ignored.
+    /// Expected header: Set;№;Name
+    /// Position is determined by index in the list, not by a column value.
     /// </summary>
     public static List<LandEntry> Parse(string csvPath)
     {
@@ -31,12 +31,12 @@ internal static class LandsCsvParser
                 continue;
 
             var parts = line.Split(';');
-            if (parts.Length < 4)
+            if (parts.Length < 3)
                 continue;
 
             var set = parts[0].Trim();
-            var numStr = parts[2].Trim();
-            var name = parts[3].Trim();
+            var numStr = parts[1].Trim();
+            var name = parts[2].Trim();
 
             if (string.IsNullOrWhiteSpace(set) || string.IsNullOrWhiteSpace(numStr) || string.IsNullOrWhiteSpace(name))
                 continue;
