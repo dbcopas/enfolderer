@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using System.Windows.Input;
 using System.Windows.Media;
 using Enfolderer.App.Core;
+using Enfolderer.App.Imaging;
 using Enfolderer.App.Infrastructure;
 
 namespace Enfolderer.App.Lands;
@@ -337,6 +338,7 @@ public class LandsViewModel : INotifyPropertyChanged
             var allSlots = LeftSlots.Concat(RightSlots).ToArray();
             var tasks = allSlots.Select(s => s.TryLoadImageAsync(_client)).ToArray();
             await Task.WhenAll(tasks);
+            CardImageUrlStore.SaveToDisk();
         }
     }
 
