@@ -313,6 +313,28 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OpenTokensViewer_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Open Tokens CSV File",
+                Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*"
+            };
+            if (dlg.ShowDialog(this) == true)
+            {
+                var win = new Tokens.TokensWindow(dlg.FileName);
+                win.Owner = this;
+                win.Show();
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Tokens Viewer Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void BackfillZeroQty_Click(object sender, RoutedEventArgs e)
     {
         try
