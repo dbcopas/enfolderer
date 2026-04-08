@@ -85,5 +85,6 @@ jobs:
             binder_secret_lair_bonus.txt
             binder_special_guests.txt
             binder_special_sets.txt
+            lands.csv
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
