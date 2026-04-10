@@ -85,10 +85,18 @@ public class TokenSlot : INotifyPropertyChanged
                     using var doc = await JsonDocument.ParseAsync(stream);
                     var root = doc.RootElement;
 
-                    if (root.TryGetProperty("image_uris", out var imgs) && imgs.TryGetProperty("normal", out var norm))
-                        imgUrl = norm.GetString();
-                    else if (root.TryGetProperty("image_uris", out imgs) && imgs.TryGetProperty("large", out var large))
-                        imgUrl = large.GetString();
+                    if (root.TryGetProperty("image_uris", out var imgs))
+                    {
+                        if (imgs.TryGetProperty("normal", out var norm)) imgUrl = norm.GetString();
+                        else if (imgs.TryGetProperty("large", out var large)) imgUrl = large.GetString();
+                    }
+                    else if (root.TryGetProperty("card_faces", out var faces)
+                             && faces.GetArrayLength() > 0
+                             && faces[0].TryGetProperty("image_uris", out var faceImgs))
+                    {
+                        if (faceImgs.TryGetProperty("normal", out var fNorm)) imgUrl = fNorm.GetString();
+                        else if (faceImgs.TryGetProperty("large", out var fLarge)) imgUrl = fLarge.GetString();
+                    }
 
                     if (!string.IsNullOrEmpty(imgUrl))
                         CardImageUrlStore.Set(Set, CollectorNumber, imgUrl, null);
