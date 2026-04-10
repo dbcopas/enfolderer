@@ -32,12 +32,11 @@ public class TokensViewModel : INotifyPropertyChanged
     private List<TokenSpreadView> _spreads = new();
     private int _currentSpreadIdx;
 
-    // --- Flat paging state (filtered mode) ---
-    private List<TokenEntry> _filteredTokens = new();
-    private int _currentFlatPage;
-    private int FlatTotalPages => Math.Max(1, (int)Math.Ceiling(_filteredTokens.Count / (double)CardsPerSide));
+    // --- Filter-match navigation state ---
+    private List<int> _matchSpreadIndices = new();
+    private int _currentMatchIdx;
 
-    private int TotalViews => IsFiltered ? FlatTotalPages : Math.Max(1, _spreads.Count);
+    private int TotalViews => Math.Max(1, _spreads.Count);
 
     public ObservableCollection<TokenSlot> LeftSlots { get; } = new();
     public ObservableCollection<TokenSlot> RightSlots { get; } = new();
@@ -81,7 +80,7 @@ public class TokensViewModel : INotifyPropertyChanged
         }
     }
 
-    private bool IsFiltered => !string.IsNullOrWhiteSpace(_filterSet) || !string.IsNullOrWhiteSpace(_filterName);
+    private bool IsFiltered => _matchSpreadIndices.Count > 0;
 
     public ICommand NextCommand { get; }
     public ICommand PrevCommand { get; }
@@ -89,21 +88,19 @@ public class TokensViewModel : INotifyPropertyChanged
     public ICommand LastCommand { get; }
     public ICommand NextBinderCommand { get; }
     public ICommand PrevBinderCommand { get; }
-
-    private int CurrentIndex
-    {
-        get => IsFiltered ? _currentFlatPage : _currentSpreadIdx;
-        set { if (IsFiltered) _currentFlatPage = value; else _currentSpreadIdx = value; }
-    }
+    public ICommand NextMatchCommand { get; }
+    public ICommand PrevMatchCommand { get; }
 
     public TokensViewModel()
     {
-        NextCommand = new RelayCommand(_ => { CurrentIndex++; _ = ShowCurrentAsync(); }, _ => CurrentIndex < TotalViews - 1);
-        PrevCommand = new RelayCommand(_ => { CurrentIndex--; _ = ShowCurrentAsync(); }, _ => CurrentIndex > 0);
-        FirstCommand = new RelayCommand(_ => { CurrentIndex = 0; _ = ShowCurrentAsync(); }, _ => CurrentIndex > 0);
-        LastCommand = new RelayCommand(_ => { CurrentIndex = TotalViews - 1; _ = ShowCurrentAsync(); }, _ => CurrentIndex < TotalViews - 1);
-        NextBinderCommand = new RelayCommand(_ => JumpBinder(1), _ => !IsFiltered && _spreads.Count > 0);
-        PrevBinderCommand = new RelayCommand(_ => JumpBinder(-1), _ => !IsFiltered && _spreads.Count > 0);
+        NextCommand = new RelayCommand(_ => { _currentSpreadIdx++; _ = ShowCurrentAsync(); }, _ => _currentSpreadIdx < TotalViews - 1);
+        PrevCommand = new RelayCommand(_ => { _currentSpreadIdx--; _ = ShowCurrentAsync(); }, _ => _currentSpreadIdx > 0);
+        FirstCommand = new RelayCommand(_ => { _currentSpreadIdx = 0; _ = ShowCurrentAsync(); }, _ => _currentSpreadIdx > 0);
+        LastCommand = new RelayCommand(_ => { _currentSpreadIdx = TotalViews - 1; _ = ShowCurrentAsync(); }, _ => _currentSpreadIdx < TotalViews - 1);
+        NextBinderCommand = new RelayCommand(_ => JumpBinder(1), _ => _spreads.Count > 0);
+        PrevBinderCommand = new RelayCommand(_ => JumpBinder(-1), _ => _spreads.Count > 0);
+        NextMatchCommand = new RelayCommand(_ => JumpMatch(1), _ => _matchSpreadIndices.Count > 0 && _currentMatchIdx < _matchSpreadIndices.Count - 1);
+        PrevMatchCommand = new RelayCommand(_ => JumpMatch(-1), _ => _matchSpreadIndices.Count > 0 && _currentMatchIdx > 0);
     }
 
     private void JumpBinder(int direction)
@@ -141,9 +138,9 @@ public class TokensViewModel : INotifyPropertyChanged
         _client = BinderViewModelHttpFactory.Create();
 
         BuildSpreads();
-        _filteredTokens = new List<TokenEntry>(_allTokens);
+        _matchSpreadIndices = new List<int>();
         _currentSpreadIdx = 0;
-        _currentFlatPage = 0;
+        _currentMatchIdx = 0;
         Status = $"Loaded {_allTokens.Count} tokens. Owned: {_ownership.OwnedCount}";
         await ShowCurrentAsync();
     }
@@ -178,18 +175,72 @@ public class TokensViewModel : INotifyPropertyChanged
 
     private void ApplyFilter()
     {
-        _filteredTokens = _allTokens.Where(t =>
-        {
-            if (!string.IsNullOrWhiteSpace(_filterSet) &&
-                !t.Set.Contains(_filterSet, StringComparison.OrdinalIgnoreCase))
-                return false;
-            if (!string.IsNullOrWhiteSpace(_filterName) &&
-                !t.Name.Contains(_filterName, StringComparison.OrdinalIgnoreCase))
-                return false;
-            return true;
-        }).ToList();
+        _matchSpreadIndices.Clear();
+        _currentMatchIdx = 0;
 
-        _currentFlatPage = 0;
+        bool hasSetFilter = !string.IsNullOrWhiteSpace(_filterSet);
+        bool hasNameFilter = !string.IsNullOrWhiteSpace(_filterName);
+
+        if (!hasSetFilter && !hasNameFilter)
+        {
+            _ = ShowCurrentAsync();
+            return;
+        }
+
+        // Find which global token indices match
+        var matchingTokenIndices = new HashSet<int>();
+        for (int i = 0; i < _allTokens.Count; i++)
+        {
+            var t = _allTokens[i];
+            if (hasSetFilter && !t.Set.Contains(_filterSet, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (hasNameFilter && !t.Name.Contains(_filterName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            matchingTokenIndices.Add(i);
+        }
+
+        if (matchingTokenIndices.Count == 0)
+        {
+            Status = "No matches found.";
+            _ = ShowCurrentAsync();
+            return;
+        }
+
+        // Map matching token indices to the spread indices that contain them
+        for (int si = 0; si < _spreads.Count; si++)
+        {
+            var spread = _spreads[si];
+            if (SpreadContainsAnyMatch(spread.LeftGlobalSide, matchingTokenIndices) ||
+                SpreadContainsAnyMatch(spread.RightGlobalSide, matchingTokenIndices))
+            {
+                _matchSpreadIndices.Add(si);
+            }
+        }
+
+        if (_matchSpreadIndices.Count > 0)
+        {
+            _currentMatchIdx = 0;
+            _currentSpreadIdx = _matchSpreadIndices[0];
+        }
+
+        _ = ShowCurrentAsync();
+    }
+
+    private bool SpreadContainsAnyMatch(int? globalSide, HashSet<int> matchingTokenIndices)
+    {
+        if (!globalSide.HasValue) return false;
+        int start = globalSide.Value * CardsPerSide;
+        int end = Math.Min(start + CardsPerSide, _allTokens.Count);
+        for (int i = start; i < end; i++)
+            if (matchingTokenIndices.Contains(i)) return true;
+        return false;
+    }
+
+    private void JumpMatch(int direction)
+    {
+        if (_matchSpreadIndices.Count == 0) return;
+        _currentMatchIdx = Math.Clamp(_currentMatchIdx + direction, 0, _matchSpreadIndices.Count - 1);
+        _currentSpreadIdx = _matchSpreadIndices[_currentMatchIdx];
         _ = ShowCurrentAsync();
     }
 
@@ -222,14 +273,7 @@ public class TokensViewModel : INotifyPropertyChanged
         LeftSlots.Clear();
         RightSlots.Clear();
 
-        if (IsFiltered)
-        {
-            var entries = _filteredTokens.Skip(_currentFlatPage * CardsPerSide).Take(CardsPerSide).ToList();
-            foreach (var s in BuildSlots(entries)) RightSlots.Add(s);
-            PageDisplay = $"Page {_currentFlatPage + 1} / {FlatTotalPages}  ({_filteredTokens.Count} tokens)";
-            PageBrush = MakeBrush(DefaultBg);
-        }
-        else if (_spreads.Count > 0)
+        if (_spreads.Count > 0)
         {
             var spread = _spreads[_currentSpreadIdx];
             int binderIdx = spread.BinderIndex;
@@ -262,7 +306,10 @@ public class TokensViewModel : INotifyPropertyChanged
                 pageLabel = $"Page {p} {sd} (Back Cover)";
             }
 
-            PageDisplay = $"{binderLabel}  —  {pageLabel}   [{_currentSpreadIdx + 1}/{_spreads.Count}]";
+            string matchSuffix = IsFiltered
+                ? $"  🔍 Match {_currentMatchIdx + 1}/{_matchSpreadIndices.Count}"
+                : string.Empty;
+            PageDisplay = $"{binderLabel}  —  {pageLabel}   [{_currentSpreadIdx + 1}/{_spreads.Count}]{matchSuffix}";
             PageBrush = MakeBrush(DefaultBg);
         }
 

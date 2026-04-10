@@ -65,7 +65,7 @@
                 <Button Style="{StaticResource NavButtonStyle}" Content="⏪ Binder" Command="{Binding PrevBinderCommand}" />
                 <Button Style="{StaticResource NavButtonStyle}" Content="⏮ First" Command="{Binding FirstCommand}" />
                 <Button Style="{StaticResource NavButtonStyle}" Content="◀ Prev" Command="{Binding PrevCommand}" />
-                <Border VerticalAlignment="Center" Margin="8,0" Padding="0" Width="420">
+                <Border VerticalAlignment="Center" Margin="8,0" Padding="0" Width="520">
                     <TextBlock Text="{Binding PageDisplay}" FontSize="14" FontWeight="Bold"
                                Foreground="White" HorizontalAlignment="Center" />
                 </Border>
@@ -78,6 +78,8 @@
                     <TextBox x:Name="FilterSetBox" Width="60" Text="{Binding FilterSet, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBlock Text="Name:" Foreground="#CCC" VerticalAlignment="Center" Margin="8,0,4,0" />
                     <TextBox x:Name="FilterNameBox" Width="100" Text="{Binding FilterName, UpdateSourceTrigger=PropertyChanged}" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="◀ Match" Command="{Binding PrevMatchCommand}" Margin="8,0,2,0" />
+                    <Button Style="{StaticResource NavButtonStyle}" Content="Match ▶" Command="{Binding NextMatchCommand}" />
                 </StackPanel>
             </WrapPanel>
         </Grid>
