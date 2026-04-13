@@ -464,6 +464,21 @@ public partial class MainWindow : Window
         }
     }
 
+    private void SearchNameBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.TextBox tb)
+            tb.SelectAll();
+    }
+
+    private void SearchNameBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is System.Windows.Controls.TextBox tb && !tb.IsKeyboardFocusWithin)
+        {
+            tb.Focus();
+            e.Handled = true;
+        }
+    }
+
     private void SearchButton_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
     {
         _vm?.PerformSearchNextSet();
@@ -804,7 +819,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             if (!string.IsNullOrWhiteSpace(ce.Set) && string.Equals(ce.Set.Trim(), code.Trim(), comp))
             {
                 _lastSearchIndex = i;
-                RequestHighlight(i);
                 int slotsPerPage = SlotsPerPage;
                 int targetPage = (i / slotsPerPage) + 1;
                 int binderIndex = (targetPage - 1) / PagesPerBinder;
@@ -812,6 +826,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                 int pageWithinBinder = ((targetPage - 1) % PagesPerBinder) + 1;
                 if (_nav.CanJumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder))
                     _nav.JumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder);
+                RequestHighlight(i);
                 SetStatus($"Jumped to set '{code.ToUpperInvariant()}'");
                 return true;
             }
@@ -833,8 +848,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             if (TryFindNextByName(term, out int idx))
             {
                 _lastSearchIndex = idx;
-                RequestHighlight(idx);
-                // Navigate to page containing this face
+                // Navigate to page containing this face first, then highlight
                 int slotsPerPage = SlotsPerPage;
                 int targetPage = (idx / slotsPerPage) + 1; // global page (1-based)
                 // Determine binder & local page using existing navigation service mapping: find view containing targetPage
@@ -851,6 +865,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                     if (_nav.CanJumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder))
                         _nav.JumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder);
                 }
+                // Apply highlight after navigation so rebuilt slots are in place
+                RequestHighlight(idx);
                 SetStatus($"Found '{term}' at face {idx + 1}.");
             }
             else
@@ -883,7 +899,6 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                 if (!string.IsNullOrWhiteSpace(ce.Set) && ce.Set.IndexOf(term, comp) >= 0)
                 {
                     _lastSearchIndex = i;
-                    RequestHighlight(i);
                     int slotsPerPage = SlotsPerPage;
                     int targetPage = (i / slotsPerPage) + 1;
                     int binderIndex = (targetPage - 1) / PagesPerBinder;
@@ -891,6 +906,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                     int pageWithinBinder = ((targetPage - 1) % PagesPerBinder) + 1;
                     if (_nav.CanJumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder))
                         _nav.JumpToPage(binderOneBased, pageWithinBinder, PagesPerBinder);
+                    RequestHighlight(i);
                     SetStatus($"Found set match '{term}' at face {i + 1} ({ce.Set}).");
                     return;
                 }

@@ -226,7 +226,7 @@
                     <Button Style="{StaticResource NavButtonStyle}" Content="Set ▶" Command="{Binding NextSetCommand}" />
                     <StackPanel Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="Find:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                        <TextBox x:Name="SearchNameBox" Width="170" MinWidth="120" Text="{Binding SearchName, UpdateSourceTrigger=PropertyChanged}" KeyDown="SearchNameBox_KeyDown"/>
+                        <TextBox x:Name="SearchNameBox" Width="170" MinWidth="120" Text="{Binding SearchName, UpdateSourceTrigger=PropertyChanged}" KeyDown="SearchNameBox_KeyDown" GotKeyboardFocus="SearchNameBox_GotKeyboardFocus" PreviewMouseLeftButtonDown="SearchNameBox_PreviewMouseLeftButtonDown"/>
                         <Button Content="Find ▶" Command="{Binding SearchNextCommand}" Margin="6,0,0,0" MouseRightButtonUp="SearchButton_MouseRightButtonUp" ToolTip="Left click: find next name match. Right click: find next set code match." />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center">

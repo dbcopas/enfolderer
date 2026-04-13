@@ -1795,18 +1795,6 @@ TLTR;9;Food
 TLTR;10;Food
 TLTR;11;Food
 TLTR;12;Treasure
-TLTR;14;Human Soldier
-TLTR;15;Human Soldier
-TLTR;16;Spirit
-TLTR;17;Tentacle
-TLTR;18;Orc Army
-TLTR;19;Orc Army
-TLTR;20;Smaug
-TLTR;21;Ballistic Boulder
-TLTR;22;Food
-TLTR;23;Food
-TLTR;24;Food
-TLTR;25;Treasure
 TCMM;1;Eldrazi
 TCMM;2;Eldrazi Scion
 TCMM;3;Eldrazi Spawn
@@ -1944,37 +1932,6 @@ TWHO;29;Treasure
 TWHO;30;Treasure
 TWHO;31;Treasure
 TWHO;32;Osgood, Operation Double
-TWHO;33;Copy
-TWHO;34;Alien
-TWHO;35;Alien Rhino
-TWHO;36;Horse
-TWHO;37;Human
-TWHO;38;Human
-TWHO;39;Human Noble
-TWHO;40;Soldier
-TWHO;41;Warrior
-TWHO;42;Fish
-TWHO;43;Alien Angel
-TWHO;44;Dalek
-TWHO;45;Human Rogue
-TWHO;46;Alien Warrior
-TWHO;47;Mark of the Rani
-TWHO;48;Alien Salamander
-TWHO;49;Beast
-TWHO;50;Mutant
-TWHO;51;Alien Insect
-TWHO;52;Dinosaur
-TWHO;53;Clue
-TWHO;54;Clue
-TWHO;55;Clue
-TWHO;57;Food
-TWHO;58;Food
-TWHO;59;Food
-TWHO;60;Treasure
-TWHO;61;Treasure
-TWHO;62;Treasure
-TWHO;63;Treasure
-TWHO;64;Osgood, Operation Double
 TLCC;1;Shapeshifter
 TLCC;2;Bird
 TLCC;3;Merfolk
@@ -2012,7 +1969,6 @@ TREX;1;Dinosaur
 TREX;2;Treasure
 SLD;1507;Treasure
 SLD;1398;Egg
-SLD;1398★;Egg
 SLD;1334;Hydra
 TRVR;1;Bird
 TRVR;2;Angel
@@ -2035,42 +1991,6 @@ TRVR;18;Spirit
 TRVR;19;Voja
 SLD;1516;Dog
 SLD;1517;Cat
-PLST;TAFR-1;Angel
-PLST;TGRN-1;Angel
-PLST;TNPH-1;Beast
-PLST;TXLN-1;Vampire
-PLST;TBNG-2;Cat Soldier
-PLST;TCMR-2;Soldier
-PLST;TGRN-2;Soldier
-PLST;TZNR-3;Cat Beast
-PLST;TISD-5;Vampire
-PLST;TORI-5;Zombie
-PLST;TSTX-5;Pest
-PLST;TISD-6;Wolf
-PLST;TXLN-6;Plant
-PLST;TORI-7;Ashaya, the Awoken World
-PLST;TKHM-8;Shapeshifter
-PLST;TSNC-9;Cat
-PLST;TSNC-10;Dog
-PLST;TSOI-10;Human Cleric
-PLST;TTSR-10;Ape
-PLST;TXLN-10;Treasure
-PLST;TSHM-12;Elf Warrior
-PLST;TSNC-12;Citizen
-PLST;TMID-13;Wolf
-PLST;TAKH-16;Cat
-PLST;TMID-16;Clue
-PLST;TAKH-17;Warrior
-PLST;T2XM-2;Shapeshifter
-PLST;TC17-1;Cat
-PLST;TC17-3;Rat
-PLST;TM20-1;Ajani's Pridemate
-PLST;TM21-3;Griffin
-PLST;TMH2-17;Food
-PLST;TM21-11;Cat
-PLST;TC21-25;Golem
-PLST;TC21-26;Golem
-PLST;TC21-27;Golem
 PL24;3;Dragon
 WMKM;1;Zombie
 WMKM;2;Spirit
@@ -2260,13 +2180,6 @@ TMH3;31;Food
 TMH3;32;Phyrexian Golem
 TMH3;33;Servo
 TMH3;34;Treasure
-TMH3;37;Copy
-TMH3;38;Eldrazi Spawn
-TMH3;39;Zombie
-TMH3;40;Gremlin
-TMH3;42;Plant
-TMH3;43;Insect
-TMH3;45;Treasure
 SLD;1613;Wolf
 TACR;1;Copy
 TACR;2;Shapeshifter
