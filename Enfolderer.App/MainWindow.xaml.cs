@@ -160,6 +160,50 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void MatchWantsCsv_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlgCollection = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Select your collection CSV (set;number;foil;language;name)",
+                Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*"
+            };
+            if (dlgCollection.ShowDialog(this) != true) return;
+
+            var dlgWants = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Select Moxfield wants CSV",
+                Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*"
+            };
+            if (dlgWants.ShowDialog(this) != true) return;
+
+            var dlgSave = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save matches CSV as",
+                Filter = "CSV Files (*.csv)|*.csv",
+                FileName = "matches.csv",
+                InitialDirectory = System.IO.Path.GetDirectoryName(dlgCollection.FileName)
+            };
+            if (dlgSave.ShowDialog(this) != true) return;
+
+            _vm.StartImportProgress("Matching wants + fetching prices");
+            var result = await Task.Run(() => Utilities.CsvWantsMatcher.MatchAsync(
+                dlgCollection.FileName, dlgWants.FileName, dlgSave.FileName,
+                progressCallback: (done, total) => _vm.ReportImportProgress(done, total)));
+            _vm.FinishImportProgress();
+            _vm?.SetStatus($"Wants match: {result.MatchCount} matches found.");
+            MessageBox.Show(this,
+                $"Collection entries: {result.CollectionCount}\nWanted cards: {result.WantsCount}\nMatches: {result.MatchCount}\n\nOutput: {result.OutputPath}",
+                "Wants Match", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _vm?.FinishImportProgress();
+            MessageBox.Show(this, ex.Message, "Wants Match Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     // Tools menu handlers (delegate to view model)
     private void Layout4x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "4x3"; }
     private void Layout3x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "3x3"; }
