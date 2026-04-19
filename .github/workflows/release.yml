@@ -3,6 +3,9 @@ name: Build & Auto Release
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**/*.txt'
+      - '**/*.csv'
 
 jobs:
   build-and-release:
