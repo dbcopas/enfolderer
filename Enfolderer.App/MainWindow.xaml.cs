@@ -204,6 +204,88 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ScanBinderImages_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var configPath = System.IO.Path.Combine(AppContext.BaseDirectory, "aiconfig.txt");
+            if (!System.IO.File.Exists(configPath))
+            {
+                MessageBox.Show(this,
+                    $"Config file not found:\n{configPath}\n\nCreate aiconfig.txt with these lines:\nendpoint=https://your-resource.cognitiveservices.azure.com\ntenant_id=...\nclient_id=...\nclient_secret=...",
+                    "Missing Config", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var configValues = System.IO.File.ReadAllLines(configPath)
+                .Where(l => !string.IsNullOrWhiteSpace(l) && !l.TrimStart().StartsWith('#'))
+                .Select(l => l.Split('=', 2))
+                .Where(p => p.Length == 2)
+                .ToDictionary(p => p[0].Trim().ToLowerInvariant(), p => p[1].Trim());
+
+            string ConfigVal(string key)
+            {
+                if (configValues.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v)) return v;
+                throw new InvalidOperationException($"Missing or empty '{key}' in aiconfig.txt");
+            }
+
+            var endpointInput = ConfigVal("endpoint");
+            var tenantIdInput = ConfigVal("tenant_id");
+            var clientIdInput = ConfigVal("client_id");
+            var clientSecretInput = ConfigVal("client_secret");
+
+            // Use OpenFileDialog to pick a folder (select any file, then use its directory)
+            var folderPath = FolderPickerDialog.Show(this, "Select the folder containing binder page images");
+            if (folderPath == null) return;
+
+            var dlgSave = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save scanned cards CSV as",
+                Filter = "CSV Files (*.csv)|*.csv",
+                FileName = "scanned_cards.csv",
+                InitialDirectory = folderPath
+            };
+            if (dlgSave.ShowDialog(this) != true) return;
+
+            // Retry loop — allows retrying after permission errors without re-entering credentials
+            while (true)
+            {
+                try
+                {
+                    _vm.StartImportProgress("Scanning binder images");
+                    var result = await Task.Run(() => Utilities.BinderScanService.ScanFolderAsync(
+                        folderPath,
+                        endpointInput,
+                        tenantIdInput,
+                        clientIdInput,
+                        clientSecretInput,
+                        dlgSave.FileName,
+                        statusCallback: msg => _vm.SetStatus(msg),
+                        progressCallback: (done, total) => _vm.ReportImportProgress(done, total)));
+                    _vm.FinishImportProgress();
+                    _vm?.SetStatus($"Scan complete: {result.CardsFound} cards from {result.ImagesProcessed} images.");
+                    MessageBox.Show(this,
+                        $"Images processed: {result.ImagesProcessed}\nCards found: {result.CardsFound}\nLookup failures: {result.LookupFailures}\n\nOutput: {result.OutputPath}",
+                        "Binder Scan", MessageBoxButton.OK, MessageBoxImage.Information);
+                    break; // success — exit retry loop
+                }
+                catch (Exception retryEx)
+                {
+                    _vm?.FinishImportProgress();
+                    var retry = MessageBox.Show(this,
+                        $"{retryEx.Message}\n\nWould you like to retry? (e.g. after adjusting service principal permissions)",
+                        "Binder Scan Error", MessageBoxButton.YesNo, MessageBoxImage.Error);
+                    if (retry != MessageBoxResult.Yes) break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _vm?.FinishImportProgress();
+            MessageBox.Show(this, ex.Message, "Binder Scan Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     // Tools menu handlers (delegate to view model)
     private void Layout4x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "4x3"; }
     private void Layout3x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "3x3"; }
