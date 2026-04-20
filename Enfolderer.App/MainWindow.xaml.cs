@@ -530,6 +530,15 @@ public partial class MainWindow : Window
     }
 }
 
+public record PriceSegment(string Text, Brush? Color);
+
+public class NullToUnsetConverter : System.Windows.Data.IValueConverter
+{
+    public object? Convert(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => value ?? DependencyProperty.UnsetValue;
+    public object? ConvertBack(object? value, Type targetType, object? parameter, System.Globalization.CultureInfo culture)
+        => throw new NotSupportedException();
+}
 
 public class BinderViewModel : INotifyPropertyChanged, IStatusSink
 {
@@ -564,8 +573,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     public ObservableCollection<CardSlot> RightSlots { get; } = new();
     private string _pageDisplay = string.Empty;
     public string PageDisplay { get => _pageDisplay; private set { if (_pageDisplay!=value) { _pageDisplay = value; OnPropertyChanged(); } } }
-    private string _setMissingPrice = string.Empty;
-    public string SetMissingPrice { get => _setMissingPrice; private set { if (_setMissingPrice!=value) { _setMissingPrice = value; OnPropertyChanged(); } } }
+    public ObservableCollection<PriceSegment> SetMissingPriceSegments { get; } = new();
     private Brush _binderBackground = Brushes.Black;
     public Brush BinderBackground { get => _binderBackground; private set { if (_binderBackground!=value) { _binderBackground = value; OnPropertyChanged(); } } }
     private readonly BinderThemeService _binderTheme = new();
@@ -1235,38 +1243,71 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     BinderBackground = _binderTheme.CreateBinderBackground(binderNumber - 1);
     }
 
+    private static readonly Brush PriceRedBrush = CreateFrozenBrush(Colors.Red);
+    private static readonly Brush PriceGreenBrush = CreateFrozenBrush(Color.FromRgb(0x32, 0xCD, 0x32));
+    private static readonly Brush PriceWhiteBrush = CreateFrozenBrush(Colors.White);
+    private static Brush CreateFrozenBrush(Color c) { var b = new SolidColorBrush(c); if (b.CanFreeze) b.Freeze(); return b; }
+
     private void UpdateSetMissingPrice()
     {
-        // Find the last non-empty slot on the right page to determine the "current set"
-        CardSlot? bottomRight = null;
-        for (int i = RightSlots.Count - 1; i >= 0; i--)
+        SetMissingPriceSegments.Clear();
+
+        // Collect distinct sets visible on the current pages (skip back-face / placeholder)
+        var visibleSets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var slot in LeftSlots.Concat(RightSlots))
         {
-            if (!string.IsNullOrEmpty(RightSlots[i].Set))
+            if (slot.IsBackFace || slot.IsPlaceholderBack) continue;
+            if (!string.IsNullOrEmpty(slot.Set))
+                visibleSets.Add(slot.Set);
+        }
+        if (visibleSets.Count == 0) return;
+
+        bool showAll = string.Equals(_priceDisplayMode, "All", StringComparison.OrdinalIgnoreCase);
+        bool first = true;
+
+        foreach (var setCode in visibleSets)
+        {
+            decimal missingTotal = 0m;
+            int missingCount = 0;
+            decimal collectedTotal = 0m;
+            int collectedCount = 0;
+            string? currency = null;
+
+            foreach (var card in _cards)
             {
-                bottomRight = RightSlots[i];
-                break;
+                if (card.IsBackFace) continue;
+                if (!string.Equals(card.Set, setCode, StringComparison.OrdinalIgnoreCase)) continue;
+                var price = card.PriceEur ?? Imaging.CardPriceStore.Get(card.Set, card.Number);
+                if (card.Quantity == 0)
+                {
+                    missingCount++;
+                    if (price.HasValue) missingTotal += price.Value;
+                }
+                else if (showAll)
+                {
+                    collectedCount++;
+                    if (price.HasValue) collectedTotal += price.Value;
+                }
+                if (currency == null && price.HasValue)
+                    currency = Imaging.CardPriceStore.GetCurrency(card.Set, card.Number);
+            }
+
+            currency ??= "EUR";
+            string symbol = string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : "\u20ac";
+            var label = setCode.ToUpperInvariant();
+
+            if (!first)
+                SetMissingPriceSegments.Add(new PriceSegment(" | ", null));
+            first = false;
+
+            SetMissingPriceSegments.Add(new PriceSegment($"{label} missing: {missingCount}, ", null));
+            SetMissingPriceSegments.Add(new PriceSegment($"{symbol}{missingTotal:0.00}", PriceRedBrush));
+            if (showAll)
+            {
+                SetMissingPriceSegments.Add(new PriceSegment($"  have: {collectedCount}, ", null));
+                SetMissingPriceSegments.Add(new PriceSegment($"{symbol}{collectedTotal:0.00}", PriceGreenBrush));
             }
         }
-        if (bottomRight == null || string.IsNullOrEmpty(bottomRight.Set))
-        {
-            SetMissingPrice = string.Empty;
-            return;
-        }
-        string setCode = bottomRight.Set;
-        decimal total = 0m;
-        int missingCount = 0;
-        foreach (var card in _cards)
-        {
-            if (card.IsBackFace) continue;
-            if (!string.Equals(card.Set, setCode, StringComparison.OrdinalIgnoreCase)) continue;
-            if (card.Quantity != 0) continue;
-            missingCount++;
-            var price = card.PriceEur ?? Imaging.CardPriceStore.Get(card.Set, card.Number);
-            if (price.HasValue) total += price.Value;
-        }
-        string currency = Imaging.CardPriceStore.GetCurrency(setCode, bottomRight.Number) ?? "EUR";
-        string symbol = string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : "\u20ac";
-        SetMissingPrice = $"{setCode.ToUpperInvariant()} missing: {missingCount} cards, {symbol}{total:0.00}";
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

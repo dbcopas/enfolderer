@@ -16,6 +16,7 @@
     </Window.CommandBindings>
     <Window.Resources>
     <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    <local:NullToUnsetConverter x:Key="NullToUnset" />
     <qty:QuantityImageConverter x:Key="QuantityImageConverter" />
         <Style x:Key="CardSlotStyle" TargetType="Border">
             <Setter Property="Margin" Value="4" />
@@ -177,7 +178,16 @@
                 <TextBlock Text="{Binding PageDisplay}" />
             </StatusBarItem>
             <StatusBarItem>
-                <TextBlock Text="{Binding SetMissingPrice}" />
+                <ItemsControl ItemsSource="{Binding SetMissingPriceSegments}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Text}" Foreground="{Binding Color, Converter={StaticResource NullToUnset}}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </StatusBarItem>
             <!-- Transient image / metadata fetch flash placed AFTER page to avoid left edge jumping -->
             <StatusBarItem>
