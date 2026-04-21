@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Enfolderer.App.Imaging;
 using Enfolderer.App.Importing;
 using Enfolderer.App.Infrastructure;
 
@@ -25,40 +26,54 @@ public static class CsvWantsMatcher
     {
         outputPath ??= Path.Combine(Path.GetDirectoryName(collectionCsvPath)!, "matches.csv");
 
-        // Parse collection CSV (semicolon-delimited, no header): set;number;foil status;language;name
+        // Parse collection CSV (Moxfield export format: comma-delimited with quoted fields, has header)
         var collectionLines = File.ReadAllLines(collectionCsvPath);
         var collectionEntries = new List<(string Set, string Number, string Foil, string RawLine)>();
 
-        foreach (var line in collectionLines)
+        for (int ci = 1; ci < collectionLines.Length; ci++)
         {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            var parts = line.Split(';');
-            if (parts.Length < 5) continue;
+            if (string.IsNullOrWhiteSpace(collectionLines[ci])) continue;
+            var cFields = ParseCsvLine(collectionLines[ci]);
+            if (cFields.Count < 11) continue;
 
-            var set = parts[0].Trim().ToLowerInvariant();
-            var number = parts[1].Trim();
-            var foilRaw = parts[2].Trim().ToLowerInvariant();
-            var foil = string.IsNullOrEmpty(foilRaw) || foilRaw == "nonfoil" ? "nonfoil" : "foil";
+            var set = cFields[3].ToLowerInvariant();
+            var number = cFields[9];
+            var foilRaw = cFields[6].Trim().ToLowerInvariant();
+            var foil = string.IsNullOrEmpty(foilRaw) ? "nonfoil" : "foil";
+            var name = cFields[2];
+            var lang = cFields[5];
+            var rawLine = $"{set};{number};{(foil == "nonfoil" ? "" : foil)};{lang};{name}";
 
-            collectionEntries.Add((set, number, foil, line));
+            collectionEntries.Add((set, number, foil, rawLine));
         }
 
-        // Parse Moxfield wants CSV (comma-delimited with quoted fields, has header)
+        // Parse wants CSV — detect format from header row
         var wantsLines = File.ReadAllLines(wantsCsvPath);
         var wantedCards = new HashSet<(string Set, string Number, string Foil)>();
 
-        for (int i = 1; i < wantsLines.Length; i++)
+        if (wantsLines.Length > 0)
         {
-            if (string.IsNullOrWhiteSpace(wantsLines[i])) continue;
-            var fields = ParseCsvLine(wantsLines[i]);
-            if (fields.Count < 11) continue;
+            var wantsDelimiter = DetectDelimiter(wantsLines[0]);
+            var headerFields = ParseDelimitedLine(wantsLines[0], wantsDelimiter);
+            var colMap = DetectColumns(headerFields);
 
-            var set = fields[3].ToLowerInvariant();
-            var collectorNumber = fields[9];
-            var foilRaw = fields[6].Trim().ToLowerInvariant();
-            var foil = string.IsNullOrEmpty(foilRaw) ? "nonfoil" : "foil";
+            for (int i = 1; i < wantsLines.Length; i++)
+            {
+                if (string.IsNullOrWhiteSpace(wantsLines[i])) continue;
+                var fields = ParseDelimitedLine(wantsLines[i], wantsDelimiter);
+                if (fields.Count <= colMap.SetCol || fields.Count <= colMap.NumberCol) continue;
 
-            wantedCards.Add((set, collectorNumber, foil));
+                var set = fields[colMap.SetCol].Trim().TrimEnd('+').ToLowerInvariant();
+                var collectorNumber = fields[colMap.NumberCol].Trim();
+                var foil = "nonfoil";
+                if (colMap.FoilCol >= 0 && colMap.FoilCol < fields.Count)
+                {
+                    var foilRaw = fields[colMap.FoilCol].Trim().ToLowerInvariant();
+                    foil = string.IsNullOrEmpty(foilRaw) ? "nonfoil" : "foil";
+                }
+
+                wantedCards.Add((set, collectorNumber, foil));
+            }
         }
 
         // Find matches
@@ -69,9 +84,12 @@ public static class CsvWantsMatcher
                 matches.Add(entry);
         }
 
-        // Fetch prices from Scryfall
+        // Fetch prices — check local CardPriceStore cache first, only hit Scryfall for misses
+        var maxAge = TimeSpan.FromDays(7);
+        var now = DateTime.UtcNow;
         using var http = BinderViewModelHttpFactory.Create();
         var outputLines = new List<string>();
+        int fetchedFromApi = 0;
 
         for (int i = 0; i < matches.Count; i++)
         {
@@ -79,13 +97,30 @@ public static class CsvWantsMatcher
             var (set, number, foil, rawLine) = matches[i];
             progressCallback?.Invoke(i + 1, matches.Count);
 
-            var price = await FetchPriceAsync(http, set, number, foil == "foil", ct);
+            // Try local price cache first
+            (decimal Price, string Currency)? price = null;
+            var cached = CardPriceStore.GetWithTimestamp(set, number);
+            if (cached.HasValue && (now - cached.Value.FetchedUtc) < maxAge)
+            {
+                price = (cached.Value.Price, cached.Value.Currency);
+            }
+            else
+            {
+                price = await FetchPriceAsync(http, set, number, foil == "foil", ct);
+                fetchedFromApi++;
+                if (price.HasValue)
+                    CardPriceStore.Set(set, number, price.Value.Price, currency: price.Value.Currency);
+            }
+
             var priceStr = price.HasValue
                 ? price.Value.Price.ToString("0.00", CultureInfo.InvariantCulture)
                 : "";
             var currencyStr = price.HasValue ? price.Value.Currency : "";
             outputLines.Add($"{rawLine};{priceStr};{currencyStr}");
         }
+
+        if (fetchedFromApi > 0)
+            CardPriceStore.SaveToDisk();
 
         File.WriteAllLines(outputPath, outputLines);
         return new MatchResult(collectionEntries.Count, wantedCards.Count, matches.Count, outputPath);
@@ -132,6 +167,55 @@ public static class CsvWantsMatcher
         catch { /* price fetch failure is non-fatal */ }
 
         return null;
+    }
+
+    private record ColumnMap(int SetCol, int NumberCol, int FoilCol);
+
+    private static ColumnMap DetectColumns(List<string> headerFields)
+    {
+        int setCol = -1, numberCol = -1, foilCol = -1;
+
+        for (int i = 0; i < headerFields.Count; i++)
+        {
+            var h = headerFields[i].Trim().ToLowerInvariant();
+            if (setCol < 0 && (h == "edition" || h == "set" || h == "set code" || h == "setcode"))
+                setCol = i;
+            else if (numberCol < 0 && (h == "collector number" || h == "collectornumber" || h == "number" || h == "card number" || h == "no" || h == "no."))
+                numberCol = i;
+            else if (foilCol < 0 && (h == "foil" || h == "printing" || h == "finish"))
+                foilCol = i;
+        }
+
+        // Fall back to Moxfield positions if headers not recognized
+        if (setCol < 0) setCol = 3;
+        if (numberCol < 0) numberCol = 9;
+        if (foilCol < 0) foilCol = 6;
+
+        return new ColumnMap(setCol, numberCol, foilCol);
+    }
+
+    private static char DetectDelimiter(string headerLine)
+    {
+        int commas = 0, semicolons = 0;
+        foreach (var c in headerLine)
+        {
+            if (c == ',') commas++;
+            else if (c == ';') semicolons++;
+        }
+        return semicolons > commas ? ';' : ',';
+    }
+
+    private static List<string> ParseDelimitedLine(string line, char delimiter)
+    {
+        if (delimiter == ',')
+            return ParseCsvLine(line);
+
+        // Simple split for non-comma delimiters (semicolons don't typically use quoted fields)
+        var parts = line.Split(delimiter);
+        var fields = new List<string>(parts.Length);
+        foreach (var p in parts)
+            fields.Add(p.Trim('"', ' '));
+        return fields;
     }
 
     private static List<string> ParseCsvLine(string line)
