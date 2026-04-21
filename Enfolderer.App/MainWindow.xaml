@@ -150,6 +150,7 @@
                 <MenuItem Header="Auto Import Missing Sets" Click="AutoImportMissingSets_Click" />
                 <Separator />
                 <MenuItem Header="Match Wants CSV..." Click="MatchWantsCsv_Click" />
+                <MenuItem Header="Deck Pull Report..." Click="DeckPullReport_Click" />
             </MenuItem>
             <MenuItem Header="_Search">
                 <MenuItem Header="Focus Search (Ctrl+F)" Command="ApplicationCommands.Find" />

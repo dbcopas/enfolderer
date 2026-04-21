@@ -205,6 +205,46 @@ public partial class MainWindow : Window
     }
 
     // Tools menu handlers (delegate to view model)
+    private async void DeckPullReport_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dlgDeck = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Select Deck List (Goldfish export)",
+                Filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*"
+            };
+            if (dlgDeck.ShowDialog(this) != true) return;
+
+            var dlgSave = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save pull report as",
+                Filter = "Text Files (*.txt)|*.txt",
+                FileName = "deck_pull_report.txt",
+                InitialDirectory = System.IO.Path.GetDirectoryName(dlgDeck.FileName)
+            };
+            if (dlgSave.ShowDialog(this) != true) return;
+
+            _vm?.SetStatus("Generating deck pull report...");
+            _vm.StartImportProgress("Deck pull report");
+            var result = await Task.Run(async () =>
+            {
+                var deck = Utilities.DeckPullReportService.ParseDeckFile(dlgDeck.FileName);
+                return await Utilities.DeckPullReportService.GenerateReportAsync(deck, dlgSave.FileName,
+                    progressCallback: (done, total) => _vm.ReportImportProgress(done, total));
+            });
+            _vm?.FinishImportProgress();
+            _vm?.SetStatus($"Deck pull: {result.Pulls.Count} pull lines, {result.Missing.Count} missing.");
+            MessageBox.Show(this,
+                $"Pull lines: {result.Pulls.Count}\nMissing cards: {result.Missing.Count}\n\nOutput: {result.OutputPath}",
+                "Deck Pull Report", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Deck Pull Report Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void Layout4x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "4x3"; }
     private void Layout3x3_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "3x3"; }
     private void Layout2x2_Click(object sender, RoutedEventArgs e) { if (_vm!=null) _vm.LayoutMode = "2x2"; }
@@ -633,6 +673,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private Enfolderer.App.Binder.NavigationViewBuilder? _navBuilder; // deferred until ctor end
     private IReadOnlyList<Enfolderer.App.Layout.NavigationService.PageView> _views => _nav.Views; // proxy for legacy references
     private readonly Enfolderer.App.Collection.CardCollectionData _collection = new();
+    public Enfolderer.App.Collection.CardCollectionData Collection => _collection;
     private readonly Enfolderer.App.Quantity.CardQuantityService _quantityService; // repository-backed instance created in ctor
     private readonly Enfolderer.App.Quantity.QuantityEnrichmentCoordinator _quantityCoordinator = new();
     private readonly Enfolderer.App.Collection.CollectionRepository _collectionRepo; // repository
