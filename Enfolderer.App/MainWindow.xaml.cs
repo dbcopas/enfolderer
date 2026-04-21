@@ -166,7 +166,7 @@ public partial class MainWindow : Window
         {
             var dlgCollection = new Microsoft.Win32.OpenFileDialog
             {
-                Title = "Select your collection CSV (set;number;foil;language;name)",
+                Title = "Select your Moxfield collection CSV",
                 Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*"
             };
             if (dlgCollection.ShowDialog(this) != true) return;
