@@ -58,7 +58,7 @@ public partial class MainWindow : Window
             };
             if (dlg.ShowDialog(this) != true) return;
 
-            // If Ctrl is held, run legacy updater; otherwise, run MTGS mapping flow (dry-run first)
+            // If Ctrl is held, run legacy updater; otherwise, auto-detect format
             bool useLegacy = (Keyboard.IsKeyDown(Key.LeftCtrl) || Keyboard.IsKeyDown(Key.RightCtrl));
             if (useLegacy)
             {
@@ -69,7 +69,41 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // MTGS mapping dry-run: set MtgsId for matching rows; collect unmatched/conflicts
+            // Auto-detect MTG Studio CSV format (comma-delimited with CardId header)
+            bool isMtgsStudio = CsvMainDbUpdater.IsMtgsStudioCsvFormat(dlg.FileName);
+            if (isMtgsStudio)
+            {
+                // MTG Studio CSV: prepare plan (matches only, no writes)
+                _vm.StartImportProgress("Studio CSV matching");
+                StudioCsvPlan? studioPlan = null;
+                var studioDry = await Task.Run(() =>
+                {
+                    var (result, plan) = CsvMainDbUpdater.PrepareStudioCsvPlan(dlg.FileName, progress: (done, total) => _vm.ReportImportProgress(done, total));
+                    studioPlan = plan;
+                    return result;
+                });
+                _vm.FinishImportProgress();
+                var studioSb = new System.Text.StringBuilder();
+                studioSb.AppendLine("MTG Studio CSV plan:");
+                studioSb.AppendLine($"Will update MtgsId on: {studioDry.UpdatedMtgsIds}");
+                studioSb.AppendLine($"Already mapped (skipped): {studioDry.SkippedExisting}");
+                studioSb.AppendLine($"Conflicts: {studioDry.Conflicts}");
+                studioSb.AppendLine($"Unmatched: {(studioDry.UnmatchedLogPath != null ? "see log " + studioDry.UnmatchedLogPath : "0")} ");
+                studioSb.AppendLine($"Errors: {studioDry.Errors}");
+                studioSb.AppendLine();
+                studioSb.AppendLine("Proceed to apply updates?\nClick Yes to apply only updates; No to also insert unmatched; Cancel to abort.");
+                var studioChoice = MessageBox.Show(this, studioSb.ToString(), "Studio CSV Mapping", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+                if (studioChoice == MessageBoxResult.Cancel) return;
+
+                bool studioInsertMissing = (studioChoice == MessageBoxResult.No);
+                _vm.StartImportProgress(studioInsertMissing ? "Studio CSV apply + insert" : "Studio CSV apply");
+                var studioApply = await Task.Run(() => CsvMainDbUpdater.ApplyStudioCsvPlan(studioPlan!, insertMissing: studioInsertMissing, progress: (done, total) => _vm.ReportImportProgress(done, total)));
+                _vm.FinishImportProgress();
+                MessageBox.Show(this, $"Studio CSV mapping applied:\nUpdated MtgsId: {studioApply.UpdatedMtgsIds}\nInserted new: {studioApply.InsertedNew}\nSkipped existing: {studioApply.SkippedExisting}\nConflicts: {studioApply.Conflicts}\nErrors: {studioApply.Errors}\nUnmatched log: {(studioApply.UnmatchedLogPath ?? "(none)")}", "Studio CSV", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            // MTGS mapping dry-run (semicolon format fallback)
             _vm.StartImportProgress("MTGS dry-run");
             var dry = await Task.Run(() => CsvMainDbUpdater.ProcessMtgsMapping(dlg.FileName, dryRun: true, insertMissing: false, progress: (done, total) => _vm.ReportImportProgress(done, total)));
             _vm.FinishImportProgress();

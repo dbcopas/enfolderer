@@ -158,10 +158,25 @@ public sealed class CardCollectionData
                     string collectorTrim = (!keepModifier || string.IsNullOrEmpty(modifier)) ? trimmed : trimmed + modifier;
                     AddIndexEntry(set, collectorTrim, cardId, reverse, allowOverwrite:false);
                 }
+                // Also index by MtgsId so CollectionCards keyed by MtgsId can resolve through reverse map
+                // (after Studio CSV import, CollectionCards.CardId may be MtgsId while Cards.id is still internal)
+                if (mtgsId.HasValue && mtgsId.Value > 0 && mtgsId.Value != cardId)
+                {
+                    AddIndexEntry(set, collectorPrimary, mtgsId.Value, reverse, allowOverwrite: false);
+                    if (!string.Equals(trimmed, baseKey, StringComparison.Ordinal))
+                    {
+                        string collectorTrimMtgs = (!keepModifier || string.IsNullOrEmpty(modifier)) ? trimmed : trimmed + modifier;
+                        AddIndexEntry(set, collectorTrimMtgs, mtgsId.Value, reverse, allowOverwrite: false);
+                    }
+                }
                 // Record full row including non-token modifier for later variant quantity lookup
                 if (!_cardRows.ContainsKey(cardId))
                 {
                     _cardRows[cardId] = (set.ToLowerInvariant(), baseKey, modifier); // store baseKey (normalized) + raw modifier
+                }
+                if (mtgsId.HasValue && mtgsId.Value > 0 && !_cardRows.ContainsKey(mtgsId.Value))
+                {
+                    _cardRows[mtgsId.Value] = (set.ToLowerInvariant(), baseKey, modifier);
                 }
                 // Track custom card & quantities. If no collection file present, treat Qty column as authoritative for ALL cards.
                 bool isCustom = (mtgsId == null || mtgsId <= 0);
