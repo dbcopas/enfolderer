@@ -24,6 +24,7 @@ paket-files/
 # Logs
 *.log
 *.txt
+!binder*.txt
 
 # OS junk
 [Dd]esktop.ini
