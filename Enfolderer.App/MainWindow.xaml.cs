@@ -238,6 +238,92 @@ public partial class MainWindow : Window
         }
     }
 
+    private static string MakeSafeFileNamePart(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "binder";
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(value.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray());
+        return cleaned.Trim();
+    }
+
+    private async void BatchExportBinderWantsMoxfield_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var folderDlg = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Select folder containing binder*.txt files"
+            };
+            if (folderDlg.ShowDialog(this) != true) return;
+
+            string folderPath = folderDlg.FolderName;
+            if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
+            {
+                MessageBox.Show(this, "Selected folder is not valid.", "Batch Export", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var binderFiles = Directory.GetFiles(folderPath, "binder*.txt", SearchOption.TopDirectoryOnly)
+                .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (binderFiles.Count == 0)
+            {
+                MessageBox.Show(this, "No binder*.txt files found in the selected folder.", "Batch Export", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            int exported = 0;
+            int failed = 0;
+            var failures = new List<string>();
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+
+            foreach (var binderPath in binderFiles)
+            {
+                string binderName = Path.GetFileNameWithoutExtension(binderPath);
+                try
+                {
+                    _vm.SetStatus($"Loading {binderName}...");
+                    await _vm.LoadFromFileAsync(binderPath, awaitFullMetadata: true);
+
+                    string safeName = MakeSafeFileNamePart(binderName);
+                    string outputPath = Path.Combine(folderPath, $"want_list_moxfield_{safeName}_{timestamp}.csv");
+                    Utilities.WantListExporter.ExportMoxfieldCsv(_vm.Cards, outputPath);
+                    exported++;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    failures.Add($"{binderName}: {ex.Message}");
+                }
+            }
+
+            _vm.SetStatus($"Batch Moxfield wants export complete. Exported={exported}, Failed={failed}");
+
+            var summary = new System.Text.StringBuilder();
+            summary.AppendLine($"Processed: {binderFiles.Count}");
+            summary.AppendLine($"Exported: {exported}");
+            summary.AppendLine($"Failed: {failed}");
+            summary.AppendLine();
+            summary.AppendLine($"Output folder: {folderPath}");
+
+            if (failures.Count > 0)
+            {
+                summary.AppendLine();
+                summary.AppendLine("Failures:");
+                foreach (var line in failures.Take(10)) summary.AppendLine(line);
+                if (failures.Count > 10) summary.AppendLine($"... and {failures.Count - 10} more");
+            }
+
+            MessageBox.Show(this, summary.ToString(), "Batch Export Binder Wants (Moxfield)", MessageBoxButton.OK,
+                failed == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Batch Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     // Tools menu handlers (delegate to view model)
     private async void DeckPullReport_Click(object sender, RoutedEventArgs e)
     {
@@ -1190,7 +1276,7 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     }
 
     // Load binder file (async). Supported lines: comments (#), set headers (=SET), single numbers, ranges start-end, optional ;name overrides.
-    public async Task LoadFromFileAsync(string path)
+    public async Task LoadFromFileAsync(string path, bool awaitFullMetadata = false)
     {
         var load = await _binderLoadService.LoadAsync(path, SlotsPerPage);
     Debug.WriteLine($"[Binder] LoadFromFileAsync start path={path}");
@@ -1238,7 +1324,8 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             () => { _nav.ResetIndex(); RebuildViews(); },
             Refresh,
             () => _cachePersistence.Persist(_session.CurrentFileHash!, _cards),
-            () => _cachePersistence.MarkComplete(_session.CurrentFileHash!)
+            () => _cachePersistence.MarkComplete(_session.CurrentFileHash!),
+            awaitFullMetadata
         );
     Debug.WriteLine("[Binder] LoadFromFileAsync complete");
     }

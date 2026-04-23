@@ -43,7 +43,8 @@ public class MetadataLoadOrchestrator
         Action rebuildViews,
         Action refresh,
         Action persistCache,
-        Action markCacheComplete)
+        Action markCacheComplete,
+        bool awaitRemainingMetadata = false)
     {
         foreach (var p in load.PendingVariantPairs) pendingVariantPairs.Add(p);
         foreach (var ps in load.Specs)
@@ -64,13 +65,13 @@ public class MetadataLoadOrchestrator
         setStatus($"Initial load {cards.Count} faces (placeholders included).");
         buildOrderedFaces(); rebuildViews(); refresh();
 
-        _ = Task.Run(async () =>
+        async Task CompleteRemainingAsync()
         {
             var remaining = new HashSet<int>();
             for (int i=0;i<specs.Count;i++) if (!load.InitialSpecIndexes.Contains(i)) remaining.Add(i);
             if (remaining.Count == 0) return;
             await _specResolution.ResolveAsync(load.InitialFetchList, remaining, 15, specs as List<CardSpec> ?? new List<CardSpec>(specs), mfcBacks, setStatus);
-            Application.Current.Dispatcher.Invoke(() =>
+            void ApplyResolvedState()
             {
                 rebuildCardList();
                 if (collection.IsLoaded) { (_quantityService as CardQuantityService)?.ApplyAll(collection, cards); }
@@ -78,7 +79,25 @@ public class MetadataLoadOrchestrator
                 setStatus($"All metadata loaded ({cards.Count} faces).");
                 persistCache();
                 markCacheComplete();
-            });
-        });
+            }
+
+            if (awaitRemainingMetadata)
+            {
+                await Application.Current.Dispatcher.InvokeAsync(ApplyResolvedState);
+            }
+            else
+            {
+                Application.Current.Dispatcher.Invoke(ApplyResolvedState);
+            }
+        }
+
+        if (awaitRemainingMetadata)
+        {
+            await CompleteRemainingAsync();
+        }
+        else
+        {
+            _ = Task.Run(CompleteRemainingAsync);
+        }
     }
 }
