@@ -23,6 +23,7 @@ paket-files/
 
 # Logs
 *.log
+*.txt
 
 # OS junk
 [Dd]esktop.ini
@@ -32,3 +33,8 @@ $RECYCLE.BIN/
 # .NET build artifacts
 Enfolderer.App/bin/
 Enfolderer.App/obj/
+
+# CSV files
+*.csv
+!Tokens.csv
+!Lands.csv
