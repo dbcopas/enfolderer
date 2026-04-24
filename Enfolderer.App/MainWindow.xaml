@@ -186,7 +186,9 @@
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <TextBlock Text="{Binding Text}" Foreground="{Binding Color, Converter={StaticResource NullToUnset}}" />
+                            <TextBlock Text="{Binding Text}"
+                                       Foreground="{Binding Color, Converter={StaticResource NullToUnset}}"
+                                       FontWeight="{Binding Weight}" />
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
