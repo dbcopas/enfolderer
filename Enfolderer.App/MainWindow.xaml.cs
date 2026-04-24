@@ -690,7 +690,8 @@ public partial class MainWindow : Window
     }
 }
 
-public record PriceSegment(string Text, Brush? Color);
+public record PriceSegment(string Text, Brush? Color, FontWeight Weight);
+public record MissingPriceOutlierSummary(int PricedCount, int InlierCount, int OutlierCount, decimal Total, decimal TrimmedTotal, decimal OutlierTotal);
 
 public class NullToUnsetConverter : System.Windows.Data.IValueConverter
 {
@@ -1154,7 +1155,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     _quantityToggleService = boot.QuantityToggle as Enfolderer.App.Quantity.QuantityToggleService ?? new Enfolderer.App.Quantity.QuantityToggleService(_quantityService, _collectionRepo, _collection);
         _cachePersistence = boot.CachePersistence; // ensure existing field assigned
         _arrangementService = boot.ArrangementService;
-    _priceBackfill = new Enfolderer.App.Metadata.PriceBackfillService(boot.CoreGraph.ResolverAdapter, msg => Application.Current?.Dispatcher?.BeginInvoke(() => SetStatus(msg)), () => PriceDisplayMode);
+    _priceBackfill = new Enfolderer.App.Metadata.PriceBackfillService(
+        boot.CoreGraph.ResolverAdapter,
+        msg => Application.Current?.Dispatcher?.BeginInvoke(() => SetStatus(msg)),
+        () => PriceDisplayMode,
+        () => Application.Current?.Dispatcher?.BeginInvoke(UpdateSetMissingPrice));
     ImportService = boot.ImportService;
     _pagePresenter = boot.PagePresenter;
     _pageBatcher = boot.PageBatcher;
@@ -1408,7 +1413,53 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
     private static readonly Brush PriceRedBrush = CreateFrozenBrush(Colors.Red);
     private static readonly Brush PriceGreenBrush = CreateFrozenBrush(Color.FromRgb(0x32, 0xCD, 0x32));
     private static readonly Brush PriceWhiteBrush = CreateFrozenBrush(Colors.White);
+    private static readonly Brush PriceAmberBrush = CreateFrozenBrush(Color.FromRgb(0xFF, 0xC1, 0x07));
     private static Brush CreateFrozenBrush(Color c) { var b = new SolidColorBrush(c); if (b.CanFreeze) b.Freeze(); return b; }
+
+    private static MissingPriceOutlierSummary SummarizeMissingPriceOutliers(IReadOnlyList<decimal> prices)
+    {
+        if (prices.Count == 0)
+            return new MissingPriceOutlierSummary(0, 0, 0, 0m, 0m, 0m);
+
+        var sorted = prices.OrderBy(p => p).ToList();
+        decimal total = sorted.Sum();
+        if (sorted.Count < 4)
+            return new MissingPriceOutlierSummary(sorted.Count, sorted.Count, 0, total, total, 0m);
+
+        decimal q1 = GetPercentile(sorted, 0.25m);
+        decimal q3 = GetPercentile(sorted, 0.75m);
+        decimal iqr = q3 - q1;
+        decimal upperFence = q3 + (1.5m * iqr);
+
+        var outliers = sorted.Where(price => price > upperFence).ToList();
+        if (outliers.Count == 0)
+            return new MissingPriceOutlierSummary(sorted.Count, sorted.Count, 0, total, total, 0m);
+
+        decimal outlierTotal = outliers.Sum();
+        return new MissingPriceOutlierSummary(
+            sorted.Count,
+            sorted.Count - outliers.Count,
+            outliers.Count,
+            total,
+            total - outlierTotal,
+            outlierTotal);
+    }
+
+    private static decimal GetPercentile(IReadOnlyList<decimal> sortedValues, decimal percentile)
+    {
+        if (sortedValues.Count == 0) return 0m;
+        if (sortedValues.Count == 1) return sortedValues[0];
+
+        decimal position = (sortedValues.Count - 1) * percentile;
+        int lowerIndex = (int)decimal.Floor(position);
+        int upperIndex = (int)decimal.Ceiling(position);
+        if (lowerIndex == upperIndex) return sortedValues[lowerIndex];
+
+        decimal fraction = position - lowerIndex;
+        decimal lower = sortedValues[lowerIndex];
+        decimal upper = sortedValues[upperIndex];
+        return lower + ((upper - lower) * fraction);
+    }
 
     private void UpdateSetMissingPrice()
     {
@@ -1431,9 +1482,11 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
         {
             decimal missingTotal = 0m;
             int missingCount = 0;
+            int pricedMissingCount = 0;
             decimal collectedTotal = 0m;
             int collectedCount = 0;
             string? currency = null;
+            var missingPrices = new List<decimal>();
 
             foreach (var card in _cards)
             {
@@ -1443,7 +1496,12 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
                 if (card.Quantity == 0)
                 {
                     missingCount++;
-                    if (price.HasValue) missingTotal += price.Value;
+                    if (price.HasValue)
+                    {
+                        pricedMissingCount++;
+                        missingTotal += price.Value;
+                        missingPrices.Add(price.Value);
+                    }
                 }
                 else if (showAll)
                 {
@@ -1459,15 +1517,40 @@ public class BinderViewModel : INotifyPropertyChanged, IStatusSink
             var label = setCode.ToUpperInvariant();
 
             if (!first)
-                SetMissingPriceSegments.Add(new PriceSegment(" | ", null));
+                SetMissingPriceSegments.Add(new PriceSegment(" | ", null, FontWeights.Normal));
             first = false;
 
-            SetMissingPriceSegments.Add(new PriceSegment($"{label} missing: {missingCount}, ", null));
-            SetMissingPriceSegments.Add(new PriceSegment($"{symbol}{missingTotal:0.00}", PriceRedBrush));
+            SetMissingPriceSegments.Add(new PriceSegment($"{label} missing: {missingCount}, ", PriceRedBrush, FontWeights.Normal));
+            SetMissingPriceSegments.Add(new PriceSegment($"{symbol}{missingTotal:0.00}", PriceRedBrush, FontWeights.Normal));
+
+            if (pricedMissingCount > 0)
+            {
+                var summary = SummarizeMissingPriceOutliers(missingPrices);
+                if (summary.OutlierCount > 0)
+                {
+                    SetMissingPriceSegments.Add(new PriceSegment("  core ", null, FontWeights.Normal));
+                    SetMissingPriceSegments.Add(new PriceSegment($"{summary.InlierCount}/{summary.PricedCount}", PriceRedBrush, FontWeights.Bold));
+                    SetMissingPriceSegments.Add(new PriceSegment(", ", null, FontWeights.Normal));
+                    SetMissingPriceSegments.Add(new PriceSegment($"{symbol}{summary.TrimmedTotal:0.00}", PriceRedBrush, FontWeights.Bold));
+                    SetMissingPriceSegments.Add(new PriceSegment($"  outliers {summary.OutlierCount}, ", null, FontWeights.Normal));
+                    SetMissingPriceSegments.Add(new PriceSegment($"{symbol}{summary.OutlierTotal:0.00}", PriceRedBrush, FontWeights.Normal));
+                }
+                else if (pricedMissingCount != missingCount)
+                {
+                    SetMissingPriceSegments.Add(new PriceSegment($"  priced ", null, FontWeights.Normal));
+                    SetMissingPriceSegments.Add(new PriceSegment($"{pricedMissingCount}/{missingCount}", PriceRedBrush, FontWeights.Bold));
+                }
+            }
+            else if (missingCount > 0)
+            {
+                SetMissingPriceSegments.Add(new PriceSegment("  priced ", null, FontWeights.Normal));
+                SetMissingPriceSegments.Add(new PriceSegment($"0/{missingCount}", PriceRedBrush, FontWeights.Bold));
+            }
+
             if (showAll)
             {
-                SetMissingPriceSegments.Add(new PriceSegment($"  have: {collectedCount}, ", null));
-                SetMissingPriceSegments.Add(new PriceSegment($"{symbol}{collectedTotal:0.00}", PriceGreenBrush));
+                SetMissingPriceSegments.Add(new PriceSegment($"  have: {collectedCount}, ", null, FontWeights.Normal));
+                SetMissingPriceSegments.Add(new PriceSegment($"{symbol}{collectedTotal:0.00}", PriceGreenBrush, FontWeights.Normal));
             }
         }
     }
