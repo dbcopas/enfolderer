@@ -1,4 +1,4 @@
-# Enfolderer MTG Binder - 100% Vibe Coded with GitHub Copilot.
+# Enfolderer MTG Binder - 100% Coded with GitHub Copilot.
 
 ![Screenshot](https://github.com/user-attachments/assets/0a6ef719-fce1-4905-a152-0cc9e9dd308c)
 
