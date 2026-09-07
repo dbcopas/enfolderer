@@ -1,5 +1,6 @@
-// Hosting for the job API and the pipeline worker. Both run with system-assigned identities so
-// that no connection string or storage key ever exists in configuration.
+// Hosting for the job API and the pipeline worker. Both run with a user-assigned managed identity
+// so that no connection string or storage key ever exists in configuration, and so the identities
+// and their role assignments survive a redeploy or a recreated site.
 targetScope = 'resourceGroup'
 
 param namePrefix string
