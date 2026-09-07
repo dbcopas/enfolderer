@@ -16,6 +16,7 @@
     </Window.CommandBindings>
     <Window.Resources>
     <BooleanToVisibilityConverter x:Key="BoolToVis" />
+    <local:NullToUnsetConverter x:Key="NullToUnset" />
     <qty:QuantityImageConverter x:Key="QuantityImageConverter" />
         <Style x:Key="CardSlotStyle" TargetType="Border">
             <Setter Property="Margin" Value="4" />
@@ -149,6 +150,8 @@
                 <MenuItem Header="Auto Import Missing Sets" Click="AutoImportMissingSets_Click" />
                 <Separator />
                 <MenuItem Header="Match Wants CSV..." Click="MatchWantsCsv_Click" />
+                <MenuItem Header="Batch Export Binder Wants (Moxfield)..." Click="BatchExportBinderWantsMoxfield_Click" />
+                <MenuItem Header="Deck Pull Report..." Click="DeckPullReport_Click" />
                 <MenuItem Header="Scan Card Image..." Click="ScanCardImage_Click" />
                 <MenuItem Header="Scan Binder Images..." Click="ScanBinderImages_Click" />
             </MenuItem>
@@ -179,7 +182,18 @@
                 <TextBlock Text="{Binding PageDisplay}" />
             </StatusBarItem>
             <StatusBarItem>
-                <TextBlock Text="{Binding SetMissingPrice}" />
+                <ItemsControl ItemsSource="{Binding SetMissingPriceSegments}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Text}"
+                                       Foreground="{Binding Color, Converter={StaticResource NullToUnset}}"
+                                       FontWeight="{Binding Weight}" />
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
             </StatusBarItem>
             <!-- Transient image / metadata fetch flash placed AFTER page to avoid left edge jumping -->
             <StatusBarItem>

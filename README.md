@@ -1,288 +1,129 @@
-# Enfolderer MTG Binder - 100% Vibe Coded with GitHub Copilot.
+# Enfolderer
 
-![Screenshot](https://github.com/user-attachments/assets/0a6ef719-fce1-4905-a152-0cc9e9dd308c)
+Enfolderer is a Windows desktop app for arranging a Magic: The Gathering collection into virtual binders. Give it a small text file describing the cards and their order; it resolves card data and images from Scryfall, then displays paginated binder spreads that match your physical filing system.
 
+![Enfolderer screenshot](https://github.com/user-attachments/assets/0a6ef719-fce1-4905-a152-0cc9e9dd308c)
 
-WPF application for visualizing a Magic: The Gathering collection in virtual binders. Layout is dynamic (4×3 / 3×3 / 2×2 selectable) and pages‑per‑binder is configurable (default 40 displayed sides / 20 physical sheets). The app auto‑adds binders as your list grows.
+## The core workflow
 
-## Quick Start (Basic Setup)
-1. Download or build the app. After a publish/build you will have an executable (e.g. `Enfolderer.App.exe`).
-2. `mainDb.db` and `mtgstudio.collection` must be in the SAME directory as the executable.
-3. Launch the app and open your binder definition file (`File > Open`).
-4. (Optional) If your real `mtgstudio.collection` lives elsewhere (e.g. managed by MTG Studio), create a symbolic link beside the exe instead of copying the file so updates propagate automatically.
+1. Create a binder definition (`.txt`) for a set or collection.
+2. Open it in Enfolderer.
+3. Browse the resulting binders, update quantities by clicking cards, and use the display to organize your physical collection.
 
-### Creating a Symbolic Link (Windows)
-Open an elevated PowerShell or Command Prompt in the folder containing the executable and run one of:
+The app preserves your requested ordering while keeping physical two-sided cards together and aligning pairs within binder rows. It automatically adds binders as the list grows.
 
-PowerShell:
-```
+## Getting started
+
+Enfolderer requires Windows and the .NET 8 Desktop Runtime. Published builds include `mainDb.db` and `mtgstudio.collection`; keep both files beside `Enfolderer.App.exe`.
+
+Run the app, then choose **Open** from the toolbar and select a binder definition file. The repository includes examples such as `binder_alt_arts.txt`, `binder_promos.txt`, and `binder_secret_lair.txt`.
+
+If MTG Studio maintains your collection database somewhere else, place a symbolic link named `mtgstudio.collection` beside the executable instead of copying it:
+
+```powershell
 New-Item -ItemType SymbolicLink -Path .\mtgstudio.collection -Target "C:\Path\To\Your\mtgstudio.collection"
 ```
-CMD:
-```
-mklink mtgstudio.collection "C:\Path\To\Your\mtgstudio.collection"
-```
-You should then see `mtgstudio.collection` listed; the application will read it as if it were a local file.
 
-### Verifying Files
-On startup you should NOT see build errors about missing databases. If the app cannot find `mainDb.db` or `mtgstudio.collection`, place (or link) them next to the executable and restart.
+## Binder definition files
+
+A binder file is a plain-text list organized into set sections. Enfolderer obtains card names, layouts, and images from Scryfall unless you provide an explicit entry.
+
+```text
+# Strixhaven Mystical Archive
+=STA
+1-10
+11-20||50-55
+296-298&&361-363
+
+# A named entry that does not call Scryfall
+Dragon Token;TOKEN;1
+
+# Five empty card-back slots
+5;backface
+```
+
+### Common syntax
+
+| Syntax | Meaning |
+| --- | --- |
+| `=SET` | Begin a set section; applies until the next set section. |
+| `123` | Add one collector number. |
+| `001-010` | Add an inclusive range; matching zero padding is retained. |
+| `1-5\|\|30-34` | Interleave sequences. |
+| `296-340&&361-405` | Pair two ranges for composite display numbers. |
+| `J1-5`, `RA 1-8`, `2-5J-b` | Prefixes and suffixes in collector numbers. |
+| `★1-3` | Display star-suffixed collector numbers. |
+| `123;Custom Name` | Use a custom display name while retaining Scryfall metadata. |
+| `Name;SET;Number` | Add an explicit card entry without an API lookup. |
+| `N+lang` | Add a normal card plus a language variant. |
+| `N;backface` | Add `N` fixed card-back placeholder slots. |
+| `# comment` | Add a comment. |
+
+An optional first non-comment line beginning with `**` configures the view:
+
+```text
+** 3x3, pages=36, Firebrick, 2E8B57
+```
+
+It accepts `4x3`, `3x3`, or `2x2`; `pages=<positive number>`; and color names or six-digit hex colors for successive binder covers. Remaining covers receive generated colors.
+
+## Using the binder
+
+- Choose a 4×3, 3×3, or 2×2 layout and set pages per binder from **Tools**.
+- Move through pages and binders with the navigation controls, or jump directly to a binder and page.
+- Search cards by name with **Ctrl+F**.
+- Click a card to cycle its quantity between 0, 1, and 2. Quantities come from `mtgstudio.collection` for MTG Studio-backed cards and `mainDb.db` for custom/imported cards.
+- Enfolderer caches metadata and images in `%LocalAppData%\Enfolderer\cache`, allowing subsequent loads of the same file to avoid repeated metadata requests.
+
+For empty back slots, Enfolderer first looks for a local card-back image beside the collection file or executable, then in `%USERPROFILE%\Pictures\Enfolderer` and the executable's `images` directory. Supported names include `Magic_card_back.jpg`, `card_back.jpg`, and `back.jpg`; an embedded fallback is used otherwise.
+
+## Supporting tools
+
+The application also includes utilities for collection maintenance and exports:
+
+- **Update mainDb from CSV** maps MTG Studio or compatible CSV data to `mainDb.db`, with a review step before applying updates.
+- **Import Scryfall Set Into mainDb** imports a set by code. Hold **Shift** while invoking it to replace existing rows for that set.
+- **Auto Import Missing Sets** imports binder-file set codes not yet found in the local database.
+- **Export Playset Needs**, **Export Want List (Moxfield)**, and **Export Collection (Moxfield)** create inventory and Moxfield-oriented exports.
+- **Match Wants CSV** compares Moxfield collection and wants exports, including price lookup.
+- **Batch Export Binder Wants (Moxfield)** produces Moxfield want-list CSVs for each `binder*.txt` file in a selected folder.
+- **Deck Pull Report** creates a pull/missing-card report from a Goldfish deck-list export.
+- **Scan Card Image** and **Scan Binder Images** identify cards from photographs through the Azure AI pipeline described below.
+- **Lands Viewer** and **Tokens Viewer** open CSV-based, searchable 3×3 binder views and let you mark entries as owned.
+
+The remaining File-menu maintenance actions modify the local `mtgstudio.collection`; use them only when you understand the intended database operation. **Restore collection backup** restores its adjacent `.bak` file.
 
 ## Scanning cards with the Azure AI pipeline
 
-`Tools > Scan Card Image...` photographs-to-CSV: the app uploads a single image to Azure Blob
-Storage and polls a job API while a multi-agent Azure AI Foundry pipeline finds each card's
-outline and identifies it. `Scan Binder Images...` runs the same job API once per image in a
-folder. Both write the existing `SET;NUMBER;;en;NAME` CSV, so the import flow is unchanged.
+**Scan Card Image...** turns a photograph into binder entries: the app uploads a single image to
+Azure Blob Storage and polls a job API while a multi-agent Azure AI Foundry pipeline finds each
+card's outline and identifies it. **Scan Binder Images...** runs the same job API once per image in
+a selected folder. Both write the `SET;NUMBER;;en;NAME` CSV the importer already understands.
 
 Configuration lives in `aiconfig.txt` beside the executable and contains **no secrets** — only the
 API URL, tenant id, public client id and scope; you sign in interactively. A template is written
 for you the first time you run a scan.
 
-The services, agent definitions and infrastructure are in `src/Enfolderer.Ai.*`, `agents/` and
+The services, agent definitions, and infrastructure are in `src/Enfolderer.Ai.*`, `agents/`, and
 `infra/`. See [docs/foundry-demo.md](docs/foundry-demo.md) for the architecture and the security
 boundary walkthrough.
 
----
+## Build and run
 
-## Key Features (Current)
-* Unlimited binders with correct cover / spread pagination
-* Dynamic page geometry: choose 4x3 (12 slots), 3x3 (9), or 2x2 (4) at runtime (toolbar)
-* Configurable pages per binder (sides) at runtime or via directive
-* Custom binder color sequence via leading file directive (see below) with random continuation afterwards
-* Deterministic global ordering with adjacency & alignment constraints
-	* Physical two‑sided (transform / modal_dfc / battle etc.) cards auto‑inject synthetic back immediately after the front
-	* Exactly two consecutive identical names are treated as a pair (runs of 3+ identical names are NOT forced into pairs and remain independent singles)
-	* Pairs start only at columns 0 or 2 (never split across rows)
-	* Ordinary singles may be pulled forward to fix misalignment (backface placeholders act as hard barriers and are never moved)
-* Rich declarative input format (set sections + powerful collector number expressions)
-	* Simple numbers & numeric ranges
-	* Paired ranges (A-B&&C-D) producing composite display numbers like `296(361)` while still fetching canonical first number
-	* Interleaving of multiple sequences with `||`
-	* Generalized prefixes (attached or spaced) and suffixes (e.g. `J1-5`, `2024-07`, `2J-b`, `5J-b`, `ABC 01-03`)
-	* Star syntax (`★1-36` => `1★..36★`, or `★12` => `12★`)
-	* Variant / translation shortcut: `N+lang` (e.g. `804+ja`) expands to two slots: base `N` and language variant fetched via `N/lang` (API path extra segment). Variant slot shows display number `N (lang)`.
-	* Backface placeholders: `N;backface` injects N binder back slots using a local / fallback card back image
-	* Explicit custom entries using `Name;SET;Number` (bypasses API)
-	* Name overrides via `Number;Custom Name`
-* Local custom card back image support (drop `Magic_card_back.jpg` in collection folder / app folder / Pictures/Enfolderer / images subfolder)
-* Lazy metadata resolution:
-	* Initial minimal fetch (current + look‑ahead pages)
-	* Background resolution of remaining specs
-	* Progress status updates (e.g. 12/120 resolved)
-* Scryfall integration (names, layout classification, images) with improved multi‑face heuristics & optional env override `ENFOLDERER_FORCE_TWO_SIDED_ALL_FACES=1`
-* Multi‑layer caching & reuse
-	* In‑memory + on‑disk image cache
-	* Per‑card JSON cache (layout & image URLs)
-	* File‑hash (SHA‑256) metadata cache with completion sentinel
-* Robust zero‑padding preservation for ranges (e.g. `001-010` renders `001..010`)
-* Single-file self‑contained publish option (Win x64)
-* MIT licensed
-* Scryfall Set Import into local mainDb (with Shift key force reimport)
-* Custom card rows (id >= 1,000,000 with NULL MtgsId) + direct quantity field
-* Consolidated HTTP logging to a single rolling file `http-log.txt`
+The project targets .NET 8/WPF:
 
-## Inventory & Quantities
-Two sources of truth are merged on display:
-1. mtgstudio.collection (CollectionCards table) for rows having a MtgsId value.
-2. mainDb.Cards.Qty for custom / imported rows whose MtgsId IS NULL.
-
-Click a card face to cycle quantities:
-* Standard cards: 0 → 1 → 2 → 0 (fronts of multi-face pairs update as expected)
-* Placeholder backs: disabled (no quantity overlay; opacity full; not clickable)
-* Custom cards (no MtgsId): stored in `Cards.Qty`.
-
-Refreshing quantities ("Refresh Quantities" button) reloads both sources and rebinds counts.
-
-## Custom Cards
-When importing or manually inserting new cards that do not correspond to mtgstudio.collection entries, they are assigned monotonically increasing IDs >= 1,000,000 and `MtgsId` remains NULL.
-
-Rules:
-* Qty changes persist to `Cards.Qty`.
-* Import never overwrites existing custom quantities.
-* You can still later reconcile by populating MtgsId if a mapping becomes known.
-
-## Scryfall Set Import (mainDb)
-Menu: File → "Import Scryfall Set Into mainDb".
-
-Workflow:
-1. Enter a set code (case-insensitive).
-2. App validates `https://api.scryfall.com/sets/{code}`.
-3. Follows the set's `search_uri` (or fallback query) paging through all cards (`has_more` + `next_page`).
-4. Each page is parsed; rows are inserted if collector number + edition not already present.
-5. Sparse updates: Existing rows missing name, rarity, or gathererId are updated (other fields left untouched).
-
-Force Reimport:
-Hold Shift while clicking the menu item to delete existing rows for that set before import (status bar shows rows removed).
-
-Status Bar Summary Example:
-`Import neo: inserted 275, updated 5, skipped 10. Total fetched 290/290.`
-
-ID Assignment:
-New rows get sequential IDs starting at the first free >= 1,000,000 (ensures no collision with legacy IDs).
-
-Error Handling:
-* HTTP & parse errors surface to status bar and abort the current import gracefully.
-* Partial pages already processed remain inserted; rerun (Shift for clean slate if desired).
-
-## HTTP Logging
-All HTTP activity (metadata & image fetches, imports) is logged to `%LocalAppData%/Enfolderer/cache/http-log.txt`.
-
-Format:
-`[UTC_ISO] REQ URL`
-`[UTC_ISO] RESP <status> <elapsed>ms URL`
-
-The status bar also flashes the latest request (truncated) while in flight counts update internal metrics.
-
-Disable Logging:
-Currently always on; future directive (`** ... nohttplog`) may toggle via configuration. You can manually clear the file; it will be recreated.
-
-## Input File Format (Declarative)
-
-Names (and multi‑face classification) come from Scryfall unless you explicitly supply them. You define structure with set sections and collector number expressions.
-
-Core rules:
-1. Set section: `=SETCODE` (e.g. `=STA`). Applies down to the next `=` or EOF.
-2. Single number: `123`
-3. Numeric range: `10-25` (inclusive). Zero padding preserved when both ends share width (e.g. `001-010`).
-4. Interleaving: `1-5||30-34||100` -> `1,30,100,2,31,3,32,4,33,5,34`
-5. Paired range (composite display): `296-340&&361-405` -> slots show `296(361)`, `297(362)` ... fetch uses first number only.
-6. Star syntax: Leading star moves to trailing: `★1-3` => `1★,2★,3★`; `★12` => `12★`.
-7. Prefix forms:
-	* Spaced: `RA 1-8` -> `RA1..RA8`
-	* Attached: `J1-5` -> `J1..J5`
-	* Complex / mixed alphanumerics with hyphen: `2024-0 7-8` -> `2024-07,2024-08`; attached variant `2024-07` (single)
-8. Suffix forms:
-	* Single: `2J-b`
-	* Range with suffix: `2-5J-b` -> `2J-b,3J-b,4J-b,5J-b`
-9. Explicit placeholder (bypasses API): `Some Token;TOKEN;1`
-10. Name override (still fetch metadata): `123;Custom Name`
-11. Backface placeholders: `N;backface` (e.g. `5;backface`) creates N card-back slots, never reordered.
-12. Comments: lines starting with `#`
-13. Blank lines: ignored
-14. (Optional) First non‑comment line starting with `**` is a binder directive: comma separated tokens specifying:
-15. Variant / translation shortcut: `N+lang` (letters 1‑8). Produces two entries: canonical `N` and variant `N/lang`. The variant's display number is `N (lang)` while API metadata is fetched from `https://api.scryfall.com/cards/SET/N/lang`.
-		* Layout token: `4x3`, `3x3`, or `2x2`
-		* Pages per binder: `pages=40` (any positive integer)
-		* HTTP debug logging flag: `httplog` (or `debughttp`) to emit a rolling `http.log` in cache root with each request/response (+ duration & status). (Environment override also: set `ENFOLDERER_HTTP_DEBUG=1`).
-		* Color names or hex codes (WPF `ColorConverter` names or 6‑digit hex without `#`) used sequentially for binder covers. Example:
-			`** 4x3, pages=50, httplog, Crimson, 0044AA, DarkGoldenrod`
-		Remaining binders beyond the explicit list get randomly generated colors.
-
-Order is preserved except normal singles may be internally shifted forward to satisfy pair alignment; backface placeholders and their relative positions act as ordering barriers.
-
-Example:
-```
-# Binder directive: 3x3 layout, 36 pages per binder, enable HTTP logging, two fixed colors then random
-** 3x3,pages=36,httplog,Firebrick,2E8B57
-
-# Strixhaven Mystical Archive (STA) + Tokens
-=STA
-1-10
-11-20||50-55   # interleaves two ranges
-100;Special Showcase Placeholder
-
-# Explicit token / custom placeholder (no API call)
-Dragon Token;TOKEN;1
-
-=BOT
-1-15
-
- =REX
- 1-5||30-32
-
-# Paired range with composite display numbers
-296-298&&361-363
-
-# Star syntax: displays 1★..5★
-★1-5
-
-# Backface placeholders (5 empty back slots using custom / fallback back image)
-5;backface
-
-# Complex prefix / suffix forms
-J1-3
-2024-07
-2-4J-b
-```
-
-Legacy CSV style (Name;Number;Set) is still parsed by the older loader, but the declarative format is now preferred.
-
-### Adjacency & Layout Rules
-* Physical two‑sided (transform / modal_dfc / battle / etc.) fronts + synthetic backs form a locked pair.
-* Exactly two consecutive identical names form a pair. Sequences of 3 or more identical names are left as separate singles (no enforced pairing) to preserve natural run ordering.
-* Pair start columns: 0 or 2 only (ensures each pair lives fully inside a row).
-* Singles may be advanced to repair alignment (never leap over placeholder backfaces).
-* Backface placeholders (`N;backface`) are immovable barriers.
-
-### Lazy Loading Flow
-1. Parse specs into an ordered list of unresolved entries.
-2. Perform an initial small batch resolution (enough for first two pages worth of faces including MFC backs).
-3. Build ordering (placeholders have provisional names) and render.
-4. As you navigate, background resolution fills in missing specs for the active/next pages; views redraw incrementally.
-5. After all specs resolve, metadata + image URLs are persisted and a `.done` sentinel written.
-
-### Caching Details
-Cache Root: `%LocalAppData%/Enfolderer/cache`
-* `meta/<hash>.json`  — serialized faces (fronts + backs) including image URLs
-* `meta/<hash>.done`  — presence means cache complete (safe to reuse)
-* `<hash-of-url>.img` — raw image bytes (one per face variant)
-* In‑memory dictionaries layer on top for fast session reuse
-
-On load:
-* Compute SHA‑256 of the exact file contents (normalized with `\n`).
-* If `meta/<hash>.done` exists and JSON loads => skip all metadata HTTP.
-* Otherwise perform lazy resolution; when complete write JSON + `.done`.
-
-## Navigation
-Toolbar / UI offers:
-* First / Prev / Next / Last
-* Prev Binder / Next Binder
-* Jump to Binder + Page (1‑based)
-* Layout selector + live pages/binder field (updates pagination immediately)
-Page label displays binder number and local page numbers (covers annotated).
-
-## Image Fetching & Card Back Placeholders
-`https://api.scryfall.com/cards/{set}/{collector_number}`
-* Metadata calls rate‑limited (<10/sec)
-* Image URLs stored; subsequent face loads skip metadata request
-* Disk + memory cache for image bytes
-* Tokens (set `TOKEN`) are skipped (placeholder only)
-* Backface placeholder image resolution order (first match wins):
-	1. Collection file directory (`Magic_card_back.jpg` or variants: case / .png / .jpeg / `card_back.jpg`, `back.jpg`)
-	2. Application base directory
-	3. `%USERPROFILE%/Pictures/Enfolderer`
-	4. `images` subfolder under application base
-	If none found, falls back to the embedded `Magic_card_back.jpg` resource shipped inside the executable (no network call required).
-
-Environment override for debugging two‑sided classification: set `ENFOLDERER_FORCE_TWO_SIDED_ALL_FACES=1` to treat every multi‑face card as physically two‑sided.
-
-## Build & Run
-Requires .NET 8 SDK.
-```
+```powershell
 dotnet run --project Enfolderer.App
 ```
-Open a declarative collection file (`File > Open`).
 
-### Release (Single EXE)
-Self‑contained, single file (win-x64):
-```
+To publish a self-contained Windows executable:
+
+```powershell
 dotnet publish Enfolderer.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
-Framework‑dependent (smaller, requires user‑installed runtime):
-```
-dotnet publish Enfolderer.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false
-```
 
-## Roadmap Ideas
-* Quantity / inventory tracking
-* Search & filters
-* Export spreads / PDF
-* Advanced trimming (size reduction) with descriptor
-* UI theming (dark / high contrast) & token styling
-* Optional offline mode using full cache only
+## Attribution and license
 
-## Attribution
-Card data & images © Wizards of the Coast (https://magic.wizards.com). Unofficial; not endorsed by Wizards of the Coast.
+Card data and images are provided by [Scryfall](https://scryfall.com) and are © Wizards of the Coast. Enfolderer is unofficial and is not endorsed by Wizards of the Coast.
 
-## License
-MIT
+Licensed under the [MIT License](LICENSE).
