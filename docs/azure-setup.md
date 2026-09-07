@@ -90,16 +90,30 @@ line: a trailing space after it is a syntax error, and an easy one to introduce 
 ## 2. Register the API and the desktop client
 
 Two registrations: the API exposes a scope, and the desktop app is a **public client** with no
-secret.
+secret. There are three sub-steps, and **2b can be done in the portal or from PowerShell** — pick
+one, not both. Whichever you pick, carry on at **2c**, which sets the two variables the rest of the
+guide needs.
+
+### 2a. Create the API registration
 
 ```powershell
 $apiAppId = az ad app create --display-name "Enfolderer Scan API" --query appId -o tsv
 az ad app update --id $apiAppId --identifier-uris "api://$apiAppId"
 ```
 
-Add the scope. In the portal: **App registrations → Enfolderer Scan API → Expose an API → Add a
-scope**, named `Scan.Submit`, admin *and* user consentable. Or from PowerShell — writing the JSON
-to a file rather than passing it inline, so no quoting survives the trip through `az`:
+Skip this if you already created the app in the portal.
+
+### 2b. Add the `Scan.Submit` scope — *portal or PowerShell, not both*
+
+**In the portal:** **App registrations → Enfolderer Scan API → Expose an API → Add a scope**. If
+prompted for an Application ID URI accept the default `api://<appId>`. Name the scope
+`Scan.Submit`, set **Who can consent** to *Admins and users*, fill in the four display/description
+boxes with anything sensible, and click **Add scope**. That is the whole of 2b — **skip the
+PowerShell block below and go to 2c.**
+
+**Or from PowerShell** — this does exactly the same thing as the portal steps above, so only run it
+if you did *not* use the portal. It writes the JSON to a file rather than passing it inline, so no
+quoting has to survive the trip through `az`:
 
 ```powershell
 $scopeId     = [guid]::NewGuid().Guid
@@ -136,7 +150,31 @@ one `key=value` token and the JSON inside it has to survive both PowerShell and 
 Graph wants the application's `id`, not its `appId`, and passing the wrong one gives a confusing
 404.
 
-Then the desktop client:
+### 2c. Collect the API app id and scope id
+
+**Everyone does this**, whichever route you took through 2b. If you used the portal, or you have
+opened a new shell since 2a, `$apiAppId` and `$scopeId` are not set — read them back from the
+registration:
+
+```powershell
+$apiAppId = az ad app list --display-name "Enfolderer Scan API" --query "[0].appId" -o tsv
+$scopeId  = az ad app show --id $apiAppId `
+  --query "api.oauth2PermissionScopes[?value=='Scan.Submit'].id" -o tsv
+
+"API app id: $apiAppId"
+"Scope id:   $scopeId"
+```
+
+Both must be non-empty GUIDs before you continue. An empty `$scopeId` means the scope was not saved
+under the name `Scan.Submit` — check the spelling and capitalisation in the portal, since the
+filter is case-sensitive.
+
+If you ran the PowerShell version of 2b in this same shell, both variables are already set and this
+block simply confirms them.
+
+### 2d. Create the desktop client registration
+
+This part has no portal instructions above it; run it regardless of how you did 2b.
 
 ```powershell
 $access = @(
