@@ -27,6 +27,21 @@ You should then see `mtgstudio.collection` listed; the application will read it 
 ### Verifying Files
 On startup you should NOT see build errors about missing databases. If the app cannot find `mainDb.db` or `mtgstudio.collection`, place (or link) them next to the executable and restart.
 
+## Scanning cards with the Azure AI pipeline
+
+`Tools > Scan Card Image...` photographs-to-CSV: the app uploads a single image to Azure Blob
+Storage and polls a job API while a multi-agent Azure AI Foundry pipeline finds each card's
+outline and identifies it. `Scan Binder Images...` runs the same job API once per image in a
+folder. Both write the existing `SET;NUMBER;;en;NAME` CSV, so the import flow is unchanged.
+
+Configuration lives in `aiconfig.txt` beside the executable and contains **no secrets** — only the
+API URL, tenant id, public client id and scope; you sign in interactively. A template is written
+for you the first time you run a scan.
+
+The services, agent definitions and infrastructure are in `src/Enfolderer.Ai.*`, `agents/` and
+`infra/`. See [docs/foundry-demo.md](docs/foundry-demo.md) for the architecture and the security
+boundary walkthrough.
+
 ---
 
 ## Key Features (Current)
