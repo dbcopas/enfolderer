@@ -25,6 +25,13 @@ public sealed class ScanPlatformOptions
 
     public string CosmosContainer { get; set; } = "jobs";
 
+    /// <summary>
+    /// Client id of the user-assigned managed identity this service should present. Required when
+    /// the host has more than one identity assigned; leave empty to use a system-assigned identity
+    /// or the developer's local login.
+    /// </summary>
+    public string? ManagedIdentityClientId { get; set; }
+
     /// <summary>Lifetime of the write-only upload SAS handed to the desktop client.</summary>
     public TimeSpan UploadUrlLifetime { get; set; } = TimeSpan.FromMinutes(15);
 

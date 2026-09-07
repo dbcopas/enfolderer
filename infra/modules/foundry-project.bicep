@@ -11,6 +11,9 @@ param projectName string
 @description('Entra group object id that owns this project. Only this group gets write access.')
 param ownerGroupObjectId string
 
+@description('Resource id of the team\'s user-assigned managed identity.')
+param teamIdentityId string
+
 param location string = resourceGroup().location
 
 @description('Model deployments to create in this project.')
@@ -28,7 +31,16 @@ resource account 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   location: location
   kind: 'AIServices'
   sku: { name: 'S0' }
-  identity: { type: 'SystemAssigned' }
+  // The team's own user-assigned identity is what the project's agents present when they reach
+  // outside the project, so the data-plane roles are granted to a principal that outlives this
+  // account. A system-assigned identity is kept alongside it for services that cannot yet be
+  // told which user-assigned identity to use.
+  identity: {
+    type: 'SystemAssigned, UserAssigned'
+    userAssignedIdentities: {
+      '${teamIdentityId}': {}
+    }
+  }
   properties: {
     customSubDomainName: accountName
     publicNetworkAccess: 'Enabled'
@@ -41,7 +53,12 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2024-10-01' = {
   parent: account
   name: projectName
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'SystemAssigned, UserAssigned'
+    userAssignedIdentities: {
+      '${teamIdentityId}': {}
+    }
+  }
   properties: {
     displayName: projectName
   }

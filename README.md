@@ -105,8 +105,9 @@ API URL, tenant id, public client id and scope; you sign in interactively. A tem
 for you the first time you run a scan.
 
 The services, agent definitions, and infrastructure are in `src/Enfolderer.Ai.*`, `agents/`, and
-`infra/`. See [docs/foundry-demo.md](docs/foundry-demo.md) for the architecture and the security
-boundary walkthrough.
+`infra/`. See [docs/azure-setup.md](docs/azure-setup.md) to deploy the Azure resources, and
+[docs/foundry-demo.md](docs/foundry-demo.md) for the architecture and the security boundary
+walkthrough.
 
 ## Build and run
 

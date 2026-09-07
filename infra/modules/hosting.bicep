@@ -26,6 +26,18 @@ param geometryProjectEndpoint string
 @description('Endpoint of Team B\'s identification project.')
 param identificationProjectEndpoint string
 
+@description('Resource id of the API\'s user-assigned managed identity.')
+param apiIdentityId string
+
+@description('Client id of the API\'s user-assigned managed identity.')
+param apiIdentityClientId string
+
+@description('Resource id of the worker\'s user-assigned managed identity.')
+param workerIdentityId string
+
+@description('Client id of the worker\'s user-assigned managed identity.')
+param workerIdentityClientId string
+
 var sharedSettings = [
   {
     name: 'ScanPlatform__StorageAccountUrl'
@@ -67,7 +79,12 @@ resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
 resource api 'Microsoft.Web/sites@2023-12-01' = {
   name: '${namePrefix}-api'
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${apiIdentityId}': {}
+    }
+  }
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
@@ -76,6 +93,12 @@ resource api 'Microsoft.Web/sites@2023-12-01' = {
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
       appSettings: concat(sharedSettings, [
+        // A site can hold several user-assigned identities, so the credential must be told which
+        // one to present. Without this, token acquisition is ambiguous and fails at runtime.
+        {
+          name: 'ScanPlatform__ManagedIdentityClientId'
+          value: apiIdentityClientId
+        }
         {
           name: 'AzureAd__TenantId'
           value: tenantId
@@ -92,7 +115,12 @@ resource api 'Microsoft.Web/sites@2023-12-01' = {
 resource worker 'Microsoft.Web/sites@2023-12-01' = {
   name: '${namePrefix}-worker'
   location: location
-  identity: { type: 'SystemAssigned' }
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${workerIdentityId}': {}
+    }
+  }
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
@@ -102,6 +130,10 @@ resource worker 'Microsoft.Web/sites@2023-12-01' = {
       minTlsVersion: '1.2'
       alwaysOn: true
       appSettings: concat(sharedSettings, [
+        {
+          name: 'ScanPlatform__ManagedIdentityClientId'
+          value: workerIdentityClientId
+        }
         {
           name: 'ScanPipeline__GeometryProjectEndpoint'
           value: geometryProjectEndpoint
@@ -127,6 +159,4 @@ resource worker 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
-output apiPrincipalId string = api.identity.principalId
-output workerPrincipalId string = worker.identity.principalId
 output apiUrl string = 'https://${api.properties.defaultHostName}'

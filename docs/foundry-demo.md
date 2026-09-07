@@ -65,6 +65,10 @@ reuse story does not require touching Team A at all.
 
 ## Deploying
 
+See **[azure-setup.md](azure-setup.md)** for the full walkthrough: owner groups, app
+registrations, the deployment itself, the agents, and the desktop client's config file. The short
+version, once `infra/main.parameters.json` is filled in:
+
 ```bash
 az deployment sub create \
   --location eastus2 \
@@ -72,10 +76,14 @@ az deployment sub create \
   --parameters infra/main.parameters.json
 ```
 
-Fill in `teamAGroupObjectId`, `teamBGroupObjectId` and `apiClientId` first. Then create the agents
-from the definitions in `agents/cardgeo/` and `agents/cardid/`, and put the resulting agent ids
-into the worker's `ScanPipeline:BoundaryAgentId` and `ScanPipeline:IdentificationAgentIds`
-settings (the defaults assume the agent *names* are usable as ids).
+Then create the agents from the definitions in `agents/cardgeo/` and `agents/cardid/`, and put the
+resulting agent ids into the worker's `ScanPipeline:BoundaryAgentId` and
+`ScanPipeline:IdentificationAgentIds` settings (the defaults assume the agent *names* are usable as
+ids).
+
+Every service authenticates with a **user-assigned managed identity** — one per role, created
+before the compute so the role assignments survive redeploys. Team A's identity lives in Team A's
+resource group, which is precisely why Team B cannot grant itself anything on it.
 
 ## "Break it" scenarios
 
