@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix": { "value": "enf-demo" },
+    "location": { "value": "eastus2" },
+    "teamAGroupObjectId": { "value": "00000000-0000-0000-0000-000000000000" },
+    "teamBGroupObjectId": { "value": "00000000-0000-0000-0000-000000000000" },
+    "apiClientId": { "value": "00000000-0000-0000-0000-000000000000" },
+    "grantIdentificationAccessToGeometry": { "value": true }
+  }
+}

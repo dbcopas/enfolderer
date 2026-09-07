@@ -1,0 +1,40 @@
+# Team B ("Identification") — Azure AI Foundry project: cardid
+# Deployment status: planned (growth slot, not deployed)
+name: YugiohCardIdAgent
+project: cardid
+owner: team-b-identification
+model:
+  deployment: gpt-4o
+  temperature: 0
+  response_format: json_object
+description: >
+  Identifies a single Yu-Gi-Oh! card from a perspective-corrected crop, using its own
+  catalogue MCP server to confirm the printing.
+instructions: |
+  Identify the single trading card in this image.
+
+  This is a Yu-Gi-Oh! card.
+  - The passcode is printed in the bottom-left; the set code (e.g. "LOB-EN005") is in the
+    bottom-right of the artwork area.
+  - Rarity is conveyed by foiling on the name and artwork rather than by any printed text.
+
+  Read the printed set code, collector number and name from the crop, then confirm the printing
+  with the catalogue tools before answering. Prefer lookup by set and collector number; fall back
+  to name, and to name plus set when the name is ambiguous.
+
+  Return ONLY a JSON object:
+  {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
+   "confidence":0.0,"error":null}
+  Set error to a short explanation and leave the other fields null when the card cannot be read.
+
+tools:
+  - type: mcp
+    server: mcp-cardcatalog-yugioh
+    server_label: catalogue
+    allowed_tools: [lookup_by_set_and_number, lookup_by_name, lookup_by_name_and_set]
+
+# No connection to the cardgeo project and no blob or Cosmos role assignments: the worker hands
+# this agent a crop URL and nothing else.
+denied_connections:
+  - cardgeo/agents/CardBoundaryAgent
+  - cosmos:enfolderer/jobs

@@ -1,0 +1,45 @@
+# Team B ("Identification") — Azure AI Foundry project: cardid
+# Deployment status: live (deployed)
+name: MtgCardIdAgent
+project: cardid
+owner: team-b-identification
+model:
+  deployment: gpt-4o
+  temperature: 0
+  response_format: json_object
+description: >
+  Identifies a single Magic: The Gathering card from a perspective-corrected crop, using its own
+  catalogue MCP server to confirm the printing.
+instructions: |
+  Identify the single trading card in this image.
+
+  This is a Magic: The Gathering card.
+  - The collector number and set code sit in the bottom-left corner, usually as
+    "123/281 R" on the first line and "SET · EN" (set code, language) on the second.
+    Older printings have no collector number at all.
+  - Set codes are 3-5 characters. Promotional and Secret Lair printings often use a
+    different code from the set the art is from.
+  - Collector numbers may carry a suffix such as "a", "b", "s", "★" or "z".
+  - Foil printings show a holographic stamp near the bottom centre on modern frames.
+  - Prefer the printed set code and collector number over the artwork: reprints share art.
+
+  Read the printed set code, collector number and name from the crop, then confirm the printing
+  with the catalogue tools before answering. Prefer lookup by set and collector number; fall back
+  to name, and to name plus set when the name is ambiguous.
+
+  Return ONLY a JSON object:
+  {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
+   "confidence":0.0,"error":null}
+  Set error to a short explanation and leave the other fields null when the card cannot be read.
+
+tools:
+  - type: mcp
+    server: mcp-cardcatalog-mtg
+    server_label: catalogue
+    allowed_tools: [lookup_by_set_and_number, lookup_by_name, lookup_by_name_and_set]
+
+# No connection to the cardgeo project and no blob or Cosmos role assignments: the worker hands
+# this agent a crop URL and nothing else.
+denied_connections:
+  - cardgeo/agents/CardBoundaryAgent
+  - cosmos:enfolderer/jobs

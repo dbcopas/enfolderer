@@ -1,0 +1,23 @@
+# Team B ("Identification") — MCP server definition.
+#
+# Reachable only from the cardid project. The cardgeo project has no connection to it; attempting
+# to add one is demo scenario 2 in docs/foundry-demo.md.
+name: mcp-cardcatalog-pokemon
+project: cardid
+owner: team-b-identification
+transport: stdio
+command: dotnet
+args: ["run", "--project", "src/Enfolderer.Ai.Mcp.CardCatalog.Pokemon"]
+upstream: pokemontcg.io
+tools:
+  - name: lookup_by_set_and_number
+    description: Exact printing lookup by set code and collector number.
+  - name: lookup_by_name
+    description: Fuzzy lookup by printed card name.
+  - name: lookup_by_name_and_set
+    description: Lookup by card name constrained to a set.
+identity:
+  # Outbound catalogue calls only: no storage, no Cosmos, no cross-project role assignments.
+  role_assignments: []
+allowed_callers:
+  - cardid/agents/PokemonCardIdAgent

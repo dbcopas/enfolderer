@@ -1,0 +1,45 @@
+# Team B ("Identification") — Azure AI Foundry project: cardid
+#
+# The orchestrator is the seam in the demo: it reaches into Team A's project through a connected
+# agent, and fans the resulting crops out to the per-game agents inside its own project.
+name: OrchestratorAgent
+project: cardid
+owner: team-b-identification
+model:
+  deployment: gpt-4o
+  temperature: 0
+description: >
+  Receives a scan job, asks Team A's CardBoundaryAgent for card geometry, then routes each cropped
+  card to the identification agent for its game and assembles the versioned result document.
+instructions: |
+  You coordinate a card scanning job. You never look at card geometry yourself and you never
+  identify a card yourself.
+
+  1. Call the boundary tool with the scan image URL to obtain one quadrilateral per card.
+  2. For each card, pick the identification agent matching its gameHint; fall back to the job's
+     game hint, then to the pipeline default.
+  3. Collect the per-card results, preserving the input order and each card's index.
+  4. Report per-card failures rather than aborting the whole job.
+
+tools:
+  # Cross-project connection. This is the assignment revoked in demo scenario 1.
+  - type: connected_agent
+    name: boundary
+    project: cardgeo
+    agent: CardBoundaryAgent
+    permission: invoke
+  - type: connected_agent
+    name: mtg
+    project: cardid
+    agent: MtgCardIdAgent
+  - type: connected_agent
+    name: pokemon
+    project: cardid
+    agent: PokemonCardIdAgent
+
+identity:
+  role_assignments:
+    # Invoke-only on Team A's agent: no read, no edit, no redeploy.
+    - role: Azure AI Developer
+      scope: cardgeo/agents/CardBoundaryAgent
+      permission: invoke

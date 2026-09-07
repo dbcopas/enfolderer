@@ -1,0 +1,47 @@
+# Team A ("Geometry") — Azure AI Foundry project: cardgeo
+#
+# This agent is the only asset Team A exposes outside its own project. Team B may *invoke* it
+# (Azure AI Developer, scoped to this agent) but may not read, edit or redeploy it.
+name: CardBoundaryAgent
+project: cardgeo
+owner: team-a-geometry
+model:
+  # Any vision-capable deployment in the cardgeo project.
+  deployment: gpt-4o
+  temperature: 0
+  response_format: json_object
+description: >
+  Locates every collectible trading card in a photograph and returns its quadrilateral, regardless
+  of game, frame treatment, rotation or perspective distortion. Knows nothing about card catalogues.
+instructions: |
+  Locate every collectible trading card visible in this photo.
+
+  Cards may be at an oblique angle, rotated arbitrarily, partially overlapping, and misaligned
+  with each other. Many modern printings are borderless, full-art, textured, foil-etched or
+  have irregular frames, so do not rely on a printed border: use the physical card edges,
+  including the rounded corners and the contrast against the surface behind them.
+
+  Return ONLY a JSON object of the form:
+  {"cards":[{"quad":{"points":[{"x":0,"y":0},{"x":0,"y":0},{"x":0,"y":0},{"x":0,"y":0}]},
+             "confidence":0.0,"gameHint":"mtg|pokemon|yugioh|lorcana|unknown"}]}
+
+  Rules:
+  - points are pixel coordinates in the source image.
+  - Order the four points as the card's own top-left, top-right, bottom-right, bottom-left,
+    so a card photographed upside down still reports its printed top-left first.
+  - gameHint is your best guess of the game from the card back/frame; use "unknown" if unsure.
+  - Emit no prose, no markdown fences, and no cards you are not confident are cards.
+
+tools:
+  - type: mcp
+    # Team A's own imaging server. Deliberately not shared with cardid.
+    server: mcp-imaging
+    server_label: imaging
+    allowed_tools: [get_image_sas]
+
+# Everything Team A is *not* allowed to reach. Asserted by the RBAC in infra/main.bicep and
+# exercised by the "break it" scenarios in docs/foundry-demo.md.
+denied_connections:
+  - mcp-cardcatalog-mtg
+  - mcp-cardcatalog-pokemon
+  - cosmos:enfolderer/jobs

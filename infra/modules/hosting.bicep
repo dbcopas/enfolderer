@@ -1,0 +1,132 @@
+// Hosting for the job API and the pipeline worker. Both run with system-assigned identities so
+// that no connection string or storage key ever exists in configuration.
+targetScope = 'resourceGroup'
+
+param namePrefix string
+param location string = resourceGroup().location
+
+@description('Blob service endpoint of the shared storage account.')
+param storageAccountUrl string
+
+@description('Queue service endpoint of the shared storage account.')
+param queueAccountUrl string
+
+@description('Cosmos DB document endpoint.')
+param cosmosEndpoint string
+
+@description('Tenant id used to validate desktop-app tokens.')
+param tenantId string
+
+@description('Application (client) id of the API app registration.')
+param apiClientId string
+
+@description('Endpoint of Team A\'s geometry project.')
+param geometryProjectEndpoint string
+
+@description('Endpoint of Team B\'s identification project.')
+param identificationProjectEndpoint string
+
+var sharedSettings = [
+  {
+    name: 'ScanPlatform__StorageAccountUrl'
+    value: storageAccountUrl
+  }
+  {
+    name: 'ScanPlatform__QueueAccountUrl'
+    value: queueAccountUrl
+  }
+  {
+    name: 'ScanPlatform__QueueName'
+    value: 'scan-jobs'
+  }
+  {
+    name: 'ScanPlatform__CosmosEndpoint'
+    value: cosmosEndpoint
+  }
+  {
+    name: 'ScanPlatform__CosmosDatabase'
+    value: 'enfolderer'
+  }
+  {
+    name: 'ScanPlatform__CosmosContainer'
+    value: 'jobs'
+  }
+]
+
+resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
+  name: '${namePrefix}-plan'
+  location: location
+  sku: {
+    name: 'B1'
+    tier: 'Basic'
+  }
+  kind: 'linux'
+  properties: { reserved: true }
+}
+
+resource api 'Microsoft.Web/sites@2023-12-01' = {
+  name: '${namePrefix}-api'
+  location: location
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    serverFarmId: plan.id
+    httpsOnly: true
+    siteConfig: {
+      linuxFxVersion: 'DOTNETCORE|8.0'
+      ftpsState: 'Disabled'
+      minTlsVersion: '1.2'
+      appSettings: concat(sharedSettings, [
+        {
+          name: 'AzureAd__TenantId'
+          value: tenantId
+        }
+        {
+          name: 'AzureAd__ClientId'
+          value: apiClientId
+        }
+      ])
+    }
+  }
+}
+
+resource worker 'Microsoft.Web/sites@2023-12-01' = {
+  name: '${namePrefix}-worker'
+  location: location
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    serverFarmId: plan.id
+    httpsOnly: true
+    siteConfig: {
+      linuxFxVersion: 'DOTNETCORE|8.0'
+      ftpsState: 'Disabled'
+      minTlsVersion: '1.2'
+      alwaysOn: true
+      appSettings: concat(sharedSettings, [
+        {
+          name: 'ScanPipeline__GeometryProjectEndpoint'
+          value: geometryProjectEndpoint
+        }
+        {
+          name: 'ScanPipeline__IdentificationProjectEndpoint'
+          value: identificationProjectEndpoint
+        }
+        {
+          name: 'ScanPipeline__BoundaryAgentId'
+          value: 'CardBoundaryAgent'
+        }
+        {
+          name: 'ScanPipeline__IdentificationAgentIds__mtg'
+          value: 'MtgCardIdAgent'
+        }
+        {
+          name: 'ScanPipeline__IdentificationAgentIds__pokemon'
+          value: 'PokemonCardIdAgent'
+        }
+      ])
+    }
+  }
+}
+
+output apiPrincipalId string = api.identity.principalId
+output workerPrincipalId string = worker.identity.principalId
+output apiUrl string = 'https://${api.properties.defaultHostName}'

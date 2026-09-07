@@ -1,0 +1,23 @@
+# Team A ("Geometry") — MCP server definition.
+#
+# Paired with the boundary agent because it is geometry work: it can read the uploaded scan and
+# produce a perspective-corrected crop. It has no catalogue and no job-state access.
+name: mcp-imaging
+project: cardgeo
+owner: team-a-geometry
+transport: stdio
+command: dotnet
+args: ["run", "--project", "src/Enfolderer.Ai.Mcp.Imaging"]
+tools:
+  - name: crop_quad
+    description: Perspective-correct crop of a card from a four-point quad in the source image.
+  - name: get_image_sas
+    description: Issues a short-lived read-only SAS URL for a blob in the scans container.
+identity:
+  # Read on scans, write on crops, and nothing else. No Cosmos role assignment exists for this
+  # identity, so any attempt to read job state fails with 403.
+  role_assignments:
+    - role: Storage Blob Data Reader
+      scope: storage/containers/scans
+    - role: Storage Blob Data Contributor
+      scope: storage/containers/crops

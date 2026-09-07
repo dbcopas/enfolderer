@@ -1,0 +1,39 @@
+# Team B ("Identification") — Azure AI Foundry project: cardid
+# Deployment status: planned (growth slot, not deployed)
+name: LorcanaCardIdAgent
+project: cardid
+owner: team-b-identification
+model:
+  deployment: gpt-4o
+  temperature: 0
+  response_format: json_object
+description: >
+  Identifies a single Disney Lorcana card from a perspective-corrected crop, using its own
+  catalogue MCP server to confirm the printing.
+instructions: |
+  Identify the single trading card in this image.
+
+  This is a Disney Lorcana card.
+  - The collector number appears bottom-left as "123/204" with the set number beside it.
+  - Enchanted cards are full-art with an alternate frame and a number above the set total.
+
+  Read the printed set code, collector number and name from the crop, then confirm the printing
+  with the catalogue tools before answering. Prefer lookup by set and collector number; fall back
+  to name, and to name plus set when the name is ambiguous.
+
+  Return ONLY a JSON object:
+  {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
+   "confidence":0.0,"error":null}
+  Set error to a short explanation and leave the other fields null when the card cannot be read.
+
+tools:
+  - type: mcp
+    server: mcp-cardcatalog-lorcana
+    server_label: catalogue
+    allowed_tools: [lookup_by_set_and_number, lookup_by_name, lookup_by_name_and_set]
+
+# No connection to the cardgeo project and no blob or Cosmos role assignments: the worker hands
+# this agent a crop URL and nothing else.
+denied_connections:
+  - cardgeo/agents/CardBoundaryAgent
+  - cosmos:enfolderer/jobs
