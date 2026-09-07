@@ -29,7 +29,18 @@ public static class ScanPlatformServiceCollectionExtensions
 
         // DefaultAzureCredential picks up the managed identity in Azure and the developer's
         // az/VS login locally. No secrets are ever read from configuration.
-        services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
+        //
+        // A host can carry several user-assigned identities, in which case the credential must be
+        // told which one to present or token acquisition is ambiguous. ManagedIdentityClientId is
+        // the client id of this service's own identity; leaving it unset falls back to a
+        // system-assigned identity or the developer's login.
+        services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential(
+            new DefaultAzureCredentialOptions
+            {
+                ManagedIdentityClientId = string.IsNullOrWhiteSpace(options.ManagedIdentityClientId)
+                    ? null
+                    : options.ManagedIdentityClientId
+            }));
 
         services.AddSingleton<IScanImageStore>(sp =>
         {

@@ -8,16 +8,16 @@ param storageAccountName string
 @description('Cosmos DB account name holding the jobs container.')
 param cosmosAccountName string
 
-@description('Principal id of the API (issues upload SAS, reads/writes job state).')
+@description('Principal id of the API\'s user-assigned identity (issues upload SAS, reads/writes job state).')
 param apiPrincipalId string
 
-@description('Principal id of the worker (orchestrates the pipeline).')
+@description('Principal id of the worker\'s user-assigned identity (orchestrates the pipeline).')
 param workerPrincipalId string
 
-@description('Principal id of Team A\'s geometry project.')
+@description('Principal id of Team A\'s user-assigned identity.')
 param geometryPrincipalId string
 
-@description('Principal id of Team B\'s identification project.')
+@description('Principal id of Team B\'s user-assigned identity.')
 param identificationPrincipalId string
 
 var storageBlobDataReader = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'

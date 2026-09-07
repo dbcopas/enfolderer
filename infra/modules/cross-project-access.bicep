@@ -7,7 +7,7 @@ targetScope = 'resourceGroup'
 @description('Name of Team A\'s Foundry account.')
 param geometryAccountName string
 
-@description('Principal id of Team B\'s identification project managed identity.')
+@description('Principal id of Team B\'s user-assigned managed identity.')
 param identificationPrincipalId string
 
 // Azure AI User: run threads and invoke agents. It carries no authoring permission, so Team B

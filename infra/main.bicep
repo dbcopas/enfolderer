@@ -47,6 +47,45 @@ resource identificationRg 'Microsoft.Resources/resourceGroups@2023-07-01' = {
   location: location
 }
 
+// One user-assigned managed identity per role, each created in the resource group of the team that
+// owns it. Creating them before everything else means the RBAC below is granted to principals that
+// survive redeploys, and Team A's identity is a resource Team B cannot touch.
+module apiIdentity 'modules/identity.bicep' = {
+  name: 'api-identity'
+  scope: platformRg
+  params: {
+    name: '${namePrefix}-api-id'
+    location: location
+  }
+}
+
+module workerIdentity 'modules/identity.bicep' = {
+  name: 'worker-identity'
+  scope: platformRg
+  params: {
+    name: '${namePrefix}-worker-id'
+    location: location
+  }
+}
+
+module geometryIdentity 'modules/identity.bicep' = {
+  name: 'cardgeo-identity'
+  scope: geometryRg
+  params: {
+    name: '${namePrefix}-cardgeo-id'
+    location: location
+  }
+}
+
+module identificationIdentity 'modules/identity.bicep' = {
+  name: 'cardid-identity'
+  scope: identificationRg
+  params: {
+    name: '${namePrefix}-cardid-id'
+    location: location
+  }
+}
+
 module data 'modules/data.bicep' = {
   name: 'data'
   scope: platformRg
@@ -63,6 +102,7 @@ module geometryProject 'modules/foundry-project.bicep' = {
     accountName: '${namePrefix}-cardgeo-ai'
     projectName: 'cardgeo'
     ownerGroupObjectId: teamAGroupObjectId
+    teamIdentityId: geometryIdentity.outputs.id
     location: location
   }
 }
@@ -74,6 +114,7 @@ module identificationProject 'modules/foundry-project.bicep' = {
     accountName: '${namePrefix}-cardid-ai'
     projectName: 'cardid'
     ownerGroupObjectId: teamBGroupObjectId
+    teamIdentityId: identificationIdentity.outputs.id
     location: location
   }
 }
@@ -89,6 +130,10 @@ module hosting 'modules/hosting.bicep' = {
     cosmosEndpoint: data.outputs.cosmosEndpoint
     tenantId: tenantId
     apiClientId: apiClientId
+    apiIdentityId: apiIdentity.outputs.id
+    apiIdentityClientId: apiIdentity.outputs.clientId
+    workerIdentityId: workerIdentity.outputs.id
+    workerIdentityClientId: workerIdentity.outputs.clientId
     geometryProjectEndpoint: geometryProject.outputs.projectEndpoint
     identificationProjectEndpoint: identificationProject.outputs.projectEndpoint
   }
@@ -100,10 +145,10 @@ module dataRbac 'modules/data-rbac.bicep' = {
   params: {
     storageAccountName: data.outputs.storageAccountName
     cosmosAccountName: data.outputs.cosmosAccountName
-    apiPrincipalId: hosting.outputs.apiPrincipalId
-    workerPrincipalId: hosting.outputs.workerPrincipalId
-    geometryPrincipalId: geometryProject.outputs.projectPrincipalId
-    identificationPrincipalId: identificationProject.outputs.projectPrincipalId
+    apiPrincipalId: apiIdentity.outputs.principalId
+    workerPrincipalId: workerIdentity.outputs.principalId
+    geometryPrincipalId: geometryIdentity.outputs.principalId
+    identificationPrincipalId: identificationIdentity.outputs.principalId
   }
 }
 
@@ -114,7 +159,7 @@ module crossProjectAccess 'modules/cross-project-access.bicep' = if (grantIdenti
   scope: geometryRg
   params: {
     geometryAccountName: geometryProject.outputs.accountName
-    identificationPrincipalId: identificationProject.outputs.projectPrincipalId
+    identificationPrincipalId: identificationIdentity.outputs.principalId
   }
 }
 
@@ -123,3 +168,7 @@ output geometryProjectEndpoint string = geometryProject.outputs.projectEndpoint
 output identificationProjectEndpoint string = identificationProject.outputs.projectEndpoint
 output cosmosEndpoint string = data.outputs.cosmosEndpoint
 output blobEndpoint string = data.outputs.blobEndpoint
+output apiIdentityClientId string = apiIdentity.outputs.clientId
+output workerIdentityClientId string = workerIdentity.outputs.clientId
+output geometryIdentityClientId string = geometryIdentity.outputs.clientId
+output identificationIdentityClientId string = identificationIdentity.outputs.clientId
