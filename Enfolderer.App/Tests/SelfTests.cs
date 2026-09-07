@@ -33,6 +33,7 @@ public static class SelfTests
     try { suiteFails = CompositionRootTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After CompositionRootTests fails={suiteFails}\n"); } catch (System.Exception) { throw; }
     // Metadata provider cache load characterization
     try { suiteFails = MetadataProviderCacheTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After MetadataProviderCacheTests fails={suiteFails}\n"); } catch (System.Exception) { throw; }
+    try { suiteFails = AiScanClientTests.RunAll(); failures += suiteFails; File.AppendAllText(progressLog, $"After AiScanClientTests fails={suiteFails}\n"); } catch (System.Exception) { throw; }
     // Binder parsing characterization (now using Task.Run inside test to avoid dispatcher deadlock).
     int binderFails = 0;
     try { binderFails = BinderParsingCharTests.RunAll(); } catch(Exception ex) { binderFails = 1; try { File.AppendAllText(progressLog, "BinderParsing EX: "+ex.GetType().Name+" "+ex.Message+"\n"); } catch {} }
