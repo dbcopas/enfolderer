@@ -15,11 +15,12 @@ public sealed class SystemTextJsonCosmosSerializer : CosmosSerializer
 
     public override T FromStream<T>(Stream stream)
     {
+        // Cosmos asks for the raw stream back when the caller wants it verbatim; handing back a
+        // disposed stream would break those callers.
+        if (typeof(Stream).IsAssignableFrom(typeof(T))) return (T)(object)stream;
+
         using (stream)
         {
-            // Cosmos asks for the raw stream back when the caller wants it verbatim.
-            if (typeof(Stream).IsAssignableFrom(typeof(T))) return (T)(object)stream;
-
             return JsonSerializer.Deserialize<T>(stream, Options)!;
         }
     }

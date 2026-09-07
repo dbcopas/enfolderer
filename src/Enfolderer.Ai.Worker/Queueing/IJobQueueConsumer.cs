@@ -72,7 +72,14 @@ public sealed class StorageQueueConsumer : IJobQueueConsumer
     /// <summary>Latest pop receipt for an in-flight message; each dequeue gets its own.</summary>
     private sealed class MessageLease(string popReceipt)
     {
-        public string PopReceipt { get; set; } = popReceipt;
+        private volatile string _popReceipt = popReceipt;
+
+        /// <summary>Written by the renewal task and read by the delete path.</summary>
+        public string PopReceipt
+        {
+            get => _popReceipt;
+            set => _popReceipt = value;
+        }
     }
 
     /// <summary>Extends the message lease until the handler finishes.</summary>

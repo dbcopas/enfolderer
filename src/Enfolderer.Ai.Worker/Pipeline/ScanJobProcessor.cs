@@ -55,7 +55,10 @@ public sealed class ScanJobProcessor
         {
             job = await _jobs.UpsertAsync(job with { Status = ScanJobStatus.DetectingBoundaries }, ct);
 
-            var dimensions = await ReadDimensionsAsync(job.BlobPath, ct);
+            // Downloaded once and reused for the dimensions and every crop: a binder page can hold
+            // eighteen cards, and re-fetching the photo per card multiplies blob egress.
+            using var source = await BufferAsync(job.BlobPath, ct);
+            var dimensions = PerspectiveCropper.ReadDimensions(source);
             var imageUrl = await _readUrls.GetReadUrlAsync(job.BlobPath, _options.ReadUrlLifetime, ct);
 
             var boundaries = await _boundaryAgent.DetectAsync(imageUrl, ct);
@@ -63,7 +66,7 @@ public sealed class ScanJobProcessor
                 job with { Status = ScanJobStatus.Identifying, CardsDetected = boundaries.Count },
                 ct);
 
-            var cards = await IdentifyAllAsync(job, boundaries, ct);
+            var cards = await IdentifyAllAsync(job, boundaries, source, ct);
             var identified = cards.Count(c => c.IsIdentified);
 
             var result = new ScanResultDocument
@@ -108,6 +111,7 @@ public sealed class ScanJobProcessor
     private async Task<List<IdentifiedCard>> IdentifyAllAsync(
         ScanJobDocument job,
         IReadOnlyList<DetectedBoundary> boundaries,
+        MemoryStream source,
         CancellationToken ct)
     {
         var cards = new List<IdentifiedCard>(boundaries.Count);
@@ -138,7 +142,7 @@ public sealed class ScanJobProcessor
             try
             {
                 var cropPath = $"{ScanBlobPaths.CropsContainer}/{ScanBlobPaths.BuildCropBlobName(job.JobId, index)}";
-                await WriteCropAsync(job.BlobPath, boundary.Quad, cropPath, ct);
+                await WriteCropAsync(source, boundary.Quad, cropPath, ct);
                 var cropUrl = await _readUrls.GetReadUrlAsync(cropPath, _options.ReadUrlLifetime, ct);
 
                 var crop = new CardCrop(index, cropUrl, boundary.Quad, boundary.GameHint);
@@ -177,24 +181,22 @@ public sealed class ScanJobProcessor
         return CardGames.Normalize(defaultGame);
     }
 
-    private async Task<ImageDimensions> ReadDimensionsAsync(string blobPath, CancellationToken ct)
+    /// <summary>Reads the source image into memory so it can be decoded repeatedly.</summary>
+    private async Task<MemoryStream> BufferAsync(string blobPath, CancellationToken ct)
     {
         await using var stream = await _images.OpenReadAsync(blobPath, ct);
-        using var buffer = new MemoryStream();
+        var buffer = new MemoryStream();
         await stream.CopyToAsync(buffer, ct);
         buffer.Position = 0;
-        return PerspectiveCropper.ReadDimensions(buffer);
+        return buffer;
     }
 
-    private async Task WriteCropAsync(string sourceBlobPath, CardQuad quad, string cropBlobPath, CancellationToken ct)
+    private async Task WriteCropAsync(MemoryStream source, CardQuad quad, string cropBlobPath, CancellationToken ct)
     {
-        await using var source = await _images.OpenReadAsync(sourceBlobPath, ct);
-        using var buffered = new MemoryStream();
-        await source.CopyToAsync(buffered, ct);
-        buffered.Position = 0;
+        source.Position = 0;
 
         using var crop = new MemoryStream();
-        PerspectiveCropper.CropToPng(buffered, quad, crop, _options.CropHeight);
+        PerspectiveCropper.CropToPng(source, quad, crop, _options.CropHeight);
         crop.Position = 0;
 
         await _images.WriteAsync(cropBlobPath, crop, "image/png", ct);
