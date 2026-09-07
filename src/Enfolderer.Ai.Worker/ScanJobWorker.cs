@@ -32,9 +32,13 @@ public sealed class ScanJobWorker : BackgroundService
             _options.GeometryProjectEndpoint ?? "(stub)",
             _options.IdentificationProjectEndpoint ?? "(stub)");
 
+        var failureDelay = _options.QueuePollInterval;
+        var maxFailureDelay = TimeSpan.FromMinutes(1);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             bool handled;
+            var failed = false;
             try
             {
                 handled = await _consumer.TryDequeueAsync(_processor.ProcessAsync, stoppingToken);
@@ -45,9 +49,24 @@ public sealed class ScanJobWorker : BackgroundService
             }
             catch (Exception ex)
             {
-                _log.LogError(ex, "Queue polling failed; backing off.");
+                _log.LogError(ex, "Queue polling failed; backing off for {Delay}.", failureDelay);
                 handled = false;
+                failed = true;
             }
+
+            if (failed)
+            {
+                try { await Task.Delay(failureDelay, stoppingToken); }
+                catch (OperationCanceledException) { break; }
+
+                // Escalate while the queue keeps failing so a broken dependency does not produce a
+                // tight error-log loop.
+                var doubled = failureDelay + failureDelay;
+                failureDelay = doubled > maxFailureDelay ? maxFailureDelay : doubled;
+                continue;
+            }
+
+            failureDelay = _options.QueuePollInterval;
 
             if (!handled)
             {

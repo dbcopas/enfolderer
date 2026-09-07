@@ -68,6 +68,11 @@ public sealed class LocalReadUrlProvider : IReadUrlProvider
             if (segment is "." or "..")
                 throw new ArgumentException($"Invalid blob path '{blobPath}'.", nameof(blobPath));
         }
-        return Task.FromResult(new Uri(Path.Combine(_root, Path.Combine(segments))));
+        // A rooted segment would make Path.Combine discard the root, so verify containment.
+        var full = Path.GetFullPath(Path.Combine(_root, Path.Combine(segments)));
+        if (!full.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            throw new ArgumentException($"Invalid blob path '{blobPath}'.", nameof(blobPath));
+
+        return Task.FromResult(new Uri(full));
     }
 }
