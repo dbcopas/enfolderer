@@ -69,10 +69,10 @@ See **[azure-setup.md](azure-setup.md)** for the full walkthrough: owner groups,
 registrations, the deployment itself, the agents, and the desktop client's config file. The short
 version, once `infra/main.parameters.json` is filled in:
 
-```bash
-az deployment sub create \
-  --location eastus2 \
-  --template-file infra/main.bicep \
+```powershell
+az deployment sub create `
+  --location eastus2 `
+  --template-file infra/main.bicep `
   --parameters infra/main.parameters.json
 ```
 
@@ -91,11 +91,11 @@ These are the point of the demo. Run a scan first so the audience sees the happy
 
 ### 1. Revoke Team B's access to Team A's agent
 
-```bash
-az deployment sub create \
-  --location eastus2 \
-  --template-file infra/main.bicep \
-  --parameters infra/main.parameters.json \
+```powershell
+az deployment sub create `
+  --location eastus2 `
+  --template-file infra/main.bicep `
+  --parameters infra/main.parameters.json `
   --parameters grantIdentificationAccessToGeometry=false
 ```
 
