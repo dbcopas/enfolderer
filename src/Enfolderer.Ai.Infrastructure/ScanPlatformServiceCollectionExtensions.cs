@@ -71,6 +71,13 @@ public static class ScanPlatformServiceCollectionExtensions
             return new StorageQueueJobQueue(queueService.GetQueueClient(options.QueueName));
         });
 
+        services.AddSingleton<IReadUrlProvider>(sp =>
+        {
+            if (!options.UsesAzureStorage)
+                return new LocalReadUrlProvider(options.LocalStorageRoot);
+            return new BlobReadUrlProvider(CreateBlobServiceClient(sp, options));
+        });
+
         if (registerUploadUrlIssuer)
         {
             services.AddSingleton<IUploadUrlIssuer>(sp =>

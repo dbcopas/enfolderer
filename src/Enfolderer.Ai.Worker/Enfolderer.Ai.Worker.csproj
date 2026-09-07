@@ -9,5 +9,12 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Enfolderer.Ai.Contracts\Enfolderer.Ai.Contracts.csproj" />
+    <ProjectReference Include="..\Enfolderer.Ai.Infrastructure\Enfolderer.Ai.Infrastructure.csproj" />
+    <ProjectReference Include="..\Enfolderer.Ai.Imaging\Enfolderer.Ai.Imaging.csproj" />
   </ItemGroup>
 </Project>
