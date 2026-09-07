@@ -4,6 +4,11 @@ Step-by-step deployment of the scan pipeline. The Bicep under `infra/` does most
 manual steps are the two Entra app registrations, the Foundry agents, and the desktop client's
 config file, none of which can be created from an ARM template.
 
+Every command below is **PowerShell**. Use PowerShell 7 (`pwsh`) if you have it: Windows
+PowerShell 5.1 works, but it mangles arguments containing quotes when it hands them to `az.cmd`,
+which matters in [step 2](#2-register-the-api-and-the-desktop-client). The JSON arguments there are
+passed as files (`"@file.json"`) rather than inline strings specifically to sidestep that.
+
 Everything uses **user-assigned managed identities**. Nothing in this deployment has a connection
 string, a storage key, or a client secret: the storage account is created with
 `allowSharedKeyAccess: false` and Cosmos with `disableLocalAuth: true`, so key-based access is not
@@ -40,89 +45,146 @@ Neither team identity has any Cosmos role assignment, so neither can read job st
 - Permission to create Entra app registrations and security groups, or someone who can do it.
 - Quota for a vision-capable model (`gpt-4o`) in your chosen region.
 
-```bash
+```powershell
 az login
 az account set --subscription "<subscription-id>"
 ```
+
+Set the values the rest of this guide reuses. Keep the session open, or re-run this block in a new
+one — every later step refers to these variables:
+
+```powershell
+$prefix   = "enf-demo"
+$location = "eastus2"
+$platformRg = "$prefix-platform"
+$geometryRg = "$prefix-cardgeo"
+$identificationRg = "$prefix-cardid"
+```
+
+`az ... -o tsv` returns a string in PowerShell, but with a trailing newline when the command emits
+more than one line. Every capture below queries a single scalar, so `$var = az ...` is safe; if you
+adapt one to return several values you will get an array and should add `| Select-Object -First 1`.
 
 ## 1. Create the owner groups
 
 The two Foundry projects are owned by different Entra groups. This is what stops Team B editing
 Team A's agent, so use two real groups even in a demo tenant.
 
-```bash
-az ad group create --display-name "Enfolderer Team A (Geometry)"       --mail-nickname enfolderer-team-a
-az ad group create --display-name "Enfolderer Team B (Identification)" --mail-nickname enfolderer-team-b
+```powershell
+az ad group create --display-name "Enfolderer Team A (Geometry)" `
+                   --mail-nickname enfolderer-team-a
+az ad group create --display-name "Enfolderer Team B (Identification)" `
+                   --mail-nickname enfolderer-team-b
 
-az ad group show --group "Enfolderer Team A (Geometry)"       --query id -o tsv
-az ad group show --group "Enfolderer Team B (Identification)" --query id -o tsv
+$teamAGroupId = az ad group show --group "Enfolderer Team A (Geometry)"       --query id -o tsv
+$teamBGroupId = az ad group show --group "Enfolderer Team B (Identification)" --query id -o tsv
+$teamAGroupId, $teamBGroupId
 ```
 
 Keep both object ids. Add yourself to whichever group you want to demo from — and deliberately
 *not* to the other, so the 403s in the walkthrough are genuine.
+
+The backtick (`` ` ``) is PowerShell's line continuation. It must be the **last** character on the
+line: a trailing space after it is a syntax error, and an easy one to introduce when copying.
 
 ## 2. Register the API and the desktop client
 
 Two registrations: the API exposes a scope, and the desktop app is a **public client** with no
 secret.
 
-```bash
-# The API.
-apiAppId=$(az ad app create --display-name "Enfolderer Scan API" --query appId -o tsv)
-az ad app update --id "$apiAppId" --identifier-uris "api://$apiAppId"
+```powershell
+$apiAppId = az ad app create --display-name "Enfolderer Scan API" --query appId -o tsv
+az ad app update --id $apiAppId --identifier-uris "api://$apiAppId"
 ```
 
 Add the scope. In the portal: **App registrations → Enfolderer Scan API → Expose an API → Add a
-scope**, named `Scan.Submit`, admin *and* user consentable. Or with the CLI:
+scope**, named `Scan.Submit`, admin *and* user consentable. Or from PowerShell — writing the JSON
+to a file rather than passing it inline, so no quoting survives the trip through `az`:
 
-```bash
-scopeId=$(uuidgen)
-az ad app update --id "$apiAppId" --set api.oauth2PermissionScopes="[{
-  \"id\": \"$scopeId\",
-  \"value\": \"Scan.Submit\",
-  \"type\": \"User\",
-  \"isEnabled\": true,
-  \"adminConsentDisplayName\": \"Submit card scans\",
-  \"adminConsentDescription\": \"Allows the signed-in user to submit card scan jobs.\",
-  \"userConsentDisplayName\": \"Submit card scans\",
-  \"userConsentDescription\": \"Allows you to submit card scan jobs.\"
-}]"
+```powershell
+$scopeId     = [guid]::NewGuid().Guid
+$apiObjectId = az ad app show --id $apiAppId --query id -o tsv
+
+$body = @{
+  api = @{
+    oauth2PermissionScopes = @(
+      @{
+        id                      = $scopeId
+        value                   = "Scan.Submit"
+        type                    = "User"
+        isEnabled               = $true
+        adminConsentDisplayName = "Submit card scans"
+        adminConsentDescription = "Allows the signed-in user to submit card scan jobs."
+        userConsentDisplayName  = "Submit card scans"
+        userConsentDescription  = "Allows you to submit card scan jobs."
+      }
+    )
+  }
+}
+$bodyFile = Join-Path $env:TEMP "scan-scope.json"
+$body | ConvertTo-Json -Depth 6 | Set-Content -Path $bodyFile -Encoding utf8
+
+az rest --method PATCH `
+  --url "https://graph.microsoft.com/v1.0/applications/$apiObjectId" `
+  --headers "Content-Type=application/json" `
+  --body "@$bodyFile"
 ```
+
+This calls Graph directly instead of `az ad app update --set`, because `--set` takes its value as
+one `key=value` token and the JSON inside it has to survive both PowerShell and `az.cmd`. `az rest
+--body` documents the `@file` form, so nothing is quoted at all. Note the object id in the URL:
+Graph wants the application's `id`, not its `appId`, and passing the wrong one gives a confusing
+404.
 
 Then the desktop client:
 
-```bash
-clientAppId=$(az ad app create \
-  --display-name "Enfolderer Desktop" \
-  --is-fallback-public-client true \
-  --public-client-redirect-uris "http://localhost" \
-  --required-resource-accesses "[{
-    \"resourceAppId\": \"$apiAppId\",
-    \"resourceAccess\": [{\"id\": \"$scopeId\", \"type\": \"Scope\"}]
-  }]" \
-  --query appId -o tsv)
+```powershell
+$access = @(
+  @{
+    resourceAppId  = $apiAppId
+    resourceAccess = @(@{ id = $scopeId; type = "Scope" })
+  }
+)
+$accessFile = Join-Path $env:TEMP "scan-access.json"
+$access | ConvertTo-Json -Depth 5 -AsArray | Set-Content -Path $accessFile -Encoding utf8
 
-az ad app permission admin-consent --id "$clientAppId"   # or let users consent at first sign-in
-echo "API app id:    $apiAppId"
-echo "Client app id: $clientAppId"
+$clientAppId = az ad app create `
+  --display-name "Enfolderer Desktop" `
+  --is-fallback-public-client true `
+  --public-client-redirect-uris "http://localhost" `
+  --required-resource-accesses "@$accessFile" `
+  --query appId -o tsv
+
+az ad app permission admin-consent --id $clientAppId   # or let users consent at first sign-in
+"API app id:    $apiAppId"
+"Client app id: $clientAppId"
 ```
+
+`-AsArray` needs PowerShell 7. On 5.1 a single-element array collapses to a bare object and `az`
+rejects the file, so write `"[" + ($access | ConvertTo-Json -Depth 5) + "]"` instead.
 
 Do **not** create a client secret for either registration. The desktop app rejects a config file
 containing `client_secret`, and the services authenticate with managed identities.
 
 ## 3. Deploy the infrastructure
 
-Fill in `infra/main.parameters.json`:
+Fill in `infra/main.parameters.json`. You can do it by hand, or from the variables already in the
+session:
 
-```json
-{
-  "namePrefix":         { "value": "enf-demo" },
-  "location":           { "value": "eastus2" },
-  "teamAGroupObjectId": { "value": "<Team A group object id>" },
-  "teamBGroupObjectId": { "value": "<Team B group object id>" },
-  "apiClientId":        { "value": "<API app id from step 2>" },
-  "grantIdentificationAccessToGeometry": { "value": true }
+```powershell
+$params = [ordered]@{
+  '$schema'      = "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#"
+  contentVersion = "1.0.0.0"
+  parameters     = [ordered]@{
+    namePrefix         = @{ value = $prefix }
+    location           = @{ value = $location }
+    teamAGroupObjectId = @{ value = $teamAGroupId }
+    teamBGroupObjectId = @{ value = $teamBGroupId }
+    apiClientId        = @{ value = $apiAppId }
+    grantIdentificationAccessToGeometry = @{ value = $true }
+  }
 }
+$params | ConvertTo-Json -Depth 5 | Set-Content -Path infra/main.parameters.json -Encoding utf8
 ```
 
 `namePrefix` is 3–12 characters and seeds every resource name, so keep it short and unique — the
@@ -130,16 +192,16 @@ storage account and the two Foundry accounts need globally unique names.
 
 Preview, then deploy:
 
-```bash
-az deployment sub what-if \
-  --location eastus2 \
-  --template-file infra/main.bicep \
+```powershell
+az deployment sub what-if `
+  --location $location `
+  --template-file infra/main.bicep `
   --parameters infra/main.parameters.json
 
-az deployment sub create \
-  --name enfolderer-scan \
-  --location eastus2 \
-  --template-file infra/main.bicep \
+az deployment sub create `
+  --name enfolderer-scan `
+  --location $location `
+  --template-file infra/main.bicep `
   --parameters infra/main.parameters.json
 ```
 
@@ -150,13 +212,16 @@ project and a `gpt-4o` deployment, the API and worker App Services, and all the 
 
 Collect the outputs:
 
-```bash
-az deployment sub show --name enfolderer-scan --query properties.outputs -o json
+```powershell
+$outputs = az deployment sub show --name enfolderer-scan --query properties.outputs -o json |
+           ConvertFrom-Json
+$outputs.apiUrl.value
+$outputs.geometryProjectEndpoint.value
+$outputs.identificationProjectEndpoint.value
 ```
 
-You need `apiUrl`, `geometryProjectEndpoint`, and `identificationProjectEndpoint` for the steps
-below. Role assignments can take a couple of minutes to propagate; if the first scan fails with a
-403, wait and retry before assuming a misconfiguration.
+You need those three for the steps below. Role assignments can take a couple of minutes to
+propagate; if the first scan fails with a 403, wait and retry before assuming a misconfiguration.
 
 ## 4. Create the agents
 
@@ -177,11 +242,11 @@ way when you want to show how a new game is added without touching Team A.
 
 Note the agent ids. If they differ from the agent names, update the worker's settings:
 
-```bash
-az webapp config appsettings set \
-  --resource-group enf-demo-platform --name enf-demo-worker --settings \
-  ScanPipeline__BoundaryAgentId="<boundary agent id>" \
-  ScanPipeline__IdentificationAgentIds__mtg="<mtg agent id>" \
+```powershell
+az webapp config appsettings set `
+  --resource-group $platformRg --name "$prefix-worker" --settings `
+  ScanPipeline__BoundaryAgentId="<boundary agent id>" `
+  ScanPipeline__IdentificationAgentIds__mtg="<mtg agent id>" `
   ScanPipeline__IdentificationAgentIds__pokemon="<pokemon agent id>"
 ```
 
@@ -199,16 +264,25 @@ The Pokémon catalogue works anonymously but is rate-limited; if you have a poke
 
 ## 6. Deploy the API and worker
 
-```bash
-dotnet publish src/Enfolderer.Ai.Api    -c Release -o /tmp/api
-dotnet publish src/Enfolderer.Ai.Worker -c Release -o /tmp/worker
+```powershell
+$stage = Join-Path $env:TEMP "enfolderer-deploy"
+New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-(cd /tmp/api    && zip -r ../api.zip    .)
-(cd /tmp/worker && zip -r ../worker.zip .)
+dotnet publish src/Enfolderer.Ai.Api    -c Release -o "$stage/api"
+dotnet publish src/Enfolderer.Ai.Worker -c Release -o "$stage/worker"
 
-az webapp deploy --resource-group enf-demo-platform --name enf-demo-api    --src-path /tmp/api.zip    --type zip
-az webapp deploy --resource-group enf-demo-platform --name enf-demo-worker --src-path /tmp/worker.zip --type zip
+Compress-Archive -Path "$stage/api/*"    -DestinationPath "$stage/api.zip"    -Force
+Compress-Archive -Path "$stage/worker/*" -DestinationPath "$stage/worker.zip" -Force
+
+az webapp deploy --resource-group $platformRg --name "$prefix-api" `
+  --src-path "$stage/api.zip" --type zip
+az webapp deploy --resource-group $platformRg --name "$prefix-worker" `
+  --src-path "$stage/worker.zip" --type zip
 ```
+
+Note the `/*` in the `Compress-Archive` paths. Without it the archive contains a top-level `api`
+folder, App Service finds no `.dll` at the root, and the site starts and then 500s — a failure that
+looks like a code problem rather than a packaging one.
 
 The Bicep already set every app setting, including
 `ScanPlatform__ManagedIdentityClientId` — the client id of that service's user-assigned identity.
@@ -218,8 +292,8 @@ pointing at the one that holds the role assignments.
 
 Check the API is up:
 
-```bash
-curl "https://enf-demo-api.azurewebsites.net/healthz"
+```powershell
+Invoke-RestMethod "https://$prefix-api.azurewebsites.net/healthz"
 ```
 
 A warning in the API log that `AzureAd:TenantId` is not configured means the API is running
@@ -230,14 +304,21 @@ unauthenticated — acceptable locally, not in a deployment. Confirm the setting
 Create `aiconfig.txt` beside `Enfolderer.App.exe` (the app writes a template on the first scan if
 the file is missing):
 
-```ini
-api_base_url=https://enf-demo-api.azurewebsites.net
-tenant_id=<your tenant id>
-client_id=<desktop client app id from step 2>
-scope=api://<API app id from step 2>/Scan.Submit
+```powershell
+$tenantId = az account show --query tenantId -o tsv
+
+@"
+api_base_url=https://$prefix-api.azurewebsites.net
+tenant_id=$tenantId
+client_id=$clientAppId
+scope=api://$apiAppId/Scan.Submit
 #game_hint=mtg
 #use_device_code=true
+"@ | Set-Content -Path .\aiconfig.txt -Encoding utf8
 ```
+
+The `@"` … `"@` here-string expands variables; `@'` … `'@` would not, and would leave the literal
+`$prefix` in the file.
 
 Then **Tools → Scan Card Image…**, pick a photo, and sign in when prompted. Uncomment
 `use_device_code` if the machine has no usable browser.
@@ -246,14 +327,14 @@ Then **Tools → Scan Card Image…**, pick a photo, and sign in when prompted. 
 
 Once a scan succeeds end to end, confirm the demo assets are real:
 
-```bash
+```powershell
 # The worker's identity can reach Cosmos.
-az cosmosdb sql role assignment list \
-  --account-name enf-demo-cosmos --resource-group enf-demo-platform -o table
+az cosmosdb sql role assignment list `
+  --account-name "$prefix-cosmos" --resource-group $platformRg -o table
 
 # Neither team identity appears in that list. Confirm Team A's roles are storage-only:
-geoPrincipal=$(az identity show -g enf-demo-cardgeo -n enf-demo-cardgeo-id --query principalId -o tsv)
-az role assignment list --assignee "$geoPrincipal" --all -o table
+$geoPrincipal = az identity show -g $geometryRg -n "$prefix-cardgeo-id" --query principalId -o tsv
+az role assignment list --assignee $geoPrincipal --all -o table
 ```
 
 Team A should show exactly one assignment: **Storage Blob Data Reader** on the `scans` container.
@@ -267,13 +348,13 @@ The Basic App Service plan, the provisioned-throughput Cosmos container, and the
 deployments all bill while they exist. Job documents self-expire after seven days via the container
 TTL, but the resources do not. Tear down when you are done:
 
-```bash
-az group delete --name enf-demo-platform --yes --no-wait
-az group delete --name enf-demo-cardgeo  --yes --no-wait
-az group delete --name enf-demo-cardid   --yes --no-wait
+```powershell
+az group delete --name $platformRg       --yes --no-wait
+az group delete --name $geometryRg       --yes --no-wait
+az group delete --name $identificationRg --yes --no-wait
 
-az ad app delete --id "$apiAppId"
-az ad app delete --id "$clientAppId"
+az ad app delete --id $apiAppId
+az ad app delete --id $clientAppId
 ```
 
 Deleting the resource groups also deletes the managed identities and every role assignment scoped
