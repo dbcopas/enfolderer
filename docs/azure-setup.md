@@ -99,9 +99,18 @@ guide needs.
 ```powershell
 $apiAppId = az ad app create --display-name "Enfolderer Scan API" --query appId -o tsv
 az ad app update --id $apiAppId --identifier-uris "api://$apiAppId"
+az ad sp create --id $apiAppId
 ```
 
-Skip this if you already created the app in the portal.
+Skip the first two lines if you already created the app in the portal, but **still run
+`az ad sp create`** (it is idempotent, so running it twice is harmless).
+
+That third line is easy to overlook and the failure it causes is confusing. An app *registration*
+is only a definition; the **service principal** is the object that represents it inside your
+tenant, and the portal creates one silently while `az ad app create` does not. Without it, granting
+consent in 2d fails with `Request_BadRequest` and the misleading text "the application needs access
+to service(s) (…) that your organization has not subscribed to" — where the GUID in the parentheses
+is this API's own app id.
 
 ### 2b. Add the `Scan.Submit` scope — *portal or PowerShell, not both*
 
@@ -193,10 +202,17 @@ $clientAppId = az ad app create `
   --required-resource-accesses "@$accessFile" `
   --query appId -o tsv
 
+az ad sp create --id $clientAppId
+
 az ad app permission admin-consent --id $clientAppId   # or let users consent at first sign-in
 "API app id:    $apiAppId"
 "Client app id: $clientAppId"
 ```
+
+Both service principals must exist before the consent call: the client's to hold the grant, and
+the API's from 2a to be the target of it. Granting admin consent needs Privileged Role
+Administrator or Global Administrator; if you have neither, skip that line and let each user
+consent at first sign-in.
 
 `-AsArray` needs PowerShell 7. On 5.1 a single-element array collapses to a bare object and `az`
 rejects the file, so write `"[" + ($access | ConvertTo-Json -Depth 5) + "]"` instead.
