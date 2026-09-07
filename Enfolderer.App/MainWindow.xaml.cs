@@ -204,37 +204,57 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ScanCardImage_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var config = LoadAiScanConfig();
+            if (config == null) return;
+
+            var dlgOpen = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Select the card image to scan",
+                Filter = "Image Files (*.jpg;*.jpeg;*.png;*.bmp;*.webp;*.gif)|*.jpg;*.jpeg;*.png;*.bmp;*.webp;*.gif|All Files (*.*)|*.*",
+                CheckFileExists = true,
+                Multiselect = false
+            };
+            if (dlgOpen.ShowDialog(this) != true) return;
+
+            var dlgSave = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save scanned cards CSV as",
+                Filter = "CSV Files (*.csv)|*.csv",
+                FileName = "scanned_cards.csv",
+                InitialDirectory = System.IO.Path.GetDirectoryName(dlgOpen.FileName)
+            };
+            if (dlgSave.ShowDialog(this) != true) return;
+
+            await RunScanAsync(
+                "Scanning card image",
+                ct => Utilities.BinderScanService.ScanImageAsync(
+                    dlgOpen.FileName,
+                    config,
+                    dlgSave.FileName,
+                    config.GameHint,
+                    statusCallback: msg => _vm?.SetStatus(msg),
+                    progressCallback: (done, total) => _vm?.ReportImportProgress(done, total),
+                    ct: ct));
+        }
+        catch (Exception ex)
+        {
+            _vm?.FinishImportProgress();
+            MessageBox.Show(this, ex.Message, "Card Scan Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private async void ScanBinderImages_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            var configPath = System.IO.Path.Combine(AppContext.BaseDirectory, "aiconfig.txt");
-            if (!System.IO.File.Exists(configPath))
-            {
-                MessageBox.Show(this,
-                    $"Config file not found:\n{configPath}\n\nCreate aiconfig.txt with these lines:\nendpoint=https://your-resource.cognitiveservices.azure.com\ntenant_id=...\nclient_id=...\nclient_secret=...",
-                    "Missing Config", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
+            var config = LoadAiScanConfig();
+            if (config == null) return;
 
-            var configValues = System.IO.File.ReadAllLines(configPath)
-                .Where(l => !string.IsNullOrWhiteSpace(l) && !l.TrimStart().StartsWith('#'))
-                .Select(l => l.Split('=', 2))
-                .Where(p => p.Length == 2)
-                .ToDictionary(p => p[0].Trim().ToLowerInvariant(), p => p[1].Trim());
-
-            string ConfigVal(string key)
-            {
-                if (configValues.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v)) return v;
-                throw new InvalidOperationException($"Missing or empty '{key}' in aiconfig.txt");
-            }
-
-            var endpointInput = ConfigVal("endpoint");
-            var tenantIdInput = ConfigVal("tenant_id");
-            var clientIdInput = ConfigVal("client_id");
-            var clientSecretInput = ConfigVal("client_secret");
-
-            // Use OpenFileDialog to pick a folder (select any file, then use its directory)
+            // Batch mode: every image in the folder becomes its own job against the same API.
             var folderPath = FolderPickerDialog.Show(this, "Select the folder containing binder page images");
             if (folderPath == null) return;
 
@@ -247,42 +267,82 @@ public partial class MainWindow : Window
             };
             if (dlgSave.ShowDialog(this) != true) return;
 
-            // Retry loop — allows retrying after permission errors without re-entering credentials
-            while (true)
-            {
-                try
-                {
-                    _vm.StartImportProgress("Scanning binder images");
-                    var result = await Task.Run(() => Utilities.BinderScanService.ScanFolderAsync(
-                        folderPath,
-                        endpointInput,
-                        tenantIdInput,
-                        clientIdInput,
-                        clientSecretInput,
-                        dlgSave.FileName,
-                        statusCallback: msg => _vm.SetStatus(msg),
-                        progressCallback: (done, total) => _vm.ReportImportProgress(done, total)));
-                    _vm.FinishImportProgress();
-                    _vm?.SetStatus($"Scan complete: {result.CardsFound} cards from {result.ImagesProcessed} images.");
-                    MessageBox.Show(this,
-                        $"Images processed: {result.ImagesProcessed}\nCards found: {result.CardsFound}\nLookup failures: {result.LookupFailures}\n\nOutput: {result.OutputPath}",
-                        "Binder Scan", MessageBoxButton.OK, MessageBoxImage.Information);
-                    break; // success — exit retry loop
-                }
-                catch (Exception retryEx)
-                {
-                    _vm?.FinishImportProgress();
-                    var retry = MessageBox.Show(this,
-                        $"{retryEx.Message}\n\nWould you like to retry? (e.g. after adjusting service principal permissions)",
-                        "Binder Scan Error", MessageBoxButton.YesNo, MessageBoxImage.Error);
-                    if (retry != MessageBoxResult.Yes) break;
-                }
-            }
+            await RunScanAsync(
+                "Scanning binder images",
+                ct => Utilities.BinderScanService.ScanFolderAsync(
+                    folderPath,
+                    config,
+                    dlgSave.FileName,
+                    config.GameHint,
+                    statusCallback: msg => _vm?.SetStatus(msg),
+                    progressCallback: (done, total) => _vm?.ReportImportProgress(done, total),
+                    ct: ct));
         }
         catch (Exception ex)
         {
             _vm?.FinishImportProgress();
             MessageBox.Show(this, ex.Message, "Binder Scan Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
+    /// Loads aiconfig.txt, writing a secret-free template the first time and reporting any
+    /// validation problem (including a leftover client_secret entry) to the user.
+    /// </summary>
+    private Utilities.AiScanConfig? LoadAiScanConfig()
+    {
+        var configPath = System.IO.Path.Combine(AppContext.BaseDirectory, Utilities.AiScanConfig.FileName);
+        if (!System.IO.File.Exists(configPath))
+        {
+            try { System.IO.File.WriteAllText(configPath, Utilities.AiScanConfig.SampleContent); } catch { }
+            MessageBox.Show(this,
+                $"Scan configuration is missing.\n\nA template has been written to:\n{configPath}\n\n" +
+                "Fill in the API URL, tenant and client id, then run the scan again. " +
+                "No client secret is required: you will be asked to sign in.",
+                "Missing Config", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return null;
+        }
+
+        try
+        {
+            var config = Utilities.AiScanConfig.Load(configPath);
+            config.DeviceCodePrompt = message => Dispatcher.Invoke(() =>
+                MessageBox.Show(this, message, "Sign in", MessageBoxButton.OK, MessageBoxImage.Information));
+            return config;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Scan Config Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            return null;
+        }
+    }
+
+    /// <summary>Runs a scan with progress reporting and an offer to retry on failure.</summary>
+    private async Task RunScanAsync(
+        string progressTitle,
+        Func<System.Threading.CancellationToken, Task<Utilities.BinderScanService.ScanResult>> scan)
+    {
+        while (true)
+        {
+            try
+            {
+                _vm?.StartImportProgress(progressTitle);
+                var result = await scan(System.Threading.CancellationToken.None);
+                _vm?.FinishImportProgress();
+                _vm?.SetStatus($"Scan complete: {result.CardsFound} cards from {result.ImagesProcessed} images.");
+                MessageBox.Show(this,
+                    $"Images processed: {result.ImagesProcessed}\nCards identified: {result.CardsFound}\nUnidentified cards: {result.LookupFailures}\n\nOutput: {result.OutputPath}",
+                    "Card Scan", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            catch (Exception retryEx)
+            {
+                _vm?.FinishImportProgress();
+                var retry = MessageBox.Show(this,
+                    $"{retryEx.Message}\n\nWould you like to retry? (e.g. after granting the missing Foundry or storage permission)",
+                    "Card Scan Error", MessageBoxButton.YesNo, MessageBoxImage.Error);
+                if (retry != MessageBoxResult.Yes) return;
+            }
         }
     }
 
