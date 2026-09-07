@@ -10,6 +10,30 @@ namespace Enfolderer.App.Importing;
 public record CsvUpdateResult(int Updated, int Inserted, int Errors, string DatabasePath);
 public record CsvMtgsMapResult(int UpdatedMtgsIds, int InsertedNew, int SkippedExisting, int Conflicts, int Errors, string DatabasePath, string? UnmatchedLogPath);
 
+public enum StudioMatchKind { Update, Conflict, SkippedAlreadyMapped, SkippedDuplicate, Unmatched, Error }
+
+public record StudioCsvPlanEntry(
+    StudioMatchKind Kind,
+    int MtgsId,
+    int? FoundId,
+    int? OrigQty,
+    string Edition,
+    string Name,
+    string? CardNum,
+    string RawLine,
+    string? ExistingMtgsVal = null
+);
+
+public class StudioCsvPlan
+{
+    public List<StudioCsvPlanEntry> Entries { get; } = new();
+    public string DbPath { get; init; } = "";
+    public string CsvPath { get; init; } = "";
+    public string IdCol { get; init; } = "id";
+    public string MtgsCol { get; init; } = "MtgsId";
+    public bool HasQtyCol { get; init; }
+}
+
 /// <summary>
 /// Parses a semicolon-delimited CSV file and updates (or inserts) rows in mainDb.db
 /// located alongside the CSV (or an explicitly supplied db path). The updater:
@@ -299,6 +323,24 @@ public static class CsvMainDbUpdater
                             upd.ExecuteNonQuery();
                             updatedMtgs++;
                             string qtyMoveNote = string.Empty;
+
+                            // Pre-check whether Cards.id rekey will succeed (needed to decide CollectionCards CardId)
+                            bool canRekeyEarly = false;
+                            if (foundId.HasValue && foundId.Value != mtgsId)
+                            {
+                                try
+                                {
+                                    using var chkEarly = con.CreateCommand();
+                                    chkEarly.CommandText = $"SELECT 1 FROM Cards WHERE {idCol}=@nid LIMIT 1";
+                                    chkEarly.Parameters.AddWithValue("@nid", mtgsId);
+                                    var exEarly = chkEarly.ExecuteScalar();
+                                    canRekeyEarly = (exEarly == null || exEarly == DBNull.Value);
+                                }
+                                catch { canRekeyEarly = false; }
+                            }
+                            // The CardId to use in CollectionCards: MtgsId only if rekey will succeed, otherwise keep internal id
+                            int collectionCardId = canRekeyEarly ? mtgsId : foundId.Value;
+
                             // If the mainDb row has a Qty, move it to mtgstudio.collection and clear mainDb Qty (only after confirmed write)
                             if (hasQtyCol)
                             {
@@ -328,21 +370,24 @@ public static class CsvMainDbUpdater
                                             using var conCol = new SqliteConnection($"Data Source={collectionPath}");
                                             conCol.Open();
                                             int affected = 0;
-                                            // Fix any legacy rows that incorrectly stored internal Cards.Id instead of MtgsId
-                                            try
+                                            // Rekey legacy CollectionCards rows only if Cards.id rekey will succeed
+                                            if (canRekeyEarly)
                                             {
-                                                using var fix = conCol.CreateCommand();
-                                                fix.CommandText = @"UPDATE CollectionCards SET CardId=@mtgs WHERE CardId=@internal AND NOT EXISTS (SELECT 1 FROM CollectionCards WHERE CardId=@mtgs)";
-                                                fix.Parameters.AddWithValue("@mtgs", mtgsId);
-                                                fix.Parameters.AddWithValue("@internal", foundId.Value);
-                                                fix.ExecuteNonQuery();
+                                                try
+                                                {
+                                                    using var fix = conCol.CreateCommand();
+                                                    fix.CommandText = @"UPDATE CollectionCards SET CardId=@mtgs WHERE CardId=@internal AND NOT EXISTS (SELECT 1 FROM CollectionCards WHERE CardId=@mtgs)";
+                                                    fix.Parameters.AddWithValue("@mtgs", mtgsId);
+                                                    fix.Parameters.AddWithValue("@internal", foundId.Value);
+                                                    fix.ExecuteNonQuery();
+                                                }
+                                                catch (System.Exception) { throw; }
                                             }
-                                            catch (System.Exception) { throw; }
                                             using (var u = conCol.CreateCommand())
                                             {
-                                                u.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id"; // CardId is MtgsId
+                                                u.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
                                                 u.Parameters.AddWithValue("@q", qtyVal.Value);
-                                                u.Parameters.AddWithValue("@id", mtgsId);
+                                                u.Parameters.AddWithValue("@id", collectionCardId);
                                                 try { affected = u.ExecuteNonQuery(); } catch (System.Exception) { throw; }
                                             }
                                             if (affected == 0)
@@ -351,7 +396,7 @@ public static class CsvMainDbUpdater
                                                 ins.CommandText = @"INSERT INTO CollectionCards 
                             (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)
                             VALUES (@id,@q,0,0.0,0.0,0.0,0,0,0,0,0,'','',0,'',1,0,0,@added)";
-                                                ins.Parameters.AddWithValue("@id", mtgsId);
+                                                ins.Parameters.AddWithValue("@id", collectionCardId);
                                                 ins.Parameters.AddWithValue("@q", qtyVal.Value);
                                                 var added = DateTime.Now.ToString("s").Replace('T', ' ');
                                                 ins.Parameters.AddWithValue("@added", added);
@@ -376,7 +421,7 @@ public static class CsvMainDbUpdater
                                                     verify.Open();
                                                     using var vc = verify.CreateCommand();
                                                     vc.CommandText = "SELECT Qty FROM CollectionCards WHERE CardId=@id";
-                                                    vc.Parameters.AddWithValue("@id", mtgsId);
+                                                    vc.Parameters.AddWithValue("@id", collectionCardId);
                                                     var vObj = vc.ExecuteScalar();
                                                     if (vObj == null || vObj == DBNull.Value || !int.TryParse(vObj.ToString(), out var vq) || vq != qtyVal.Value)
                                                     {
@@ -393,7 +438,7 @@ public static class CsvMainDbUpdater
                                                     colVerify.Open();
                                                     using var vc2 = colVerify.CreateCommand();
                                                     vc2.CommandText = "SELECT Qty FROM CollectionCards WHERE CardId=@id";
-                                                    vc2.Parameters.AddWithValue("@id", mtgsId);
+                                                    vc2.Parameters.AddWithValue("@id", collectionCardId);
                                                     var cv = vc2.ExecuteScalar();
                                                     if (cv != null && cv != DBNull.Value && int.TryParse(cv.ToString(), out var cq)) collectionQtyAfter = cq;
                                                 }
@@ -664,6 +709,894 @@ ProgressOnly:
 
         return new CsvMtgsMapResult(updatedMtgs, inserted, skippedExisting, conflicts, errors, dbPath, unmatchedLogPath);
     }
+
+    /// <summary>
+    /// Returns true if the CSV file is in MTG Studio export format (comma-delimited with CardId header).
+    /// </summary>
+    public static bool IsMtgsStudioCsvFormat(string csvPath)
+    {
+        using var sr = new StreamReader(csvPath);
+        var firstLine = sr.ReadLine();
+        return firstLine != null && firstLine.StartsWith("CardId,", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Prepares a plan by matching CSV rows to mainDb without writing anything.
+    /// Returns a result summary and a plan that can be passed to ApplyStudioCsvPlan.
+    /// </summary>
+    public static (CsvMtgsMapResult Result, StudioCsvPlan Plan) PrepareStudioCsvPlan(string csvPath, Action<int, int>? progress = null)
+    {
+        if (string.IsNullOrWhiteSpace(csvPath)) throw new ArgumentException("csvPath required");
+        if (!File.Exists(csvPath)) throw new FileNotFoundException("CSV file not found", csvPath);
+        string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string dbPath = Path.Combine(exeDir, "mainDb.db");
+        if (!File.Exists(dbPath)) throw new FileNotFoundException("mainDb.db not found in executable directory", dbPath);
+
+        var allLines = File.ReadAllLines(csvPath);
+        var emptyPlan = new StudioCsvPlan { DbPath = dbPath, CsvPath = csvPath };
+        if (allLines.Length < 2) return (new CsvMtgsMapResult(0, 0, 0, 0, 0, dbPath, null), emptyPlan);
+
+        var header = SplitCommaCsv(allLines[0]);
+        int colCardId = Array.FindIndex(header, h => h.Equals("CardId", StringComparison.OrdinalIgnoreCase));
+        int colName = Array.FindIndex(header, h => h.Equals("Name", StringComparison.OrdinalIgnoreCase));
+        int colSet = Array.FindIndex(header, h => h.Equals("SetAbbreviation", StringComparison.OrdinalIgnoreCase));
+        int colNumber = Array.FindIndex(header, h => h.Equals("CollectorNoSortable", StringComparison.OrdinalIgnoreCase));
+        if (colCardId < 0 || colName < 0 || colSet < 0 || colNumber < 0)
+            throw new InvalidOperationException("CSV header missing required columns: CardId, Name, SetAbbreviation, CollectorNoSortable");
+
+        int updatedMtgs = 0, skippedExisting = 0, conflicts = 0, errors = 0;
+        string? unmatchedLogPath = null;
+        var updateLines = new List<string>();
+        var unmatchedInsertLines = new List<string>();
+
+        using var con = new SqliteConnection($"Data Source={dbPath}");
+        con.Open();
+
+        var dbCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var pragma = con.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA table_info(Cards)";
+            using var r = pragma.ExecuteReader();
+            while (r.Read()) { try { dbCols.Add(r.GetString(1)); } catch { } }
+        }
+        string idCol = dbCols.Contains("id") ? "id" : (dbCols.Contains("cardId") ? "cardId" : "id");
+        string editionCol = dbCols.Contains("edition") ? "edition" : (dbCols.Contains("set") ? "set" : "edition");
+        string numberCol = dbCols.Contains("collectorNumberValue") ? "collectorNumberValue" : (dbCols.Contains("numberValue") ? "numberValue" : "collectorNumberValue");
+        string nameCol = dbCols.Contains("name") ? "name" : "name";
+        string mtgsCol = dbCols.Contains("MtgsId") ? "MtgsId" : (dbCols.Contains("mtgsid") ? "mtgsid" : (dbCols.Contains("MTGSID") ? "MTGSID" : ""));
+        if (string.IsNullOrEmpty(mtgsCol)) throw new InvalidOperationException("Cards table has no MtgsId column.");
+        bool hasQtyCol = dbCols.Contains("Qty");
+
+        var plan = new StudioCsvPlan { DbPath = dbPath, CsvPath = csvPath, IdCol = idCol, MtgsCol = mtgsCol, HasQtyCol = hasQtyCol };
+        int total = allLines.Length - 1;
+        int processed = 0;
+        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 1; i < allLines.Length; i++)
+        {
+            var line = allLines[i];
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            processed++;
+            var csv = SplitCommaCsv(line);
+            int minCol = Math.Max(Math.Max(colCardId, colName), Math.Max(colSet, colNumber)) + 1;
+            if (csv.Length < minCol) { errors++; plan.Entries.Add(new StudioCsvPlanEntry(StudioMatchKind.Error, 0, null, null, "", "", null, line)); continue; }
+
+            string cardIdStr = csv[colCardId].Trim();
+            string name = csv[colName].Trim();
+            string edition = csv[colSet].Trim();
+            string rawNum = csv[colNumber].Trim();
+            if (!int.TryParse(cardIdStr, out int mtgsId) || mtgsId <= 0)
+            { errors++; plan.Entries.Add(new StudioCsvPlanEntry(StudioMatchKind.Error, 0, null, null, edition, name, null, line)); continue; }
+
+            string cardNumParsed = ParseCollectorNumber(rawNum);
+            string? cardNum = string.IsNullOrWhiteSpace(cardNumParsed) ? null : cardNumParsed;
+
+            string key = string.Join("|", edition.ToLowerInvariant(), name.ToLowerInvariant(), cardNum ?? "");
+            if (!seenKeys.Add(key)) { skippedExisting++; plan.Entries.Add(new StudioCsvPlanEntry(StudioMatchKind.SkippedDuplicate, mtgsId, null, null, edition, name, cardNum, line)); goto PrepareNext; }
+
+            // Skip if MtgsId already mapped
+            using (var chk = con.CreateCommand())
+            {
+                chk.CommandText = $"SELECT 1 FROM Cards WHERE {mtgsCol}=@m LIMIT 1";
+                chk.Parameters.AddWithValue("@m", mtgsId);
+                var exists = chk.ExecuteScalar();
+                if (exists != null && exists != DBNull.Value) { skippedExisting++; plan.Entries.Add(new StudioCsvPlanEntry(StudioMatchKind.SkippedAlreadyMapped, mtgsId, null, null, edition, name, cardNum, line)); continue; }
+            }
+
+            // Find by edition + name + number
+            int? foundId = null; object? foundMtgs = null;
+            using (var find = con.CreateCommand())
+            {
+                var sb = new StringBuilder();
+                sb.Append($"SELECT {idCol}, {mtgsCol} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE");
+                if (cardNum == null)
+                    sb.Append($" AND ({numberCol} IS NULL OR TRIM({numberCol})='')");
+                else
+                    sb.Append($" AND {numberCol}=@n");
+                sb.Append($" AND {nameCol}=@nm COLLATE NOCASE LIMIT 1");
+                find.CommandText = sb.ToString();
+                find.Parameters.AddWithValue("@e", edition);
+                if (cardNum != null) find.Parameters.AddWithValue("@n", cardNum);
+                find.Parameters.AddWithValue("@nm", name);
+                using var rr = find.ExecuteReader();
+                if (rr.Read())
+                {
+                    foundId = rr.IsDBNull(0) ? null : rr.GetInt32(0);
+                    foundMtgs = rr.IsDBNull(1) ? null : rr.GetValue(1);
+                }
+            }
+
+            // Fallback: name with "/" → try " // " form
+            if (!foundId.HasValue && name.Contains('/') && !name.Contains(" // "))
+            {
+                string alt = Regex.Replace(name, @"\s*/\s*", " // ").Trim();
+                if (!string.Equals(alt, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    using var findAlt = con.CreateCommand();
+                    var sb = new StringBuilder();
+                    sb.Append($"SELECT {idCol}, {mtgsCol} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE");
+                    if (cardNum == null)
+                        sb.Append($" AND ({numberCol} IS NULL OR TRIM({numberCol})='')");
+                    else
+                        sb.Append($" AND {numberCol}=@n");
+                    sb.Append($" AND {nameCol}=@nm COLLATE NOCASE LIMIT 1");
+                    findAlt.CommandText = sb.ToString();
+                    findAlt.Parameters.AddWithValue("@e", edition);
+                    if (cardNum != null) findAlt.Parameters.AddWithValue("@n", cardNum);
+                    findAlt.Parameters.AddWithValue("@nm", alt);
+                    using var ra = findAlt.ExecuteReader();
+                    if (ra.Read())
+                    {
+                        foundId = ra.IsDBNull(0) ? null : ra.GetInt32(0);
+                        foundMtgs = ra.IsDBNull(1) ? null : ra.GetValue(1);
+                    }
+                }
+            }
+
+            // Second fallback: ignore collector number if unique by edition + name
+            if (!foundId.HasValue)
+            {
+                using var countCmd = con.CreateCommand();
+                countCmd.CommandText = $"SELECT {idCol}, {mtgsCol} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE AND {nameCol}=@nm COLLATE NOCASE";
+                countCmd.Parameters.AddWithValue("@e", edition);
+                countCmd.Parameters.AddWithValue("@nm", name);
+                var matches = new List<(int id, object? mtgs)>();
+                using (var rb = countCmd.ExecuteReader())
+                {
+                    while (rb.Read())
+                    {
+                        int idv = rb.IsDBNull(0) ? -1 : rb.GetInt32(0);
+                        object? mtgsv = rb.IsDBNull(1) ? null : rb.GetValue(1);
+                        if (idv >= 0) matches.Add((idv, mtgsv));
+                    }
+                }
+                if (matches.Count == 1) { foundId = matches[0].id; foundMtgs = matches[0].mtgs; }
+            }
+
+            if (foundId.HasValue)
+            {
+                string? existingVal = foundMtgs?.ToString();
+                bool isEmpty = string.IsNullOrWhiteSpace(existingVal) || existingVal == "0";
+
+                int? origQty = null;
+                if (hasQtyCol)
+                {
+                    using var qcmd = con.CreateCommand();
+                    qcmd.CommandText = $"SELECT Qty FROM Cards WHERE {idCol}=@id";
+                    qcmd.Parameters.AddWithValue("@id", foundId.Value);
+                    var qobj = qcmd.ExecuteScalar();
+                    if (qobj != null && qobj != DBNull.Value && int.TryParse(qobj.ToString(), out var oq)) origQty = oq;
+                }
+
+                if (isEmpty)
+                {
+                    updatedMtgs++;
+                    updateLines.Add($"{edition}|{name}|{cardNum} | WOULD UPDATE id={foundId.Value} MtgsId={mtgsId}");
+                    plan.Entries.Add(new StudioCsvPlanEntry(StudioMatchKind.Update, mtgsId, foundId.Value, origQty, edition, name, cardNum, line));
+                }
+                else if (existingVal != mtgsId.ToString())
+                {
+                    conflicts++;
+                    plan.Entries.Add(new StudioCsvPlanEntry(StudioMatchKind.Conflict, mtgsId, foundId.Value, origQty, edition, name, cardNum, line, existingVal));
+                }
+                else
+                {
+                    skippedExisting++;
+                    plan.Entries.Add(new StudioCsvPlanEntry(StudioMatchKind.SkippedAlreadyMapped, mtgsId, foundId.Value, origQty, edition, name, cardNum, line, existingVal));
+                }
+            }
+            else
+            {
+                unmatchedInsertLines.Add(line + " | UNMATCHED");
+                plan.Entries.Add(new StudioCsvPlanEntry(StudioMatchKind.Unmatched, mtgsId, null, null, edition, name, cardNum, line));
+            }
+
+PrepareNext:
+            try { progress?.Invoke(processed, total); } catch { }
+        }
+
+        // Write plan-stage logs
+        try
+        {
+            string dir = Path.GetDirectoryName(csvPath) ?? string.Empty;
+            string baseName = Path.GetFileNameWithoutExtension(csvPath) + ".studio";
+            void WriteIfAny(List<string> list, string label)
+            {
+                if (list.Count == 0) return;
+                File.WriteAllLines(Path.Combine(dir, $"{baseName}-{label}.dryrun.csv"), list);
+            }
+            WriteIfAny(updateLines, "updates");
+            WriteIfAny(unmatchedInsertLines, "unmatched");
+            unmatchedLogPath = unmatchedInsertLines.Count > 0 ? Path.Combine(dir, $"{baseName}-unmatched.dryrun.csv") : null;
+        }
+        catch { }
+
+        int unmatchedCount = plan.Entries.Count(e => e.Kind == StudioMatchKind.Unmatched);
+        var result = new CsvMtgsMapResult(updatedMtgs, 0, skippedExisting, conflicts, errors, dbPath, unmatchedLogPath);
+        return (result, plan);
+    }
+
+    /// <summary>
+    /// Applies a previously prepared plan: writes MtgsId, transfers qty, rekeys ids, and optionally inserts unmatched rows.
+    /// </summary>
+    public static CsvMtgsMapResult ApplyStudioCsvPlan(StudioCsvPlan plan, bool insertMissing = false, Action<int, int>? progress = null)
+    {
+        if (!File.Exists(plan.DbPath)) throw new FileNotFoundException("mainDb.db not found", plan.DbPath);
+        string exeDir = Path.GetDirectoryName(plan.DbPath)!;
+
+        int updatedMtgs = 0, inserted = 0, skippedExisting = 0, conflicts = 0, errors = 0;
+        int qtyMoveSuccess = 0, qtyMoveFail = 0, qtyMoveSkippedNoQty = 0, qtyMoveAttempted = 0;
+        int idRekeySuccess = 0, idRekeyFail = 0;
+        string? unmatchedLogPath = null;
+        var updateLogLines = new List<string>();
+        var unmatchedLogLines = new List<string>();
+        var errorLogLines = new List<string>();
+        var debugLogLines = new List<string>();
+
+        string idCol = plan.IdCol;
+        string mtgsCol = plan.MtgsCol;
+        bool hasQtyCol = plan.HasQtyCol;
+
+        using var con = new SqliteConnection($"Data Source={plan.DbPath}");
+        con.Open();
+
+        var updates = plan.Entries.Where(e => e.Kind == StudioMatchKind.Update).ToList();
+        var unmatched = plan.Entries.Where(e => e.Kind == StudioMatchKind.Unmatched).ToList();
+        skippedExisting = plan.Entries.Count(e => e.Kind == StudioMatchKind.SkippedAlreadyMapped || e.Kind == StudioMatchKind.SkippedDuplicate);
+        conflicts = plan.Entries.Count(e => e.Kind == StudioMatchKind.Conflict);
+        errors = plan.Entries.Count(e => e.Kind == StudioMatchKind.Error);
+
+        int total = updates.Count + (insertMissing ? unmatched.Count : 0);
+        int processed = 0;
+
+        foreach (var entry in updates)
+        {
+            processed++;
+            try
+            {
+                using var upd = con.CreateCommand();
+                upd.CommandText = $"UPDATE Cards SET {mtgsCol}=@m WHERE {idCol}=@id";
+                upd.Parameters.AddWithValue("@m", entry.MtgsId);
+                upd.Parameters.AddWithValue("@id", entry.FoundId!.Value);
+                upd.ExecuteNonQuery();
+                updatedMtgs++;
+                string qtyMoveNote = string.Empty;
+
+                // Determine rekey feasibility FIRST so CollectionCards and Cards.id stay consistent
+                bool canRekey = false;
+                bool wasRekeyed = false;
+                string rekeyNote = string.Empty;
+                if (entry.FoundId!.Value != entry.MtgsId)
+                {
+                    canRekey = true;
+                    using (var chk2 = con.CreateCommand())
+                    {
+                        chk2.CommandText = $"SELECT 1 FROM Cards WHERE {idCol}=@nid LIMIT 1";
+                        chk2.Parameters.AddWithValue("@nid", entry.MtgsId);
+                        var exists = chk2.ExecuteScalar();
+                        if (exists != null && exists != DBNull.Value) canRekey = false;
+                    }
+                }
+
+                // Rekey Cards.id before touching CollectionCards so both stay in sync
+                if (canRekey)
+                {
+                    using var rk = con.CreateCommand();
+                    rk.CommandText = $"UPDATE Cards SET {idCol}=@newId WHERE {idCol}=@oldId";
+                    rk.Parameters.AddWithValue("@newId", entry.MtgsId);
+                    rk.Parameters.AddWithValue("@oldId", entry.FoundId!.Value);
+                    int changed = rk.ExecuteNonQuery();
+                    if (changed == 1) { wasRekeyed = true; rekeyNote = $"; rekeyed {entry.FoundId.Value}->{entry.MtgsId}"; idRekeySuccess++; }
+                    else { rekeyNote = "; rekey-nochange"; idRekeyFail++; }
+                }
+                else if (entry.FoundId!.Value != entry.MtgsId)
+                {
+                    rekeyNote = "; rekey-skip target-exists"; idRekeyFail++;
+                }
+
+                // The collection CardId to use: MtgsId if rekey succeeded (Cards.id is now MtgsId),
+                // otherwise keep using the internal id so CollectionCards stays consistent with Cards.id.
+                int collectionCardId = wasRekeyed ? entry.MtgsId : entry.FoundId!.Value;
+
+                // Rekey existing CollectionCards rows only if Cards.id was actually rekeyed
+                string collectionPath = Path.Combine(exeDir, "mtgstudio.collection");
+                if (wasRekeyed && File.Exists(collectionPath))
+                {
+                    try
+                    {
+                        using var conFix = new SqliteConnection($"Data Source={collectionPath}");
+                        conFix.Open();
+                        using var fix = conFix.CreateCommand();
+                        fix.CommandText = "UPDATE CollectionCards SET CardId=@mtgs WHERE CardId=@internal AND NOT EXISTS (SELECT 1 FROM CollectionCards WHERE CardId=@mtgs)";
+                        fix.Parameters.AddWithValue("@mtgs", entry.MtgsId);
+                        fix.Parameters.AddWithValue("@internal", entry.FoundId!.Value);
+                        fix.ExecuteNonQuery();
+                    }
+                    catch { /* best effort; reverse map fix in Load() provides safety net */ }
+                }
+
+                // Qty transfer from mainDb to collection
+                if (hasQtyCol && entry.OrigQty.HasValue)
+                {
+                    qtyMoveAttempted++;
+                    if (File.Exists(collectionPath))
+                    {
+                        bool success = false; string? failReason = null;
+                        try
+                        {
+                            using var conCol = new SqliteConnection($"Data Source={collectionPath}");
+                            conCol.Open();
+                            int affected = 0;
+                            using (var u = conCol.CreateCommand())
+                            {
+                                u.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
+                                u.Parameters.AddWithValue("@q", entry.OrigQty.Value);
+                                u.Parameters.AddWithValue("@id", collectionCardId);
+                                affected = u.ExecuteNonQuery();
+                            }
+                            if (affected == 0)
+                            {
+                                using var ins = conCol.CreateCommand();
+                                ins.CommandText = @"INSERT INTO CollectionCards 
+                        (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)
+                        VALUES (@id,@q,0,0.0,0.0,0.0,0,0,0,0,0,'','',0,'',1,0,0,@added)";
+                                ins.Parameters.AddWithValue("@id", collectionCardId);
+                                ins.Parameters.AddWithValue("@q", entry.OrigQty.Value);
+                                ins.Parameters.AddWithValue("@added", DateTime.Now.ToString("s").Replace('T', ' '));
+                                ins.ExecuteNonQuery();
+                            }
+                            success = true;
+                        }
+                        catch (Exception ex) { success = false; failReason = ex.Message; }
+                        if (success)
+                        {
+                            // Clear mainDb Qty now that collection has the value
+                            int clearId = wasRekeyed ? entry.MtgsId : entry.FoundId!.Value;
+                            using var clr = con.CreateCommand();
+                            clr.CommandText = $"UPDATE Cards SET Qty=NULL WHERE {idCol}=@id";
+                            clr.Parameters.AddWithValue("@id", clearId);
+                            clr.ExecuteNonQuery();
+                            qtyMoveSuccess++;
+                            qtyMoveNote = "; qty moved";
+                        }
+                        else { qtyMoveFail++; qtyMoveNote = $"; qty move FAILED: {Truncate(failReason, 60)}"; }
+                    }
+                    else { qtyMoveFail++; qtyMoveNote = "; collection file missing"; }
+                }
+                else if (hasQtyCol) { qtyMoveSkippedNoQty++; }
+
+                updateLogLines.Add($"{entry.Edition}|{entry.Name}|{entry.CardNum} | UPDATE id={entry.FoundId.Value} MtgsId={entry.MtgsId}" + qtyMoveNote + rekeyNote);
+                debugLogLines.Add($"ID={entry.FoundId.Value}|mtgs={entry.MtgsId}|origQty={entry.OrigQty?.ToString() ?? "NULL"}|status=updated" + qtyMoveNote + rekeyNote);
+            }
+            catch
+            {
+                errors++;
+                errorLogLines.Add(entry.RawLine + " | ERROR update failed");
+            }
+            try { progress?.Invoke(processed, total); } catch { }
+        }
+
+        // Insert unmatched if requested
+        if (insertMissing)
+        {
+            // Detect edition/number column names (needed for INSERT)
+            var dbCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var pragma = con.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA table_info(Cards)";
+                using var r = pragma.ExecuteReader();
+                while (r.Read()) { try { dbCols.Add(r.GetString(1)); } catch { } }
+            }
+            string editionCol = dbCols.Contains("edition") ? "edition" : (dbCols.Contains("set") ? "set" : "edition");
+            string numberCol = dbCols.Contains("collectorNumberValue") ? "collectorNumberValue" : (dbCols.Contains("numberValue") ? "numberValue" : "collectorNumberValue");
+            string nameCol = dbCols.Contains("name") ? "name" : "name";
+
+            foreach (var entry in unmatched)
+            {
+                processed++;
+                int newId = entry.MtgsId;
+                using (var chkId = con.CreateCommand())
+                {
+                    chkId.CommandText = $"SELECT 1 FROM Cards WHERE {idCol}=@id LIMIT 1";
+                    chkId.Parameters.AddWithValue("@id", newId);
+                    var exists = chkId.ExecuteScalar();
+                    if (exists != null && exists != DBNull.Value)
+                    {
+                        using var getMax = con.CreateCommand();
+                        getMax.CommandText = $"SELECT COALESCE(MAX({idCol}), 0) + 1 FROM Cards";
+                        var maxObj = getMax.ExecuteScalar();
+                        newId = Convert.ToInt32(maxObj);
+                    }
+                }
+                using var ins = con.CreateCommand();
+                ins.CommandText = $"INSERT INTO Cards ({idCol},{editionCol},{numberCol},{nameCol},{mtgsCol}) VALUES (@id,@e,@n,@nm,@m)";
+                ins.Parameters.AddWithValue("@id", newId);
+                ins.Parameters.AddWithValue("@e", entry.Edition);
+                ins.Parameters.AddWithValue("@n", (object?)entry.CardNum ?? DBNull.Value);
+                ins.Parameters.AddWithValue("@nm", entry.Name);
+                ins.Parameters.AddWithValue("@m", entry.MtgsId);
+                try { ins.ExecuteNonQuery(); inserted++; }
+                catch { errors++; errorLogLines.Add(entry.RawLine + " | ERROR insert failed"); }
+                unmatchedLogLines.Add(entry.RawLine + " | INSERTED");
+                try { progress?.Invoke(processed, total); } catch { }
+            }
+        }
+
+        // Write apply-stage logs
+        updateLogLines.Add($"# SUMMARY updated={updatedMtgs} inserted={inserted} skipped={skippedExisting} conflicts={conflicts} errors={errors} qtyMoved={qtyMoveSuccess} qtyFail={qtyMoveFail} rekeyOk={idRekeySuccess} rekeyFail={idRekeyFail}");
+        try
+        {
+            string dir = Path.GetDirectoryName(plan.CsvPath) ?? string.Empty;
+            string baseName = Path.GetFileNameWithoutExtension(plan.CsvPath) + ".studio";
+            void WriteIfAny(List<string> list, string label)
+            {
+                if (list.Count == 0) return;
+                File.WriteAllLines(Path.Combine(dir, $"{baseName}-{label}.apply.csv"), list);
+            }
+            WriteIfAny(errorLogLines, "errors");
+            WriteIfAny(updateLogLines, "updates");
+            WriteIfAny(unmatchedLogLines, "unmatched");
+            WriteIfAny(debugLogLines, "debug");
+            unmatchedLogPath = unmatchedLogLines.Count > 0 ? Path.Combine(dir, $"{baseName}-unmatched.apply.csv") : null;
+        }
+        catch { }
+
+        return new CsvMtgsMapResult(updatedMtgs, inserted, skippedExisting, conflicts, errors, plan.DbPath, unmatchedLogPath);
+    }
+
+    /// <summary>
+    /// Processes an MTG Studio Collection CSV export (comma-delimited with header).
+    /// Maps CardId (= MtgsId) onto matching mainDb rows by edition + name + collector number,
+    /// transfers quantities to mtgstudio.collection, and rekeys internal ids.
+    /// </summary>
+    public static CsvMtgsMapResult ProcessMtgsStudioCsv(string csvPath, bool dryRun = true, bool insertMissing = false, Action<int, int>? progress = null)
+    {
+        if (string.IsNullOrWhiteSpace(csvPath)) throw new ArgumentException("csvPath required");
+        if (!File.Exists(csvPath)) throw new FileNotFoundException("CSV file not found", csvPath);
+        string exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string dbPath = Path.Combine(exeDir, "mainDb.db");
+        if (!File.Exists(dbPath)) throw new FileNotFoundException("mainDb.db not found in executable directory", dbPath);
+
+        var allLines = File.ReadAllLines(csvPath);
+        if (allLines.Length < 2) return new CsvMtgsMapResult(0, 0, 0, 0, 0, dbPath, null);
+
+        // Parse header to find column indices
+        var header = SplitCommaCsv(allLines[0]);
+        int colCardId = Array.FindIndex(header, h => h.Equals("CardId", StringComparison.OrdinalIgnoreCase));
+        int colName = Array.FindIndex(header, h => h.Equals("Name", StringComparison.OrdinalIgnoreCase));
+        int colSet = Array.FindIndex(header, h => h.Equals("SetAbbreviation", StringComparison.OrdinalIgnoreCase));
+        int colNumber = Array.FindIndex(header, h => h.Equals("CollectorNoSortable", StringComparison.OrdinalIgnoreCase));
+        if (colCardId < 0 || colName < 0 || colSet < 0 || colNumber < 0)
+            throw new InvalidOperationException("CSV header missing required columns: CardId, Name, SetAbbreviation, CollectorNoSortable");
+
+        int updatedMtgs = 0, inserted = 0, skippedExisting = 0, conflicts = 0, errors = 0;
+        string? unmatchedLogPath = null;
+        var errorLines = new List<string>();
+        var conflictLines = new List<string>();
+        var skippedLines = new List<string>();
+        var updateLines = new List<string>();
+        var unmatchedInsertLines = new List<string>();
+        var debugLines = new List<string>();
+        int qtyMoveSuccess = 0, qtyMoveFail = 0, qtyMoveSkippedNoQty = 0, qtyMoveAttempted = 0;
+        int idRekeySuccess = 0, idRekeyFail = 0;
+
+        using var con = new SqliteConnection($"Data Source={dbPath}");
+        con.Open();
+
+        // Detect DB column names
+        var dbCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var pragma = con.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA table_info(Cards)";
+            using var r = pragma.ExecuteReader();
+            while (r.Read()) { try { dbCols.Add(r.GetString(1)); } catch { } }
+        }
+        string idCol = dbCols.Contains("id") ? "id" : (dbCols.Contains("cardId") ? "cardId" : "id");
+        string editionCol = dbCols.Contains("edition") ? "edition" : (dbCols.Contains("set") ? "set" : "edition");
+        string numberCol = dbCols.Contains("collectorNumberValue") ? "collectorNumberValue" : (dbCols.Contains("numberValue") ? "numberValue" : "collectorNumberValue");
+        string nameCol = dbCols.Contains("name") ? "name" : "name";
+        string mtgsCol = dbCols.Contains("MtgsId") ? "MtgsId" : (dbCols.Contains("mtgsid") ? "mtgsid" : (dbCols.Contains("MTGSID") ? "MTGSID" : ""));
+        if (string.IsNullOrEmpty(mtgsCol)) throw new InvalidOperationException("Cards table has no MtgsId column.");
+        bool hasQtyCol = dbCols.Contains("Qty");
+
+        int total = allLines.Length - 1;
+        int processed = 0;
+        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 1; i < allLines.Length; i++)
+        {
+            var line = allLines[i];
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            processed++;
+            var csv = SplitCommaCsv(line);
+            int minCol = Math.Max(Math.Max(colCardId, colName), Math.Max(colSet, colNumber)) + 1;
+            if (csv.Length < minCol) { errors++; errorLines.Add(line + " | ERROR too few columns"); continue; }
+
+            string cardIdStr = csv[colCardId].Trim();
+            string name = csv[colName].Trim();
+            string edition = csv[colSet].Trim();
+            string rawNum = csv[colNumber].Trim();
+            if (!int.TryParse(cardIdStr, out int mtgsId) || mtgsId <= 0)
+            { errors++; errorLines.Add(line + " | ERROR invalid CardId"); continue; }
+
+            string cardNumParsed = ParseCollectorNumber(rawNum);
+            string? cardNum = string.IsNullOrWhiteSpace(cardNumParsed) ? null : cardNumParsed;
+
+            // Deduplicate
+            string key = string.Join("|", edition.ToLowerInvariant(), name.ToLowerInvariant(), cardNum ?? "");
+            if (!seenKeys.Add(key)) { skippedExisting++; skippedLines.Add(line + " | SKIPPED duplicate CSV row"); goto StudioNextRow; }
+
+            // Skip if MtgsId already mapped
+            using (var chk = con.CreateCommand())
+            {
+                chk.CommandText = $"SELECT 1 FROM Cards WHERE {mtgsCol}=@m LIMIT 1";
+                chk.Parameters.AddWithValue("@m", mtgsId);
+                var exists = chk.ExecuteScalar();
+                if (exists != null && exists != DBNull.Value) { skippedExisting++; skippedLines.Add(line + " | SKIPPED MtgsId already mapped"); continue; }
+            }
+
+            // Find by edition + name + number
+            int? foundId = null; object? foundMtgs = null;
+            using (var find = con.CreateCommand())
+            {
+                var sb = new StringBuilder();
+                sb.Append($"SELECT {idCol}, {mtgsCol} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE");
+                if (cardNum == null)
+                    sb.Append($" AND ({numberCol} IS NULL OR TRIM({numberCol})='')");
+                else
+                    sb.Append($" AND {numberCol}=@n");
+                sb.Append($" AND {nameCol}=@nm COLLATE NOCASE LIMIT 1");
+                find.CommandText = sb.ToString();
+                find.Parameters.AddWithValue("@e", edition);
+                if (cardNum != null) find.Parameters.AddWithValue("@n", cardNum);
+                find.Parameters.AddWithValue("@nm", name);
+                using var rr = find.ExecuteReader();
+                if (rr.Read())
+                {
+                    foundId = rr.IsDBNull(0) ? null : rr.GetInt32(0);
+                    foundMtgs = rr.IsDBNull(1) ? null : rr.GetValue(1);
+                }
+            }
+
+            // Fallback: name with "/" → try " // " form
+            if (!foundId.HasValue && name.Contains('/') && !name.Contains(" // "))
+            {
+                string alt = Regex.Replace(name, @"\s*/\s*", " // ").Trim();
+                if (!string.Equals(alt, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    using var findAlt = con.CreateCommand();
+                    var sb = new StringBuilder();
+                    sb.Append($"SELECT {idCol}, {mtgsCol} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE");
+                    if (cardNum == null)
+                        sb.Append($" AND ({numberCol} IS NULL OR TRIM({numberCol})='')");
+                    else
+                        sb.Append($" AND {numberCol}=@n");
+                    sb.Append($" AND {nameCol}=@nm COLLATE NOCASE LIMIT 1");
+                    findAlt.CommandText = sb.ToString();
+                    findAlt.Parameters.AddWithValue("@e", edition);
+                    if (cardNum != null) findAlt.Parameters.AddWithValue("@n", cardNum);
+                    findAlt.Parameters.AddWithValue("@nm", alt);
+                    using var ra = findAlt.ExecuteReader();
+                    if (ra.Read())
+                    {
+                        foundId = ra.IsDBNull(0) ? null : ra.GetInt32(0);
+                        foundMtgs = ra.IsDBNull(1) ? null : ra.GetValue(1);
+                    }
+                }
+            }
+
+            // Second fallback: ignore collector number if unique by edition + name
+            if (!foundId.HasValue)
+            {
+                using var countCmd = con.CreateCommand();
+                countCmd.CommandText = $"SELECT {idCol}, {mtgsCol} FROM Cards WHERE {editionCol}=@e COLLATE NOCASE AND {nameCol}=@nm COLLATE NOCASE";
+                countCmd.Parameters.AddWithValue("@e", edition);
+                countCmd.Parameters.AddWithValue("@nm", name);
+                var matches = new List<(int id, object? mtgs)>();
+                using (var rb = countCmd.ExecuteReader())
+                {
+                    while (rb.Read())
+                    {
+                        int idv = rb.IsDBNull(0) ? -1 : rb.GetInt32(0);
+                        object? mtgsv = rb.IsDBNull(1) ? null : rb.GetValue(1);
+                        if (idv >= 0) matches.Add((idv, mtgsv));
+                    }
+                }
+                if (matches.Count == 1)
+                {
+                    foundId = matches[0].id;
+                    foundMtgs = matches[0].mtgs;
+                }
+            }
+
+            if (foundId.HasValue)
+            {
+                string? existingVal = foundMtgs?.ToString();
+                bool isEmpty = string.IsNullOrWhiteSpace(existingVal) || existingVal == "0";
+
+                int? origQty = null;
+                if (hasQtyCol)
+                {
+                    using var qcmd = con.CreateCommand();
+                    qcmd.CommandText = $"SELECT Qty FROM Cards WHERE {idCol}=@id";
+                    qcmd.Parameters.AddWithValue("@id", foundId.Value);
+                    var qobj = qcmd.ExecuteScalar();
+                    if (qobj != null && qobj != DBNull.Value && int.TryParse(qobj.ToString(), out var oq)) origQty = oq;
+                }
+
+                if (isEmpty)
+                {
+                    if (!dryRun)
+                    {
+                        using var upd = con.CreateCommand();
+                        upd.CommandText = $"UPDATE Cards SET {mtgsCol}=@m WHERE {idCol}=@id";
+                        upd.Parameters.AddWithValue("@m", mtgsId);
+                        upd.Parameters.AddWithValue("@id", foundId.Value);
+                        try
+                        {
+                            upd.ExecuteNonQuery();
+                            updatedMtgs++;
+                            string qtyMoveNote = string.Empty;
+
+                            // Pre-check whether Cards.id rekey will succeed
+                            bool canRekey3 = false;
+                            bool wasRekeyed3 = false;
+                            string rekeyNote = string.Empty;
+                            if (foundId.Value != mtgsId)
+                            {
+                                canRekey3 = true;
+                                using (var chk2 = con.CreateCommand())
+                                {
+                                    chk2.CommandText = $"SELECT 1 FROM Cards WHERE {idCol}=@nid LIMIT 1";
+                                    chk2.Parameters.AddWithValue("@nid", mtgsId);
+                                    var exists = chk2.ExecuteScalar();
+                                    if (exists != null && exists != DBNull.Value) canRekey3 = false;
+                                }
+                            }
+
+                            // Rekey Cards.id first so CollectionCards stays consistent
+                            if (canRekey3)
+                            {
+                                using var rk = con.CreateCommand();
+                                rk.CommandText = $"UPDATE Cards SET {idCol}=@newId WHERE {idCol}=@oldId";
+                                rk.Parameters.AddWithValue("@newId", mtgsId);
+                                rk.Parameters.AddWithValue("@oldId", foundId.Value);
+                                int changed = rk.ExecuteNonQuery();
+                                if (changed == 1) { wasRekeyed3 = true; rekeyNote = $"; rekeyed {foundId.Value}->{mtgsId}"; idRekeySuccess++; }
+                                else { rekeyNote = "; rekey-nochange"; idRekeyFail++; }
+                            }
+                            else if (foundId.Value != mtgsId)
+                            {
+                                rekeyNote = "; rekey-skip target-exists"; idRekeyFail++;
+                            }
+
+                            int collectionCardId3 = wasRekeyed3 ? mtgsId : foundId.Value;
+
+                            // Rekey CollectionCards only if Cards.id was rekeyed
+                            string collectionPath = Path.Combine(exeDir, "mtgstudio.collection");
+                            if (wasRekeyed3 && File.Exists(collectionPath))
+                            {
+                                try
+                                {
+                                    using var conFix = new SqliteConnection($"Data Source={collectionPath}");
+                                    conFix.Open();
+                                    using var fix = conFix.CreateCommand();
+                                    fix.CommandText = "UPDATE CollectionCards SET CardId=@mtgs WHERE CardId=@internal AND NOT EXISTS (SELECT 1 FROM CollectionCards WHERE CardId=@mtgs)";
+                                    fix.Parameters.AddWithValue("@mtgs", mtgsId);
+                                    fix.Parameters.AddWithValue("@internal", foundId.Value);
+                                    fix.ExecuteNonQuery();
+                                }
+                                catch { /* best effort; reverse map fix in Load() provides safety net */ }
+                            }
+
+                            // Qty transfer: move qty from mainDb to collection
+                            if (hasQtyCol && origQty.HasValue)
+                            {
+                                qtyMoveAttempted++;
+                                if (File.Exists(collectionPath))
+                                {
+                                    bool success = false; string? failReason = null;
+                                    try
+                                    {
+                                        using var conCol = new SqliteConnection($"Data Source={collectionPath}");
+                                        conCol.Open();
+                                        int affected = 0;
+                                        using (var u = conCol.CreateCommand())
+                                        {
+                                            u.CommandText = "UPDATE CollectionCards SET Qty=@q WHERE CardId=@id";
+                                            u.Parameters.AddWithValue("@q", origQty.Value);
+                                            u.Parameters.AddWithValue("@id", collectionCardId3);
+                                            affected = u.ExecuteNonQuery();
+                                        }
+                                        if (affected == 0)
+                                        {
+                                            using var ins = conCol.CreateCommand();
+                                            ins.CommandText = @"INSERT INTO CollectionCards 
+                            (CardId,Qty,Used,BuyAt,SellAt,Price,Needed,Excess,Target,ConditionId,Foil,Notes,Storage,DesiredId,[Group],PrintTypeId,Buy,Sell,Added)
+                            VALUES (@id,@q,0,0.0,0.0,0.0,0,0,0,0,0,'','',0,'',1,0,0,@added)";
+                                            ins.Parameters.AddWithValue("@id", collectionCardId3);
+                                            ins.Parameters.AddWithValue("@q", origQty.Value);
+                                            ins.Parameters.AddWithValue("@added", DateTime.Now.ToString("s").Replace('T', ' '));
+                                            ins.ExecuteNonQuery();
+                                        }
+                                        success = true;
+                                    }
+                                    catch (Exception ex) { success = false; failReason = ex.Message; }
+                                    if (success)
+                                    {
+                                        int clearId = wasRekeyed3 ? mtgsId : foundId.Value;
+                                        using var clr = con.CreateCommand();
+                                        clr.CommandText = $"UPDATE Cards SET Qty=NULL WHERE {idCol}=@id";
+                                        clr.Parameters.AddWithValue("@id", clearId);
+                                        clr.ExecuteNonQuery();
+                                        qtyMoveSuccess++;
+                                        qtyMoveNote = "; qty moved";
+                                    }
+                                    else
+                                    {
+                                        qtyMoveFail++;
+                                        qtyMoveNote = $"; qty move FAILED: {Truncate(failReason, 60)}";
+                                    }
+                                }
+                                else { qtyMoveFail++; qtyMoveNote = "; collection file missing"; }
+                            }
+                            else if (hasQtyCol) { qtyMoveSkippedNoQty++; }
+
+                            updateLines.Add($"{edition}|{name}|{cardNum} | UPDATE id={foundId.Value} MtgsId={mtgsId}" + qtyMoveNote + rekeyNote);
+                            debugLines.Add($"ID={foundId.Value}|mtgs={mtgsId}|origQty={origQty?.ToString() ?? "NULL"}|status=updated" + qtyMoveNote + rekeyNote);
+                        }
+                        catch { errors++; errorLines.Add(line + " | ERROR update failed"); }
+                    }
+                    else
+                    {
+                        updatedMtgs++;
+                        updateLines.Add($"{edition}|{name}|{cardNum} | WOULD UPDATE id={foundId.Value} MtgsId={mtgsId}");
+                    }
+                }
+                else if (existingVal != mtgsId.ToString())
+                {
+                    conflicts++;
+                    conflictLines.Add($"{edition}|{name}|{cardNum} | CONFLICT existing MtgsId={existingVal} at id={foundId}");
+                }
+                else
+                {
+                    skippedExisting++;
+                    skippedLines.Add($"{edition}|{name}|{cardNum} | SKIPPED same MtgsId={mtgsId}");
+                    debugLines.Add($"ID={foundId.Value}|mtgs={mtgsId}|status=already-mapped");
+                }
+            }
+            else
+            {
+                unmatchedInsertLines.Add(line + " | UNMATCHED");
+                if (!dryRun && insertMissing)
+                {
+                    int newId = mtgsId;
+                    using (var chkId = con.CreateCommand())
+                    {
+                        chkId.CommandText = $"SELECT 1 FROM Cards WHERE {idCol}=@id LIMIT 1";
+                        chkId.Parameters.AddWithValue("@id", newId);
+                        var exists = chkId.ExecuteScalar();
+                        if (exists != null && exists != DBNull.Value)
+                        {
+                            using var getMax = con.CreateCommand();
+                            getMax.CommandText = $"SELECT COALESCE(MAX({idCol}), 0) + 1 FROM Cards";
+                            var maxObj = getMax.ExecuteScalar();
+                            newId = Convert.ToInt32(maxObj);
+                        }
+                    }
+                    using var ins = con.CreateCommand();
+                    ins.CommandText = $"INSERT INTO Cards ({idCol},{editionCol},{numberCol},{nameCol},{mtgsCol}) VALUES (@id,@e,@n,@nm,@m)";
+                    ins.Parameters.AddWithValue("@id", newId);
+                    ins.Parameters.AddWithValue("@e", edition);
+                    ins.Parameters.AddWithValue("@n", (object?)cardNum ?? DBNull.Value);
+                    ins.Parameters.AddWithValue("@nm", name);
+                    ins.Parameters.AddWithValue("@m", mtgsId);
+                    try { ins.ExecuteNonQuery(); inserted++; } catch { errors++; errorLines.Add(line + " | ERROR insert failed"); }
+                }
+            }
+
+StudioNextRow:
+            try { progress?.Invoke(processed, total); } catch { }
+        }
+
+        // Write categorized logs
+        updateLines.Add($"# SUMMARY updated={updatedMtgs} inserted={inserted} skipped={skippedExisting} conflicts={conflicts} errors={errors} qtyMoved={qtyMoveSuccess} qtyFail={qtyMoveFail} rekeyOk={idRekeySuccess} rekeyFail={idRekeyFail}");
+        try
+        {
+            string dir = Path.GetDirectoryName(csvPath) ?? string.Empty;
+            string baseName = Path.GetFileNameWithoutExtension(csvPath) + ".studio";
+            string stage = dryRun ? "dryrun" : "apply";
+            string PathFor(string label) => Path.Combine(dir, $"{baseName}-{label}.{stage}.csv");
+            void WriteIfAny(List<string> list, string label)
+            {
+                if (list.Count == 0) return;
+                File.WriteAllLines(PathFor(label), list);
+            }
+            WriteIfAny(errorLines, "errors");
+            WriteIfAny(conflictLines, "conflicts");
+            WriteIfAny(skippedLines, "skipped");
+            WriteIfAny(updateLines, "updates");
+            WriteIfAny(unmatchedInsertLines, "unmatched");
+            WriteIfAny(debugLines, "debug");
+            unmatchedLogPath = unmatchedInsertLines.Count > 0 ? PathFor("unmatched") : null;
+        }
+        catch { }
+
+        return new CsvMtgsMapResult(updatedMtgs, inserted, skippedExisting, conflicts, errors, dbPath, unmatchedLogPath);
+    }
+
+    private static string[] SplitCommaCsv(string line)
+    {
+        var result = new List<string>();
+        var sb = new StringBuilder();
+        bool inQuotes = false;
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (inQuotes)
+            {
+                if (c == '"')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '"')
+                    {
+                        sb.Append('"');
+                        i++;
+                    }
+                    else
+                    {
+                        inQuotes = false;
+                    }
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            else
+            {
+                if (c == '"')
+                {
+                    inQuotes = true;
+                }
+                else if (c == ',')
+                {
+                    result.Add(sb.ToString());
+                    sb.Clear();
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+        }
+        result.Add(sb.ToString());
+        for (int i = 0; i < result.Count; i++)
+        {
+            result[i] = result[i].Trim();
+        }
+        return result.ToArray();
+    }
+
     public static CsvUpdateResult Process(string csvPath, string? explicitDbPath = null, Action<int,int>? progress = null)
     {
         if (string.IsNullOrWhiteSpace(csvPath)) throw new ArgumentException("csvPath required");

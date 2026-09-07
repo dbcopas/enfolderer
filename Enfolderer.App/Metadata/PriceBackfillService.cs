@@ -25,13 +25,19 @@ public class PriceBackfillService
     private readonly HashSet<string> _inFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly Action<string>? _setStatus;
     private readonly Func<string>? _getDisplayMode;
+    private readonly Action? _notifyPriceSummaryChanged;
     private string _priceDisplayMode => _getDisplayMode?.Invoke() ?? "Missing";
 
-    public PriceBackfillService(ICardMetadataResolver resolver, Action<string>? setStatus = null, Func<string>? getDisplayMode = null)
+    public PriceBackfillService(
+        ICardMetadataResolver resolver,
+        Action<string>? setStatus = null,
+        Func<string>? getDisplayMode = null,
+        Action? notifyPriceSummaryChanged = null)
     {
         _resolver = resolver;
         _setStatus = setStatus;
         _getDisplayMode = getDisplayMode;
+        _notifyPriceSummaryChanged = notifyPriceSummaryChanged;
     }
 
     /// <summary>
@@ -158,7 +164,10 @@ public class PriceBackfillService
         }
         NotifyStatus($"Prices fetched: {fetched}/{needPrice.Count} cards.");
         if (fetched > 0)
+        {
             CardPriceStore.SaveToDisk();
+            try { _notifyPriceSummaryChanged?.Invoke(); } catch { }
+        }
     }
 
     private void NotifyStatus(string msg)
