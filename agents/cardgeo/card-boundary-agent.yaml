@@ -1,7 +1,7 @@
 # Team A ("Geometry") — Azure AI Foundry project: cardgeo
 #
 # This agent is the only asset Team A exposes outside its own project. Team B may *invoke* it
-# (Azure AI Developer, scoped to this agent) but may not read, edit or redeploy it.
+# (Azure AI User on this account) but may not read, edit or redeploy it.
 name: CardBoundaryAgent
 project: cardgeo
 owner: team-a-geometry

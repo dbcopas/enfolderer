@@ -16,7 +16,7 @@ public static class PerspectiveCropper
     /// <summary>Aspect ratio (width / height) of a standard trading card (2.5" x 3.5").</summary>
     public const double StandardCardAspect = 2.5 / 3.5;
 
-    /// <summary>Longest edge of a produced crop, in pixels.</summary>
+    /// <summary>Default height, in pixels, of a produced crop.</summary>
     public const int DefaultOutputHeight = 1024;
 
     public static ImageDimensions ReadDimensions(Stream image)

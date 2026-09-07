@@ -70,11 +70,20 @@ public sealed class FoundryAgentClient
         var runId = RequireString(run, "id", "run id");
 
         var status = await WaitForRunAsync(threadId, runId, ct);
-        if (!string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
+        if (!IsCompleted(status))
             throw new InvalidOperationException($"Agent '{agentId}' run ended with status '{status}'.");
 
         return await ReadLastAssistantMessageAsync(threadId, ct);
     }
+
+    private static bool IsCompleted(string status) =>
+        string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsTerminal(string status) =>
+        IsCompleted(status)
+        || string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(status, "cancelled", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(status, "expired", StringComparison.OrdinalIgnoreCase);
 
     private async Task<string> WaitForRunAsync(string threadId, string runId, CancellationToken ct)
     {
@@ -85,9 +94,9 @@ public sealed class FoundryAgentClient
             using var run = await SendAsync(HttpMethod.Get, $"/threads/{threadId}/runs/{runId}?api-version={_apiVersion}", null, ct);
             var status = RequireString(run, "status", "run status");
 
-            if (status is "completed" or "failed" or "cancelled" or "expired")
+            if (IsTerminal(status))
             {
-                if (status != "completed" && run.RootElement.TryGetProperty("last_error", out var lastError))
+                if (!IsCompleted(status) && run.RootElement.TryGetProperty("last_error", out var lastError))
                     _log.LogError("Foundry run {RunId} failed: {Error}", runId, lastError.ToString());
                 return status;
             }

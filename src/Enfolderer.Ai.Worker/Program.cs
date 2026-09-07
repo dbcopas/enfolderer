@@ -25,7 +25,13 @@ builder.Services.AddSingleton<IJobQueueConsumer>(sp =>
         return new LocalDirectoryQueueConsumer(platform.LocalStorageRoot, sp.GetRequiredService<ILogger<LocalDirectoryQueueConsumer>>());
 
     var queueService = new QueueServiceClient(new Uri(platform.QueueAccountUrl!), sp.GetRequiredService<TokenCredential>());
-    return new StorageQueueConsumer(queueService.GetQueueClient(platform.QueueName), sp.GetRequiredService<ILogger<StorageQueueConsumer>>());
+    // One agent run per detected card, so the initial lease is sized off the agent timeout and
+    // then renewed while the job is in flight.
+    var pipelineOptions = sp.GetRequiredService<ScanPipelineOptions>();
+    return new StorageQueueConsumer(
+        queueService.GetQueueClient(platform.QueueName),
+        pipelineOptions.AgentRunTimeout + TimeSpan.FromMinutes(1),
+        sp.GetRequiredService<ILogger<StorageQueueConsumer>>());
 });
 
 // Team A: the geometry project gets its own client, so a missing RBAC assignment fails here and

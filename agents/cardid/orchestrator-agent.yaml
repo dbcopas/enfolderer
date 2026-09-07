@@ -40,6 +40,6 @@ tools:
 identity:
   role_assignments:
     # Invoke-only on Team A's agent: no read, no edit, no redeploy.
-    - role: Azure AI Developer
+    - role: Azure AI User
       scope: cardgeo/agents/CardBoundaryAgent
       permission: invoke

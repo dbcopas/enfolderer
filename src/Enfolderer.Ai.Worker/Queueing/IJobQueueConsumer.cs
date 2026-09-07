@@ -22,18 +22,29 @@ public interface IJobQueueConsumer
 public sealed class StorageQueueConsumer : IJobQueueConsumer
 {
     private readonly QueueClient _queue;
+    private readonly TimeSpan _visibilityTimeout;
     private readonly ILogger<StorageQueueConsumer> _log;
 
-    public StorageQueueConsumer(QueueClient queue, ILogger<StorageQueueConsumer> log)
+    public StorageQueueConsumer(QueueClient queue, TimeSpan visibilityTimeout, ILogger<StorageQueueConsumer> log)
     {
         _queue = queue;
+        // Azure Storage Queues cap the visibility timeout at seven days.
+        _visibilityTimeout = visibilityTimeout < TimeSpan.FromMinutes(1)
+            ? TimeSpan.FromMinutes(1)
+            : visibilityTimeout > TimeSpan.FromDays(7) ? TimeSpan.FromDays(7) : visibilityTimeout;
         _log = log;
     }
 
     public async Task<bool> TryDequeueAsync(Func<ScanJobMessage, CancellationToken, Task> handler, CancellationToken ct)
     {
-        QueueMessage? message = await _queue.ReceiveMessageAsync(TimeSpan.FromMinutes(10), ct);
+        QueueMessage? message = await _queue.ReceiveMessageAsync(_visibilityTimeout, ct);
         if (message is null) return false;
+
+        // The lease is renewed while the handler runs, so a long job (many cards, one agent run
+        // each) never becomes visible again and gets picked up by a second worker.
+        using var renewal = new CancellationTokenSource();
+        var lease = new MessageLease(message.PopReceipt);
+        var renewalLoop = RenewLeaseAsync(message, lease, renewal.Token);
 
         try
         {
@@ -48,9 +59,43 @@ public sealed class StorageQueueConsumer : IJobQueueConsumer
             // message, so drop it rather than looping on it forever.
             _log.LogError(ex, "Discarding unprocessable queue message {MessageId}.", message.MessageId);
         }
+        finally
+        {
+            renewal.Cancel();
+            try { await renewalLoop; } catch (OperationCanceledException) { }
+        }
 
-        await _queue.DeleteMessageAsync(message.MessageId, message.PopReceipt, ct);
+        await _queue.DeleteMessageAsync(message.MessageId, lease.PopReceipt, ct);
         return true;
+    }
+
+    /// <summary>Latest pop receipt for an in-flight message; each dequeue gets its own.</summary>
+    private sealed class MessageLease(string popReceipt)
+    {
+        public string PopReceipt { get; set; } = popReceipt;
+    }
+
+    /// <summary>Extends the message lease until the handler finishes.</summary>
+    private async Task RenewLeaseAsync(QueueMessage message, MessageLease lease, CancellationToken ct)
+    {
+        var interval = _visibilityTimeout / 2;
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(interval, ct);
+                var updated = await _queue.UpdateMessageAsync(
+                    message.MessageId, lease.PopReceipt, visibilityTimeout: _visibilityTimeout, cancellationToken: ct);
+                lease.PopReceipt = updated.Value.PopReceipt;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not extend the lease on queue message {MessageId}.", message.MessageId);
+        }
     }
 }
 

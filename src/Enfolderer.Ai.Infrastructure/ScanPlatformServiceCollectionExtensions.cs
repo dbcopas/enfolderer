@@ -54,7 +54,7 @@ public static class ScanPlatformServiceCollectionExtensions
             var cosmos = new CosmosClient(
                 options.CosmosEndpoint,
                 sp.GetRequiredService<TokenCredential>(),
-                new CosmosClientOptions { SerializerOptions = new CosmosSerializationOptions { PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase } });
+                new CosmosClientOptions { Serializer = new SystemTextJsonCosmosSerializer() });
             var container = cosmos.GetContainer(options.CosmosDatabase, options.CosmosContainer);
             return new CosmosJobStore(container);
         });
