@@ -65,6 +65,38 @@ $identificationRg = "$prefix-cardid"
 more than one line. Every capture below queries a single scalar, so `$var = az ...` is safe; if you
 adapt one to return several values you will get an array and should add `| Select-Object -First 1`.
 
+### Resuming in a new shell
+
+Variables die with the shell, but nothing you create is lost — every id below is stored in Entra or
+Azure and can be read back. If you close the terminal, reboot, or come back the next day, re-run
+the block above and then this one to rebuild the whole session. Each line is a lookup, so it is
+safe to run at any point and as often as you like:
+
+```powershell
+az login   # only if `az account show` fails
+
+$teamAGroupId = az ad group show --group "Enfolderer Team A (Geometry)"       --query id -o tsv
+$teamBGroupId = az ad group show --group "Enfolderer Team B (Identification)" --query id -o tsv
+
+$apiAppId    = az ad app list --display-name "Enfolderer Scan API" --query "[0].appId" -o tsv
+$clientAppId = az ad app list --display-name "Enfolderer Desktop"  --query "[0].appId" -o tsv
+$scopeId     = az ad app show --id $apiAppId `
+  --query "api.oauth2PermissionScopes[?value=='Scan.Submit'].id" -o tsv
+
+$tenantId = az account show --query tenantId -o tsv
+
+[pscustomobject]@{
+  teamA = $teamAGroupId; teamB = $teamBGroupId
+  api   = $apiAppId;     client = $clientAppId
+  scope = $scopeId;      tenant = $tenantId
+} | Format-List
+```
+
+Anything still blank simply has not been created yet — go to the step that creates it. A blank
+`$clientAppId` before step 2d is expected, for instance. A value you *did* create coming back blank
+almost always means a display-name mismatch: the lookups match on the exact strings above, so if
+you named something differently, adjust the `--display-name` to suit.
+
 ## 1. Create the owner groups
 
 The two Foundry projects are owned by different Entra groups. This is what stops Team B editing
@@ -163,7 +195,8 @@ Graph wants the application's `id`, not its `appId`, and passing the wrong one g
 
 **Everyone does this**, whichever route you took through 2b. If you used the portal, or you have
 opened a new shell since 2a, `$apiAppId` and `$scopeId` are not set — read them back from the
-registration:
+registration (this is the same lookup as
+[Resuming in a new shell](#resuming-in-a-new-shell), narrowed to the two ids this step needs):
 
 ```powershell
 $apiAppId = az ad app list --display-name "Enfolderer Scan API" --query "[0].appId" -o tsv
