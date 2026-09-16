@@ -307,6 +307,7 @@ $params = [ordered]@{
     teamAGroupObjectId = @{ value = $teamAGroupId }
     teamBGroupObjectId = @{ value = $teamBGroupId }
     apiClientId        = @{ value = $apiAppId }
+    singleAccount      = @{ value = $true }
     grantIdentificationAccessToGeometry = @{ value = $true }
   }
 }
@@ -314,7 +315,11 @@ $params | ConvertTo-Json -Depth 5 | Set-Content -Path infra/main.parameters.json
 ```
 
 `namePrefix` is 3–12 characters and seeds every resource name, so keep it short and unique — the
-storage account and the two Foundry accounts need globally unique names.
+storage account and the Foundry account need globally unique names.
+
+`singleAccount` picks the isolation tier; see [Two tiers of isolation](#two-tiers-of-isolation)
+below for what you are choosing between. Leave it `$true` unless you have read that section and
+decided otherwise.
 
 Preview, then deploy:
 
@@ -333,8 +338,25 @@ az deployment sub create `
 
 This creates three resource groups (`<prefix>-platform`, `<prefix>-cardgeo`, `<prefix>-cardid`),
 the four managed identities, the storage account with the `scans` and `crops` containers and the
-`scan-jobs` queue, the Cosmos account with the `jobs` container, two Foundry accounts each with one
-project and a `gpt-4o` deployment, the API and worker App Services, and all the role assignments.
+`scan-jobs` queue, the Cosmos account with the `jobs` container, one Foundry account holding both
+the `cardgeo` and `cardid` projects and a shared `gpt-4o` deployment, the API and worker App
+Services, and all the role assignments.
+
+Confirm the project-scoped role assignments landed, because this is the boundary the whole demo
+rests on and ARM will tell you plainly if it did not:
+
+```powershell
+$geoProjectId = az resource show `
+  --ids "/subscriptions/$((az account show --query id -o tsv))/resourceGroups/$prefix-platform/providers/Microsoft.CognitiveServices/accounts/$prefix-ai/projects/cardgeo" `
+  --query id -o tsv
+az role assignment list --scope $geoProjectId -o table
+```
+
+You should see `Azure AI Project Manager` for Team A's group and `Azure AI User` for Team B's
+identity, both with a scope ending in `/projects/cardgeo`. If the deployment failed on those
+assignments instead, your tenant does not accept project-scoped RBAC; redeploy with
+`singleAccount=false` to fall back to one account per team, which scopes the same roles at the
+account.
 
 Collect the outputs:
 
@@ -357,9 +379,9 @@ the resource groups after a partial failure.
 
 - **`NoRegisteredProviderFound ... for type 'accounts/projects'`**, listing supported API versions.
   The Bicep is pinned to an API version your tenant's resource provider does not offer. Take the
-  newest stable version (no `-preview` suffix) from the list in the error and update the three
-  `Microsoft.CognitiveServices/...@<version>` lines in `infra/modules/foundry-project.bicep` and
-  the one in `infra/modules/cross-project-access.bicep`. Foundry moves quickly, so this pinning is
+  newest stable version (no `-preview` suffix) from the list in the error and update the
+  `Microsoft.CognitiveServices/...@<version>` lines in `infra/modules/foundry-account.bicep`,
+  `infra/modules/foundry-project.bicep` and `infra/modules/cross-project-access.bicep`. Foundry moves quickly, so this pinning is
   the part of the template most likely to age.
 - **A `Warning BCP081: ... does not have types available`** at compile time is worth heeding rather
   than ignoring: it usually means that API version does not exist for that resource type, and the
@@ -368,7 +390,12 @@ the resource groups after a partial failure.
 - **The resource provider is not registered at all.** Run
   `az provider register --namespace Microsoft.CognitiveServices --wait`.
 - **No quota for `gpt-4o` in your region.** Change `location`, or edit the `modelDeployments`
-  default in `infra/modules/foundry-project.bicep` to a model you do have quota for.
+  default in `infra/modules/foundry-account.bicep` to a model you do have quota for. Under the
+  default single-account layout both teams draw on this one deployment, so size the capacity for
+  the pair of them.
+- **The role assignment on a project is rejected** — an `InvalidResourceType` or scope-validation
+  error naming `.../projects/cardgeo`. Deploy with `singleAccount=false`. You lose the Foundry
+  project boundary as the demo's subject and fall back to plain Azure RBAC between two accounts.
 
 ## 4. Create the agents
 
@@ -669,12 +696,45 @@ az role assignment list --assignee $geoPrincipal --all -o table
 Team A should show exactly one assignment: **Storage Blob Data Reader** on the `scans` container.
 No Cosmos, no `crops`, nothing in `<prefix>-cardid`.
 
-Then run the two "break it" scenarios in [foundry-demo.md](foundry-demo.md).
+Then run the "break it" scenarios in [foundry-demo.md](foundry-demo.md).
+
+## Two tiers of isolation
+
+Foundry gives you two places to draw a line between teams, and choosing the wrong one is the most
+common mistake this demo exists to correct. `singleAccount` decides which one you get.
+
+| | Project | Account |
+|---|---|---|
+| Agents, threads, files | isolated | isolated |
+| Connections and tool servers | isolated | isolated |
+| Authoring rights (`Azure AI Project Manager`) | isolated | isolated |
+| Model deployments | **shared** | isolated |
+| Token quota and throttling | **shared** | isolated |
+| Local-auth, networking, account settings | **shared** | isolated |
+| Blast radius of a delete | **shared** | isolated |
+
+**Projects isolate the work. Accounts isolate the platform underneath it.**
+
+`singleAccount=true` (the default) is one account holding both projects. The boundary between the
+teams is then genuinely Foundry's: the role assignments are scoped to the project resource, and
+Team B cannot touch Team A's agents despite sharing an account and a resource group. This is the
+layout to demo, because it shows the project boundary doing real work — and because scenario 3 in
+[foundry-demo.md](foundry-demo.md) can then show its limits honestly.
+
+`singleAccount=false` is one account per team, in each team's own resource group. Stronger
+isolation, weaker demonstration: two separate accounts would be isolated from each other whatever
+they contained, so it shows Azure RBAC rather than anything specific to Foundry. Reach for it when
+the risk warrants it — teams that must not share quota, must not be able to delete each other's
+model deployments, or that need different networking or data-residency settings.
+
+The rule of thumb: separate projects for teams that trust the same platform team, separate accounts
+for teams that do not. Either way nothing in `src/` changes; the worker holds one client per
+project endpoint and those endpoints keep their shape.
 
 ## Costs and teardown
 
 The Basic App Service plan, the provisioned-throughput Cosmos container, and the `gpt-4o`
-deployments all bill while they exist. Job documents self-expire after seven days via the container
+deployment all bill while they exist. Job documents self-expire after seven days via the container
 TTL, but the resources do not. Tear down when you are done:
 
 ```powershell
