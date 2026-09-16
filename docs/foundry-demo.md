@@ -121,13 +121,29 @@ To restore access, redeploy with `grantIdentificationAccessToGeometry=true`.
 ### 2. Call Team B's MTG catalogue from Team A's project
 
 In the Foundry portal, open the **`cardgeo`** project → `CardBoundaryAgent` → **Tools** and try to
-add the `mcp-cardcatalog-mtg` server (or, from a shell using Team A's identity, call its
-`lookup_by_set_and_number` tool).
+add the `mcp-cardcatalog-mtg` server. The server lives in Team B's resource group, so it is not
+among the connections Team A can select.
 
-Expected result: **403 Forbidden**. The MCP server lives in the `cardid` project, and Team A's
-identity has no role assignment there — the server is not even listed among the connections Team
-A can select. `agents/cardgeo/card-boundary-agent.yaml` records this in `denied_connections`, and
-`agents/cardid/mcp-cardcatalog-mtg.yaml` records the inverse in `allowed_callers`.
+The stronger version of this is to hand Team A the URL anyway and call it directly:
+
+```powershell
+$token = az account get-access-token --resource "api://$prefix-mcp" --query accessToken -o tsv
+Invoke-WebRequest -SkipHttpErrorCheck -Method Post `
+  -Uri "https://$prefix-mcp-cardcatalog-mtg.azurewebsites.net/mcp" `
+  -Headers @{ Authorization = "******"; Accept = 'application/json, text/event-stream' } `
+  -ContentType 'application/json' -Body '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+Expected result: **403 Forbidden**, even though the URL is reachable and the token is valid. Each
+server checks the caller's object id against an allow-list built by `infra/main.bicep`, and Team
+A's principals are deliberately absent from Team B's catalogue servers. That list is the enforced
+form of the `allowed_callers` key in `agents/cardid/mcp-cardcatalog-mtg.yaml`;
+`agents/cardgeo/card-boundary-agent.yaml` records the same boundary from the other side in
+`denied_connections`.
+
+Worth showing the two failures side by side: without a token the same call is a **401**, with one
+it is a **403**. The first says the caller is unknown, the second says the caller is known and
+still not allowed — which is the distinction the whole demo is about.
 
 Two useful follow-ups with the same shape:
 

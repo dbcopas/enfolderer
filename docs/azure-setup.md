@@ -488,20 +488,108 @@ az webapp config appsettings set `
 
 ## 5. Host the MCP servers
 
-The three MCP servers under `src/Enfolderer.Ai.Mcp.*` are stdio processes. Foundry reaches a tool
-server over HTTPS, so each one needs an HTTPS front end — an App Service or container app that
-exposes it over streamable HTTP — before step 4 can attach it. Note down the resulting URL for
-each, and keep each with the project that owns it: `mcp-imaging` in `cardgeo`,
-`mcp-cardcatalog-mtg` and `mcp-cardcatalog-pokemon` in `cardid`.
+The three servers under `src/Enfolderer.Ai.Mcp.*` are ASP.NET applications that expose MCP over
+streamable HTTP at `/mcp`. They have to be, because the Foundry agent data plane will only accept
+an `https://` URL for a tool server — a stdio process has no address it can be given.
 
-Then go back to [attaching the MCP tools](#attaching-the-mcp-tools) in step 4 and re-run the
-provisioning script with those URLs.
+`infra/main.bicep` deploys them for you, each in its owning team's resource group and running as
+that team's identity: `mcp-imaging` in `cardgeo`, `mcp-cardcatalog-mtg` and
+`mcp-cardcatalog-pokemon` in `cardid`. Nothing extra to create; they came with step 3.
 
-Do not register a catalogue server in `cardgeo`. Being unable to is
-[demo scenario 2](foundry-demo.md#2-call-team-bs-mtg-catalogue-from-team-as-project).
+### Publish them
+
+```powershell
+foreach ($server in 'Imaging', 'CardCatalog.Mtg', 'CardCatalog.Pokemon') {
+  $site = switch ($server) {
+    'Imaging'             { 'mcp-imaging' }
+    'CardCatalog.Mtg'     { 'mcp-cardcatalog-mtg' }
+    'CardCatalog.Pokemon' { 'mcp-cardcatalog-pokemon' }
+  }
+  $rg = if ($server -eq 'Imaging') { "$prefix-cardgeo" } else { "$prefix-cardid" }
+
+  dotnet publish "src/Enfolderer.Ai.Mcp.$server" -c Release -o "$stage/$site"
+  Compress-Archive -Path "$stage/$site/*" -DestinationPath "$stage/$site.zip" -Force
+  az webapp deploy --resource-group $rg --name "$prefix-$site" --src-path "$stage/$site.zip" --type zip
+}
+```
+
+The same `/*` caveat as step 6 applies. `$stage` is defined there; if you are doing step 5 first,
+run its first two lines to create it.
+
+### Read the URLs
+
+The deployment tells you them, so there is nothing to look up:
+
+```powershell
+az deployment sub show --name enfolderer-scan `
+  --query "properties.outputs.geometryMcpServerUrls.value" -o table
+az deployment sub show --name enfolderer-scan `
+  --query "properties.outputs.identificationMcpServerUrls.value" -o table
+```
+
+Check each one is alive before wiring it to an agent. `/healthz` is deliberately left open so you
+can do this without a token:
+
+```powershell
+Invoke-RestMethod "https://$prefix-mcp-imaging.azurewebsites.net/healthz"
+```
+
+Then go back to [attaching the MCP tools](#attaching-the-mcp-tools) in step 4 and re-run
+`provision.ps1` with those URLs.
+
+### Locking them down
+
+A reachable MCP endpoint that anyone can call would undercut the whole demo, so each server
+authenticates its callers and then checks them against an allow-list of principal object ids — the
+enforced form of the `allowed_callers` key in the server's YAML. Team A's principals are not on
+Team B's catalogue servers, so
+[demo scenario 2](foundry-demo.md#2-call-team-bs-mtg-catalogue-from-team-as-project) fails even if
+someone hands Team A the URL.
+
+This is off until you give the deployment an audience, because the audience has to be an
+identifier URI that exists in your tenant. Create a registration for it and redeploy:
+
+```powershell
+$mcpAppId = az ad app create --display-name "Enfolderer MCP" --query appId -o tsv
+az ad app update --id $mcpAppId --identifier-uris "api://$prefix-mcp"
+az ad sp create --id $mcpAppId
+```
+
+Then add `"mcpAudience": { "value": "api://enf-demo-mcp" }` to `infra/main.parameters.json` and
+re-run the deployment from step 3.
+
+Until you do, the servers start with a warning in their log saying they are running
+unauthenticated. Treat that warning as a blocker before demoing the security boundaries, not after:
+
+```text
+McpServer:TenantId or McpServer:Audience is not configured; mcp-cardcatalog-mtg is running
+unauthenticated. This is only acceptable for local development.
+```
+
+Verify the lock-down took by calling `/mcp` without a token — it should be `401`, while `/healthz`
+stays `200`:
+
+```powershell
+$response = Invoke-WebRequest -SkipHttpErrorCheck -Method Post `
+  -Uri "https://$prefix-mcp-cardcatalog-mtg.azurewebsites.net/mcp" `
+  -Headers @{ Accept = 'application/json, text/event-stream' } `
+  -ContentType 'application/json' -Body '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+$response.StatusCode
+```
+
+One caveat worth knowing before you rely on this: whether Foundry presents its project managed
+identity when calling a tool server depends on how the connection is configured, and if it cannot,
+these servers will refuse it. If the agents start reporting 401 from their tools, that is what has
+happened — configure the connection to send the identity, or leave `mcpAudience` empty and keep the
+endpoints off the demo's security story rather than pretending they are protected.
 
 The Pokémon catalogue works anonymously but is rate-limited; if you have a pokemontcg.io key, set
-`POKEMONTCG_API_KEY` in that server's environment. Scryfall needs no key.
+it on that site. Scryfall needs no key.
+
+```powershell
+az webapp config appsettings set --resource-group "$prefix-cardid" `
+  --name "$prefix-mcp-cardcatalog-pokemon" --settings POKEMONTCG_API_KEY="<your key>"
+```
 
 ## 6. Deploy the API and worker
 

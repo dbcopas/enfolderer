@@ -5,19 +5,24 @@
 name: mcp-imaging
 project: cardgeo
 owner: team-a-geometry
-transport: stdio
-command: dotnet
-args: ["run", "--project", "src/Enfolderer.Ai.Mcp.Imaging"]
+# Hosted over HTTPS, because the Foundry agent data plane will not accept any other kind of tool
+# server URL. The site lives in Team A's resource group; infra/main.bicep supplies its URL.
+transport: http
+site: mcp-imaging
+project_source: src/Enfolderer.Ai.Mcp.Imaging
 tools:
-  - name: crop_quad
-    description: Perspective-correct crop of a card from a four-point quad in the source image.
   - name: get_image_sas
     description: Issues a short-lived read-only SAS URL for a blob in the scans container.
+  - name: crop_quad
+    description: >
+      Perspective-correct crop of a card from a four-point quad. Present in the server but not in
+      the boundary agent's allowed_tools, and it would fail with 403 if it were: writing a crop
+      needs Storage Blob Data Contributor on crops, which only the worker holds. The worker does
+      the cropping itself rather than widening Team A's access to save a hop.
 identity:
-  # Read on scans, write on crops, and nothing else. No Cosmos role assignment exists for this
-  # identity, so any attempt to read job state fails with 403.
+  # Runs as Team A's own identity, which holds read on scans and nothing else. There is no Cosmos
+  # role assignment, so job state is unreachable, and no write anywhere: the worker does the
+  # cropping, so this server never needs to put a blob back.
   role_assignments:
     - role: Storage Blob Data Reader
       scope: storage/containers/scans
-    - role: Storage Blob Data Contributor
-      scope: storage/containers/crops
