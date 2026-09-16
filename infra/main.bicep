@@ -32,6 +32,9 @@ param apiClientId string
 @description('Set to false to run the "revoke Team B\'s access to Team A\'s agent" demo scenario.')
 param grantIdentificationAccessToGeometry bool = true
 
+@description('Audience the hosted MCP servers require in an incoming token, e.g. api://enf-demo-mcp. Leave empty to deploy them unauthenticated, which is only acceptable while you are still wiring the demo up: a public MCP endpoint lets any caller bypass the project boundaries the demo exists to show.')
+param mcpAudience string = ''
+
 resource platformRg 'Microsoft.Resources/resourceGroups@2023-07-01' = {
   name: '${namePrefix}-platform'
   location: location
@@ -139,6 +142,69 @@ module hosting 'modules/hosting.bicep' = {
   }
 }
 
+// Team A's MCP server, in Team A's resource group, running as Team A's identity — which already
+// holds read on the scans container and nothing else.
+module geometryMcp 'modules/mcp-servers.bicep' = {
+  name: 'cardgeo-mcp'
+  scope: geometryRg
+  params: {
+    namePrefix: namePrefix
+    teamName: 'cardgeo'
+    location: location
+    identityId: geometryIdentity.outputs.id
+    identityClientId: geometryIdentity.outputs.clientId
+    tenantId: tenantId
+    audience: mcpAudience
+    storageAccountUrl: data.outputs.blobEndpoint
+    servers: [
+      {
+        name: 'mcp-imaging'
+        needsStorage: true
+        // Only Team A's own project may call it. Team B reaches Team A through the boundary
+        // agent, not by calling Team A's imaging tools directly.
+        allowedCallerObjectIds: [
+          geometryIdentity.outputs.principalId
+          geometryProject.outputs.projectPrincipalId
+        ]
+      }
+    ]
+  }
+}
+
+// Team B's catalogue servers. Team A's principals are deliberately absent from every allow-list
+// here: that is demo scenario 2, and it must fail even if someone hands Team A the URL.
+module identificationMcp 'modules/mcp-servers.bicep' = {
+  name: 'cardid-mcp'
+  scope: identificationRg
+  params: {
+    namePrefix: namePrefix
+    teamName: 'cardid'
+    location: location
+    identityId: identificationIdentity.outputs.id
+    identityClientId: identificationIdentity.outputs.clientId
+    tenantId: tenantId
+    audience: mcpAudience
+    servers: [
+      {
+        name: 'mcp-cardcatalog-mtg'
+        needsStorage: false
+        allowedCallerObjectIds: [
+          identificationIdentity.outputs.principalId
+          identificationProject.outputs.projectPrincipalId
+        ]
+      }
+      {
+        name: 'mcp-cardcatalog-pokemon'
+        needsStorage: false
+        allowedCallerObjectIds: [
+          identificationIdentity.outputs.principalId
+          identificationProject.outputs.projectPrincipalId
+        ]
+      }
+    ]
+  }
+}
+
 module dataRbac 'modules/data-rbac.bicep' = {
   name: 'data-rbac'
   scope: platformRg
@@ -172,3 +238,5 @@ output apiIdentityClientId string = apiIdentity.outputs.clientId
 output workerIdentityClientId string = workerIdentity.outputs.clientId
 output geometryIdentityClientId string = geometryIdentity.outputs.clientId
 output identificationIdentityClientId string = identificationIdentity.outputs.clientId
+output geometryMcpServerUrls array = geometryMcp.outputs.serverUrls
+output identificationMcpServerUrls array = identificationMcp.outputs.serverUrls
