@@ -40,6 +40,16 @@ public sealed class BlobScanImageStore : IScanImageStore
 
         var container = blobPath[..separator];
         var name = blobPath[(separator + 1)..];
+
+        // Blob Storage has no real directory tree, so "../" cannot escape the container the way it
+        // can on disk. Reject it anyway, so that a path is resolved identically here and in the
+        // local-directory store and cannot name a different blob depending on which one is in use.
+        foreach (var segment in name.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment is "." or "..")
+                throw new ArgumentException($"Invalid blob path '{blobPath}'.", nameof(blobPath));
+        }
+
         return _blobService.GetBlobContainerClient(container).GetBlobClient(name);
     }
 }
