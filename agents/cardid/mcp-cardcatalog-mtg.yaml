@@ -5,9 +5,11 @@
 name: mcp-cardcatalog-mtg
 project: cardid
 owner: team-b-identification
-transport: stdio
-command: dotnet
-args: ["run", "--project", "src/Enfolderer.Ai.Mcp.CardCatalog.Mtg"]
+# Hosted over HTTPS, because the Foundry agent data plane will not accept any other kind of tool
+# server URL. The site lives in Team B's resource group; infra/main.bicep supplies its URL.
+transport: http
+site: mcp-cardcatalog-mtg
+project_source: src/Enfolderer.Ai.Mcp.CardCatalog.Mtg
 upstream: Scryfall
 tools:
   - name: lookup_by_set_and_number
