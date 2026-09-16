@@ -2,12 +2,19 @@
 //
 // Three resource groups on purpose:
 //   <prefix>-platform  shared data plane + API/worker hosting (platform team)
-//   <prefix>-cardgeo   Team A's Foundry project (geometry)
-//   <prefix>-cardid    Team B's Foundry project (identification)
+//   <prefix>-cardgeo   Team A's identity and MCP server (geometry)
+//   <prefix>-cardid    Team B's identity and MCP servers (identification)
 //
-// Separate resource groups with different owner groups are what make the demo real: Team B
-// cannot grant itself anything in Team A's group, so the only path from cardid to cardgeo is
-// the invoke-only role assignment created by modules/cross-project-access.bicep.
+// There are two isolation tiers here, and the demo is about telling them apart:
+//
+//   Project  isolates agents, connections and authoring. Each team's group holds Azure AI Project
+//            Manager over its own project only, so Team B cannot edit Team A's boundary agent even
+//            when both projects sit in the same account. The only path from cardid to cardgeo is
+//            the invoke-only assignment in modules/cross-project-access.bicep.
+//   Account  isolates model deployments and their quota, local-auth and networking settings, and
+//            the blast radius of a mistake. Projects share all of it.
+//
+// singleAccount picks which tier you are demonstrating.
 targetScope = 'subscription'
 
 @description('Prefix for all resource names, e.g. "enf-demo".')
@@ -31,6 +38,9 @@ param apiClientId string
 
 @description('Set to false to run the "revoke Team B\'s access to Team A\'s agent" demo scenario.')
 param grantIdentificationAccessToGeometry bool = true
+
+@description('One Foundry account holding both projects (true, the default), or one account per team (false). True is the layout this demo is about: the boundary between the teams is then the Foundry project boundary, enforced by project-scoped role assignments. False additionally separates quota, model deployments and account settings, but the boundary becomes plain Azure RBAC between two unrelated resources — stronger isolation, weaker demonstration of Foundry itself.')
+param singleAccount bool = true
 
 @description('Audience the hosted MCP servers require in an incoming token, e.g. api://enf-demo-mcp. Leave empty to deploy them unauthenticated, which is only acceptable while you are still wiring the demo up: a public MCP endpoint lets any caller bypass the project boundaries the demo exists to show.')
 param mcpAudience string = ''
@@ -98,28 +108,80 @@ module data 'modules/data.bicep' = {
   }
 }
 
-module geometryProject 'modules/foundry-project.bicep' = {
-  name: 'cardgeo'
-  scope: geometryRg
+// Account topology. A project lives in the same resource group as its account, so singleAccount
+// decides both which account each project is created under and where it lands.
+var sharedAccountName = '${namePrefix}-ai'
+var geometryAccountName = singleAccount ? sharedAccountName : '${namePrefix}-cardgeo-ai'
+var identificationAccountName = singleAccount ? sharedAccountName : '${namePrefix}-cardid-ai'
+var geometryProjectRg = singleAccount ? platformRg.name : geometryRg.name
+var identificationProjectRg = singleAccount ? platformRg.name : identificationRg.name
+
+// One account for both teams: the platform team owns the account, its model deployments and its
+// quota, and each team owns only its project inside it.
+module sharedAccount 'modules/foundry-account.bicep' = if (singleAccount) {
+  name: 'foundry-account'
+  scope: platformRg
   params: {
-    accountName: '${namePrefix}-cardgeo-ai'
-    projectName: 'cardgeo'
-    ownerGroupObjectId: teamAGroupObjectId
-    teamIdentityId: geometryIdentity.outputs.id
+    accountName: sharedAccountName
+    teamIdentityIds: [
+      geometryIdentity.outputs.id
+      identificationIdentity.outputs.id
+    ]
     location: location
   }
 }
 
-module identificationProject 'modules/foundry-project.bicep' = {
-  name: 'cardid'
-  scope: identificationRg
+// One account per team: each team owns its own quota and account settings as well as its project.
+module geometryAccount 'modules/foundry-account.bicep' = if (!singleAccount) {
+  name: 'foundry-account-cardgeo'
+  scope: geometryRg
   params: {
-    accountName: '${namePrefix}-cardid-ai'
-    projectName: 'cardid'
-    ownerGroupObjectId: teamBGroupObjectId
-    teamIdentityId: identificationIdentity.outputs.id
+    accountName: geometryAccountName
+    teamIdentityIds: [ geometryIdentity.outputs.id ]
     location: location
   }
+}
+
+module identificationAccount 'modules/foundry-account.bicep' = if (!singleAccount) {
+  name: 'foundry-account-cardid'
+  scope: identificationRg
+  params: {
+    accountName: identificationAccountName
+    teamIdentityIds: [ identificationIdentity.outputs.id ]
+    location: location
+  }
+}
+
+module geometryProject 'modules/foundry-project.bicep' = {
+  name: 'cardgeo'
+  scope: resourceGroup(geometryProjectRg)
+  params: {
+    accountName: geometryAccountName
+    projectName: 'cardgeo'
+    ownerGroupObjectId: teamAGroupObjectId
+    teamIdentityIds: [ geometryIdentity.outputs.id ]
+    location: location
+  }
+  dependsOn: [
+    sharedAccount
+    geometryAccount
+  ]
+}
+
+module identificationProject 'modules/foundry-project.bicep' = {
+  name: 'cardid'
+  scope: resourceGroup(identificationProjectRg)
+  params: {
+    accountName: identificationAccountName
+    projectName: 'cardid'
+    ownerGroupObjectId: teamBGroupObjectId
+    teamIdentityIds: [ identificationIdentity.outputs.id ]
+    location: location
+  }
+  dependsOn: [
+    sharedAccount
+    identificationAccount
+  ]
 }
 
 module hosting 'modules/hosting.bicep' = {
@@ -218,13 +280,14 @@ module dataRbac 'modules/data-rbac.bicep' = {
   }
 }
 
-// Deployed in Team A's resource group. Flip grantIdentificationAccessToGeometry to false and
-// redeploy to break the pipeline at DetectingBoundaries — see docs/foundry-demo.md.
+// Scoped to Team A's project, wherever that project lives. Flip grantIdentificationAccessToGeometry
+// to false and redeploy to break the pipeline at DetectingBoundaries — see docs/foundry-demo.md.
 module crossProjectAccess 'modules/cross-project-access.bicep' = if (grantIdentificationAccessToGeometry) {
   name: 'cross-project-access'
-  scope: geometryRg
+  scope: resourceGroup(geometryProjectRg)
   params: {
-    geometryAccountName: geometryProject.outputs.accountName
+    geometryAccountName: geometryAccountName
+    geometryProjectName: geometryProject.outputs.projectName
     identificationPrincipalId: identificationIdentity.outputs.principalId
   }
 }
@@ -238,5 +301,7 @@ output apiIdentityClientId string = apiIdentity.outputs.clientId
 output workerIdentityClientId string = workerIdentity.outputs.clientId
 output geometryIdentityClientId string = geometryIdentity.outputs.clientId
 output identificationIdentityClientId string = identificationIdentity.outputs.clientId
+output geometryAccountName string = geometryAccountName
+output identificationAccountName string = identificationAccountName
 output geometryMcpServerUrls array = geometryMcp.outputs.serverUrls
 output identificationMcpServerUrls array = identificationMcp.outputs.serverUrls

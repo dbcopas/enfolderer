@@ -1,55 +1,29 @@
-// One Azure AI Foundry account plus a single project, owned by one team. Deployed twice — once
-// per resource group — so that "Team A" and "Team B" are genuinely separate blast radiuses.
+// One project inside a Foundry account, owned by one team.
+//
+// The project is the inner isolation tier and the one this demo is about: the owning team's group
+// gets Azure AI Project Manager scoped to *this project*, so it can author agents and connections
+// here and has no rights in any sibling project of the same account.
+//
+// What a project does not isolate is anything owned by the account: model deployments, quota,
+// local-auth and networking settings. Those are in modules/foundry-account.bicep.
 targetScope = 'resourceGroup'
 
-@description('Foundry account name (must be globally unique).')
+@description('Name of the Foundry account this project belongs to. Must already exist.')
 param accountName string
 
 @description('Project name inside the account, e.g. cardgeo or cardid.')
 param projectName string
 
-@description('Entra group object id that owns this project. Only this group gets write access.')
+@description('Entra group object id that owns this project. Only this group gets authoring access.')
 param ownerGroupObjectId string
 
-@description('Resource id of the team\'s user-assigned managed identity.')
-param teamIdentityId string
+@description('Resource ids of the user-assigned managed identities this project may present.')
+param teamIdentityIds array
 
 param location string = resourceGroup().location
 
-@description('Model deployments to create in this project.')
-param modelDeployments array = [
-  {
-    name: 'gpt-4o'
-    model: 'gpt-4o'
-    version: '2024-11-20'
-    capacity: 10
-  }
-]
-
-resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
+resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
   name: accountName
-  location: location
-  kind: 'AIServices'
-  sku: { name: 'S0' }
-  // The team's own user-assigned identity is what the project's agents present when they reach
-  // outside the project, so the data-plane roles are granted to a principal that outlives this
-  // account. A system-assigned identity is kept alongside it for services that cannot yet be
-  // told which user-assigned identity to use.
-  identity: {
-    type: 'SystemAssigned, UserAssigned'
-    userAssignedIdentities: {
-      '${teamIdentityId}': {}
-    }
-  }
-  properties: {
-    customSubDomainName: accountName
-    publicNetworkAccess: 'Enabled'
-    // Entra-only: no account keys to leak between teams.
-    disableLocalAuth: true
-    // Required before the account will accept child projects; without it the project deployment
-    // below fails even though the API version is correct.
-    allowProjectManagement: true
-  }
 }
 
 resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
@@ -58,37 +32,19 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   location: location
   identity: {
     type: 'SystemAssigned, UserAssigned'
-    userAssignedIdentities: {
-      '${teamIdentityId}': {}
-    }
+    userAssignedIdentities: reduce(teamIdentityIds, {}, (merged, id) => union(merged, { '${id}': {} }))
   }
   properties: {
     displayName: projectName
   }
 }
 
-@batchSize(1)
-resource deployments 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = [for d in modelDeployments: {
-  parent: account
-  name: d.name
-  sku: {
-    name: 'GlobalStandard'
-    capacity: d.capacity
-  }
-  properties: {
-    model: {
-      format: 'OpenAI'
-      name: d.model
-      version: d.version
-    }
-  }
-}]
-
-// Azure AI Project Manager: full authoring rights, granted only to the owning team's group.
-// This is what makes Team B unable to edit Team A's boundary agent.
+// Azure AI Project Manager: full authoring rights, granted only to the owning team's group and
+// only over this project. Scoping it here rather than at the account is what makes the boundary a
+// Foundry one: with both projects in a single account, Team B still cannot edit Team A's agents.
 resource ownerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: account
-  name: guid(account.id, ownerGroupObjectId, 'project-manager')
+  scope: project
+  name: guid(project.id, ownerGroupObjectId, 'project-manager')
   properties: {
     principalId: ownerGroupObjectId
     principalType: 'Group'
@@ -96,9 +52,7 @@ resource ownerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
-output accountId string = account.id
-output accountName string = account.name
 output projectId string = project.id
+output projectName string = project.name
 output projectEndpoint string = 'https://${accountName}.services.ai.azure.com/api/projects/${projectName}'
 output projectPrincipalId string = project.identity.principalId
-output accountPrincipalId string = account.identity.principalId
