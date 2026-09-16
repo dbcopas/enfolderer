@@ -151,9 +151,15 @@ public sealed class FoundryAgentClient
         if (!response.IsSuccessStatusCode)
         {
             // 401/403 here is the expected outcome of the "revoke the cross-project connection"
-            // step in the Foundry boundary demo, so keep the endpoint in the message.
+            // step in the Foundry boundary demo, so keep the endpoint in the message. The response
+            // body reaches the caller through the job's Error field, so log it in full but only
+            // summarise it into the exception.
+            _log.LogError(
+                "Foundry request {Method} {Path} against {Endpoint} failed with {StatusCode}: {Payload}",
+                method, path, _projectEndpoint, (int)response.StatusCode, payload);
+
             throw new FoundryAccessException(
-                $"Foundry request {method} {path} against {_projectEndpoint} failed with {(int)response.StatusCode}: {payload}",
+                $"Foundry request {method} {path} against {_projectEndpoint} failed with {(int)response.StatusCode}: {AgentJson.Summarize(payload)}",
                 (int)response.StatusCode);
         }
 

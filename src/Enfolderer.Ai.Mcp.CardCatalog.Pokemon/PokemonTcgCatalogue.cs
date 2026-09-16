@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace Enfolderer.Ai.Mcp.CardCatalog.Pokemon;
@@ -20,7 +21,8 @@ public sealed class PokemonTcgCatalogue
 
     /// <summary>
     /// Builds a Lucene-style query for the pokemontcg.io <c>/cards</c> endpoint. Values are quoted
-    /// and embedded quotes are stripped so a card name cannot alter the query structure.
+    /// and every Lucene operator inside them is escaped, so a card name read off a card by the
+    /// model cannot alter the structure of the query.
     /// </summary>
     internal static string BuildQuery(params (string Field, string Value)[] terms)
     {
@@ -30,8 +32,21 @@ public sealed class PokemonTcgCatalogue
         return string.Join(" ", clauses);
     }
 
-    private static string Escape(string value) =>
-        new(value.Where(c => c is not ('"' or '\\') && !char.IsControl(c)).ToArray());
+    // Lucene's reserved characters. Backslash must come first so the escapes added below are not
+    // themselves re-escaped.
+    private const string LuceneReserved = "\\+-&|!(){}[]^\"~*?:/";
+
+    private static string Escape(string value)
+    {
+        var escaped = new StringBuilder(value.Length);
+        foreach (var c in value)
+        {
+            if (char.IsControl(c)) continue;
+            if (LuceneReserved.Contains(c)) escaped.Append('\\');
+            escaped.Append(c);
+        }
+        return escaped.ToString();
+    }
 
     public Task<CataloguePrinting?> LookupBySetAndNumberAsync(string setCode, string collectorNumber, CancellationToken ct) =>
         QueryAsync(BuildQuery(("set.id", setCode), ("number", collectorNumber)), ct);
