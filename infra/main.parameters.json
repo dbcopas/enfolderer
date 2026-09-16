@@ -17,6 +17,9 @@
     "apiClientId": {
       "value": "00000000-0000-0000-0000-000000000000"
     },
+    "singleAccount": {
+      "value": true
+    },
     "grantIdentificationAccessToGeometry": {
       "value": true
     },
