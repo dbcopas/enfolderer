@@ -409,6 +409,31 @@ Preview what would be sent with `-WhatIf`, then drop it to apply:
   -Only MtgCardIdAgent, PokemonCardIdAgent, OrchestratorAgent
 ```
 
+### Attaching the MCP tools
+
+The YAML names each MCP server (`mcp-imaging`, `mcp-cardcatalog-mtg`, `mcp-cardcatalog-pokemon`)
+but not where it runs, and the data plane only accepts an **`https://` URL** for a tool server. So
+an MCP server has to be hosted and reachable before its tool can be attached.
+
+Run the commands above first and the agents are created with their prompts and models, and a
+warning per MCP tool that was left off. Do [step 5](#5-host-the-mcp-servers), then re-run with the
+URLs to attach the tools — agents are matched by name, so this updates them in place:
+
+```powershell
+./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo -McpServerUrl @{
+  'mcp-imaging' = 'https://<your-imaging-host>/mcp'
+}
+./agents/provision.ps1 -ProjectEndpoint $idp -Path ./agents/cardid `
+  -Only MtgCardIdAgent, PokemonCardIdAgent, OrchestratorAgent -McpServerUrl @{
+    'mcp-cardcatalog-mtg'     = 'https://<your-mtg-host>/mcp'
+    'mcp-cardcatalog-pokemon' = 'https://<your-pokemon-host>/mcp'
+  }
+```
+
+Pass only the URLs for servers that project is allowed to use. Handing `cardgeo` a catalogue URL
+is exactly what [demo scenario 2](foundry-demo.md#2-call-team-bs-mtg-catalogue-from-team-as-project)
+is about, and it should fail on RBAC rather than on configuration.
+
 It prints a name-to-id table — keep it for the worker settings below. Agents are matched by name,
 so re-running updates them in place; that is how you push an edited prompt. `OrchestratorAgent` is
 always provisioned last because it references the others. Files beginning `mcp-` are skipped: they
@@ -463,9 +488,14 @@ az webapp config appsettings set `
 
 ## 5. Host the MCP servers
 
-The three MCP servers under `src/Enfolderer.Ai.Mcp.*` are stdio processes. Run them wherever your
-Foundry project can reach them, and register each with the project that owns it:
-`mcp-imaging` in `cardgeo`, `mcp-cardcatalog-mtg` and `mcp-cardcatalog-pokemon` in `cardid`.
+The three MCP servers under `src/Enfolderer.Ai.Mcp.*` are stdio processes. Foundry reaches a tool
+server over HTTPS, so each one needs an HTTPS front end — an App Service or container app that
+exposes it over streamable HTTP — before step 4 can attach it. Note down the resulting URL for
+each, and keep each with the project that owns it: `mcp-imaging` in `cardgeo`,
+`mcp-cardcatalog-mtg` and `mcp-cardcatalog-pokemon` in `cardid`.
+
+Then go back to [attaching the MCP tools](#attaching-the-mcp-tools) in step 4 and re-run the
+provisioning script with those URLs.
 
 Do not register a catalogue server in `cardgeo`. Being unable to is
 [demo scenario 2](foundry-demo.md#2-call-team-bs-mtg-catalogue-from-team-as-project).
