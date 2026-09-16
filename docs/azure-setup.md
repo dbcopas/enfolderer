@@ -268,6 +268,30 @@ needs fixing: carry on to step 3 and accept the prompt at first sign-in. Ask an 
 run the command only if you are rolling this out to other people and want to suppress the prompt
 for them.
 
+Check which directory roles the account you are signed in as actually holds:
+
+```powershell
+az rest --method get `
+  --url "https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.directoryRole" `
+  --query "value[].displayName" -o tsv
+```
+
+If that list is empty or lacks *Global Administrator* / *Privileged Role Administrator*, there is
+**no command that grants you one** — self-elevation into a directory role is exactly what the role
+system exists to prevent. Two things that do work:
+
+- **Sign in as a different account that holds the role.** `az login --allow-no-subscriptions`
+  (admin accounts often have no subscription), run the consent command, then `az login` back.
+- **Activate the role through PIM**, if your account is an *eligible* rather than permanent member.
+  Portal: **Entra ID → Privileged Identity Management → My roles → Directory roles → Activate**.
+  Eligibility still has to have been granted to you beforehand; PIM only makes dormant eligibility
+  live.
+
+Note that `POST /providers/Microsoft.Authorization/elevateAccess` — the "elevate access" command
+you may find while searching — does **not** help here. It grants an existing Global Administrator
+*User Access Administrator* over Azure resources, which is the opposite direction to what this
+step needs, and it requires Global Administrator to begin with.
+
 ## 3. Deploy the infrastructure
 
 Fill in `infra/main.parameters.json`. You can do it by hand, or from the variables already in the
