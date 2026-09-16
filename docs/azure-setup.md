@@ -122,9 +122,9 @@ line: a trailing space after it is a syntax error, and an easy one to introduce 
 ## 2. Register the API and the desktop client
 
 Two registrations: the API exposes a scope, and the desktop app is a **public client** with no
-secret. There are three sub-steps, and **2b can be done in the portal or from PowerShell** — pick
-one, not both. Whichever you pick, carry on at **2c**, which sets the two variables the rest of the
-guide needs.
+secret. **2b can be done in the portal or from PowerShell** — pick one, not both. Whichever you
+pick, carry on at **2c**, which sets the two variables the rest of the guide needs. The last
+sub-step, 2e, is optional and most people skip it.
 
 ### 2a. Create the API registration
 
@@ -140,7 +140,7 @@ Skip the first two lines if you already created the app in the portal, but **sti
 That third line is easy to overlook and the failure it causes is confusing. An app *registration*
 is only a definition; the **service principal** is the object that represents it inside your
 tenant, and the portal creates one silently while `az ad app create` does not. Without it, granting
-consent in 2d fails with `Request_BadRequest` and the misleading text "the application needs access
+consent in 2e fails with `Request_BadRequest` and the misleading text "the application needs access
 to service(s) (…) that your organization has not subscribed to" — where the GUID in the parentheses
 is this API's own app id.
 
@@ -237,21 +237,36 @@ $clientAppId = az ad app create `
 
 az ad sp create --id $clientAppId
 
-az ad app permission admin-consent --id $clientAppId   # or let users consent at first sign-in
 "API app id:    $apiAppId"
 "Client app id: $clientAppId"
 ```
-
-Both service principals must exist before the consent call: the client's to hold the grant, and
-the API's from 2a to be the target of it. Granting admin consent needs Privileged Role
-Administrator or Global Administrator; if you have neither, skip that line and let each user
-consent at first sign-in.
 
 `-AsArray` needs PowerShell 7. On 5.1 a single-element array collapses to a bare object and `az`
 rejects the file, so write `"[" + ($access | ConvertTo-Json -Depth 5) + "]"` instead.
 
 Do **not** create a client secret for either registration. The desktop app rejects a config file
 containing `client_secret`, and the services authenticate with managed identities.
+
+### 2e. Consent to the scope — *optional, and usually skippable*
+
+`Scan.Submit` is a **user-consentable** scope, so each person can consent for themselves the first
+time they sign in: the browser shows a one-off "Enfolderer Desktop wants to sign you in and read
+your profile / Submit card scans" prompt, they click **Accept**, and that is the end of it. For a
+demo on your own account, **do nothing here and go to step 3.**
+
+Granting consent tenant-wide up front, so nobody sees that prompt, requires the **Privileged Role
+Administrator** or **Global Administrator** role — being subscription Owner is not enough, because
+this is an Entra directory role rather than an Azure resource one:
+
+```powershell
+az ad app permission admin-consent --id $clientAppId
+```
+
+If that returns `Authorization_RequestDenied` / "This operation can only be performed by an
+administrator", you simply do not hold one of those roles. It is not a misconfiguration and nothing
+needs fixing: carry on to step 3 and accept the prompt at first sign-in. Ask an administrator to
+run the command only if you are rolling this out to other people and want to suppress the prompt
+for them.
 
 ## 3. Deploy the infrastructure
 
