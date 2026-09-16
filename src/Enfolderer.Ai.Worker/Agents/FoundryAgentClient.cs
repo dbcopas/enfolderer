@@ -69,9 +69,13 @@ public sealed class FoundryAgentClient
             ct);
         var runId = RequireString(run, "id", "run id");
 
-        var status = await WaitForRunAsync(threadId, runId, ct);
+        var (status, lastError) = await WaitForRunAsync(threadId, runId, ct);
         if (!IsCompleted(status))
-            throw new InvalidOperationException($"Agent '{agentId}' run ended with status '{status}'.");
+        {
+            // The job's Error field only carries ex.Message, so the reason has to travel with it.
+            var reason = string.IsNullOrEmpty(lastError) ? string.Empty : $": {lastError}";
+            throw new InvalidOperationException($"Agent '{agentId}' run ended with status '{status}'{reason}.");
+        }
 
         return await ReadLastAssistantMessageAsync(threadId, ct);
     }
@@ -85,7 +89,7 @@ public sealed class FoundryAgentClient
         || string.Equals(status, "cancelled", StringComparison.OrdinalIgnoreCase)
         || string.Equals(status, "expired", StringComparison.OrdinalIgnoreCase);
 
-    private async Task<string> WaitForRunAsync(string threadId, string runId, CancellationToken ct)
+    private async Task<(string Status, string? LastError)> WaitForRunAsync(string threadId, string runId, CancellationToken ct)
     {
         var deadline = DateTimeOffset.UtcNow + _runTimeout;
         while (true)
@@ -96,9 +100,13 @@ public sealed class FoundryAgentClient
 
             if (IsTerminal(status))
             {
+                string? reason = null;
                 if (!IsCompleted(status) && run.RootElement.TryGetProperty("last_error", out var lastError))
+                {
                     _log.LogError("Foundry run {RunId} failed: {Error}", runId, lastError.ToString());
-                return status;
+                    reason = AgentJson.Summarize(lastError.ToString());
+                }
+                return (status, reason);
             }
 
             if (DateTimeOffset.UtcNow > deadline)

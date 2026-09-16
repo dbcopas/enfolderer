@@ -32,8 +32,8 @@ public sealed class PokemonTcgCatalogue
         return string.Join(" ", clauses);
     }
 
-    // Lucene's reserved characters. Backslash must come first so the escapes added below are not
-    // themselves re-escaped.
+    // Lucene's reserved characters, each of which is prefixed with a backslash below so that it is
+    // matched literally rather than parsed as an operator.
     private const string LuceneReserved = "\\+-&|!(){}[]^\"~*?:/";
 
     private static string Escape(string value)
