@@ -26,7 +26,7 @@ param modelDeployments array = [
   }
 ]
 
-resource account 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
+resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: accountName
   location: location
   kind: 'AIServices'
@@ -46,10 +46,13 @@ resource account 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
     publicNetworkAccess: 'Enabled'
     // Entra-only: no account keys to leak between teams.
     disableLocalAuth: true
+    // Required before the account will accept child projects; without it the project deployment
+    // below fails even though the API version is correct.
+    allowProjectManagement: true
   }
 }
 
-resource project 'Microsoft.CognitiveServices/accounts/projects@2024-10-01' = {
+resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   parent: account
   name: projectName
   location: location
@@ -65,7 +68,7 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2024-10-01' = {
 }
 
 @batchSize(1)
-resource deployments 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = [for d in modelDeployments: {
+resource deployments 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = [for d in modelDeployments: {
   parent: account
   name: d.name
   sku: {

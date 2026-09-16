@@ -349,6 +349,27 @@ $outputs.identificationProjectEndpoint.value
 You need those three for the steps below. Role assignments can take a couple of minutes to
 propagate; if the first scan fails with a 403, wait and retry before assuming a misconfiguration.
 
+### If the deployment fails
+
+Re-running the deployment is safe. ARM templates are declarative, so a second `az deployment sub
+create` reconciles whatever already exists rather than duplicating it; there is no need to delete
+the resource groups after a partial failure.
+
+- **`NoRegisteredProviderFound ... for type 'accounts/projects'`**, listing supported API versions.
+  The Bicep is pinned to an API version your tenant's resource provider does not offer. Take the
+  newest stable version (no `-preview` suffix) from the list in the error and update the three
+  `Microsoft.CognitiveServices/...@<version>` lines in `infra/modules/foundry-project.bicep` and
+  the one in `infra/modules/cross-project-access.bicep`. Foundry moves quickly, so this pinning is
+  the part of the template most likely to age.
+- **A `Warning BCP081: ... does not have types available`** at compile time is worth heeding rather
+  than ignoring: it usually means that API version does not exist for that resource type, and the
+  deployment will fail later with the error above. A clean `bicep build` should emit nothing at
+  all.
+- **The resource provider is not registered at all.** Run
+  `az provider register --namespace Microsoft.CognitiveServices --wait`.
+- **No quota for `gpt-4o` in your region.** Change `location`, or edit the `modelDeployments`
+  default in `infra/modules/foundry-project.bicep` to a model you do have quota for.
+
 ## 4. Create the agents
 
 The agent definitions are in `agents/cardgeo/` and `agents/cardid/`. Create them in the Foundry

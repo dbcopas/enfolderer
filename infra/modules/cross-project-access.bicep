@@ -14,7 +14,7 @@ param identificationPrincipalId string
 // cannot read the boundary agent's instructions, change its model or redeploy it.
 var azureAiUser = '53ca6127-db72-4b80-b1b0-d745d6d5456d'
 
-resource geometryAccount 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = {
+resource geometryAccount 'Microsoft.CognitiveServices/accounts@2025-06-01' existing = {
   name: geometryAccountName
 }
 
