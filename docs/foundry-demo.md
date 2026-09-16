@@ -10,6 +10,7 @@ back JSON listing every card.
 | | Team A — geometry | Team B — identification |
 |---|---|---|
 | Foundry project | `cardgeo` | `cardid` |
+| Foundry account | `<prefix>-ai` (shared) | `<prefix>-ai` (shared) |
 | Resource group | `<prefix>-cardgeo` | `<prefix>-cardid` |
 | Owner group | `teamAGroupObjectId` | `teamBGroupObjectId` |
 | Agents | `CardBoundaryAgent` | `OrchestratorAgent`, `MtgCardIdAgent`, `PokemonCardIdAgent` |
@@ -27,6 +28,12 @@ name, using a per-game agent backed by that game's catalogue MCP server.
 Adding a game means adding one agent definition plus one MCP server under `agents/cardid/`.
 `YugiohCardIdAgent` and `LorcanaCardIdAgent` are checked in as growth slots to show that the
 reuse story does not require touching Team A at all.
+
+Both projects live in **one Foundry account** by default, so the boundary between the teams is the
+Foundry *project* boundary rather than the plain Azure RBAC boundary you get between two unrelated
+resources. Each team's identity and MCP servers stay in its own resource group. Deploy with
+`singleAccount=false` to give each team its own account instead; see
+[Two tiers of isolation](azure-setup.md#two-tiers-of-isolation) for which tier to pick.
 
 ## End-to-end flow
 
@@ -46,13 +53,14 @@ reuse story does not require touching Team A at all.
 
 ## Why the boundaries are real
 
-* **Separate resource groups with separate owner groups.** Team B has `Azure AI Project Manager`
-  only on its own account, so it cannot edit, redeploy or read the instructions of Team A's
-  boundary agent.
-* **Invoke-only cross-project access.** `infra/modules/cross-project-access.bicep` grants the
-  `cardid` project identity `Azure AI User` on the `cardgeo` account — enough to run the agent,
-  not enough to change it. It is deployed *into Team A's resource group*, because only Team A can
-  grant access to Team A's assets.
+* **Project-scoped ownership.** Each team's group holds `Azure AI Project Manager` on *its own
+  project only* — see the `ownerAssignment` in `infra/modules/foundry-project.bicep`, whose scope
+  is the project resource. Team B cannot edit, redeploy or read the instructions of Team A's
+  boundary agent even though both projects sit in the same account and the same resource group.
+* **Invoke-only cross-project access.** `infra/modules/cross-project-access.bicep` grants Team B's
+  identity `Azure AI User` on the `cardgeo` **project** — enough to run the agent, not enough to
+  change it. Scoping it to the project rather than the account matters: an account-scoped grant
+  would hand Team B access to every project in the account, which is the opposite of the claim.
 * **Entra-only data plane.** The storage account has `allowSharedKeyAccess: false` and Cosmos has
   `disableLocalAuth: true`. There are no keys or connection strings to copy into a config file.
 * **No secrets in the desktop app.** `aiconfig.txt` carries only an API URL, tenant id, public
@@ -85,6 +93,20 @@ Every service authenticates with a **user-assigned managed identity** — one pe
 before the compute so the role assignments survive redeploys. Team A's identity lives in Team A's
 resource group, which is precisely why Team B cannot grant itself anything on it.
 
+The account topology is a parameter, not a decision baked into the templates:
+
+```powershell
+# One account per team instead of one shared account.
+az deployment sub create `
+  --location eastus2 `
+  --template-file infra/main.bicep `
+  --parameters infra/main.parameters.json `
+  --parameters singleAccount=false
+```
+
+Nothing in `src/` knows how many accounts exist. The worker holds one client per project endpoint,
+and those endpoints keep their shape either way.
+
 ## "Break it" scenarios
 
 These are the point of the demo. Run a scan first so the audience sees the happy path.
@@ -99,7 +121,7 @@ az deployment sub create `
   --parameters grantIdentificationAccessToGeometry=false
 ```
 
-Bicep deletes the `Azure AI User` assignment on the `cardgeo` account. (RBAC changes can take a
+Bicep deletes the `Azure AI User` assignment on the `cardgeo` project. (RBAC changes can take a
 minute or two to propagate; re-run the scan until it fails.)
 
 Then scan an image again. Expected result:
@@ -153,6 +175,30 @@ Two useful follow-ups with the same shape:
   `Storage Blob Data Contributor` there. This is why the boundary agent returns geometry only and
   the worker does the cropping: the alternative would hand Team A blob-write rights just to save
   a hop.
+
+### 3. Show what the project boundary does *not* isolate
+
+Only exists in the default single-account layout, and it is the most interesting thing that layout
+buys you: the two projects share one model deployment and one pool of quota.
+
+```powershell
+az cognitiveservices account deployment list `
+  --name "$prefix-ai" --resource-group "$prefix-platform" -o table
+```
+
+One `gpt-4o` deployment, parented to the **account**, serving both projects. So:
+
+* Either team can saturate the shared TPM quota and throttle the other. Run a batch of scans from
+  `cardid` while someone invokes `CardBoundaryAgent` from `cardgeo` and watch the 429s cross the
+  boundary that the RBAC scenarios just proved was airtight.
+* A subscription Owner — or anyone with write access on the account — can change the model
+  version or delete the deployment out from under both teams. Project Manager on a project does not
+  grant that, which is why the account belongs to the platform team in this layout.
+
+The point to land: a project isolates **agents, connections and authoring**. It does not isolate
+**quota, model deployments, account settings or blast radius**. If the teams need those separated
+too, they need separate accounts — redeploy with `singleAccount=false` and re-run this scenario to
+show two independent deployments and two quota pools.
 
 ## Result contract
 
