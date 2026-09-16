@@ -372,22 +372,86 @@ the resource groups after a partial failure.
 
 ## 4. Create the agents
 
-The agent definitions are in `agents/cardgeo/` and `agents/cardid/`. Create them in the Foundry
-portal (or with the Foundry SDK), in this order:
+The YAML files in `agents/cardgeo/` and `agents/cardid/` are **this repository's own format**, not
+something Azure reads. They are the source of record for each agent's model, prompt and tool
+wiring; creating the agents means transferring that content into the project, either with the
+script below or by hand in the portal.
 
-1. In the **`cardgeo`** project, create `CardBoundaryAgent` from
-   `agents/cardgeo/card-boundary-agent.yaml`: a `gpt-4o` deployment, temperature 0, JSON object
-   response format, and the instructions verbatim. The prompt is the one the worker sends, so keep
-   the two in sync if you edit it.
-2. In the **`cardid`** project, create `MtgCardIdAgent` and `PokemonCardIdAgent` from their YAML
-   files, each bound to its catalogue MCP server.
-3. Still in `cardid`, create `OrchestratorAgent` and add a **connected agent** pointing at
-   `cardgeo`'s `CardBoundaryAgent`. This connection is what step 5's revoke breaks.
+Note which project each file belongs to. `agents/cardgeo/` is Team A's and `agents/cardid/` is
+Team B's, and keeping them apart is the whole point of the demo — creating everything in one
+project would work but would destroy the boundary you are demonstrating.
 
-`YugiohCardIdAgent` and `LorcanaCardIdAgent` are checked in but not deployed; create them the same
-way when you want to show how a new game is added without touching Team A.
+Set the two endpoints from the deployment outputs:
 
-Note the agent ids. If they differ from the agent names, update the worker's settings:
+```powershell
+$geo = az deployment sub show --name enfolderer-scan `
+  --query properties.outputs.geometryProjectEndpoint.value -o tsv
+$idp = az deployment sub show --name enfolderer-scan `
+  --query properties.outputs.identificationProjectEndpoint.value -o tsv
+```
+
+### Option A: the provisioning script
+
+`agents/provision.ps1` reads the YAML and calls the Foundry Agents data plane — the same API the
+worker uses at run time. It needs the `powershell-yaml` module once:
+
+```powershell
+Install-Module powershell-yaml -Scope CurrentUser
+```
+
+Preview what would be sent with `-WhatIf`, then drop it to apply:
+
+```powershell
+./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo -WhatIf
+
+./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo
+./agents/provision.ps1 -ProjectEndpoint $idp -Path ./agents/cardid `
+  -Only MtgCardIdAgent, PokemonCardIdAgent, OrchestratorAgent
+```
+
+It prints a name-to-id table — keep it for the worker settings below. Agents are matched by name,
+so re-running updates them in place; that is how you push an edited prompt. `OrchestratorAgent` is
+always provisioned last because it references the others. Files beginning `mcp-` are skipped: they
+describe MCP servers, which are step 5.
+
+Without `-Only` every file in the folder is provisioned, including the `YugiohCardIdAgent` and
+`LorcanaCardIdAgent` growth slots. Add them when you want to show a new game arriving without
+Team A being involved.
+
+If the script fails on the tool wiring, create that one agent in the portal instead. Connected
+agents and MCP tools depend on connections existing in the project first, and the portal creates
+those for you as part of the same dialogue.
+
+### Option B: the portal
+
+**Foundry portal → your project → Agents → New agent**, then copy from the YAML:
+
+| Portal field | YAML key |
+|---|---|
+| Agent name | `name` |
+| Deployment | `model.deployment` |
+| Instructions | `instructions` (the whole block, verbatim) |
+| Description | `description` |
+| Temperature | `model.temperature` |
+| Response format | `model.response_format` — set *JSON object* when present |
+
+The remaining keys are not portal fields. `denied_connections` and `allowed_callers` document
+boundaries that `infra/main.bicep` enforces through RBAC; `owner` and `project` record which team
+owns the file.
+
+Create them in this order:
+
+1. In **`cardgeo`** (Team A): `CardBoundaryAgent`. Its instructions are the prompt the worker
+   sends, so keep the two in sync if you edit either.
+2. In **`cardid`** (Team B): `MtgCardIdAgent` and `PokemonCardIdAgent`, each with its catalogue MCP
+   server from step 5 added under **Tools**.
+3. Still in `cardid`: `OrchestratorAgent`, then add a **connected agent** pointing at `cardgeo`'s
+   `CardBoundaryAgent`. This cross-project connection is what demo scenario 1 revokes.
+
+### Record the agent ids
+
+The worker defaults to using the agent *names* as ids. If the ids differ — the data plane usually
+returns `asst_…` values — set them explicitly:
 
 ```powershell
 az webapp config appsettings set `
