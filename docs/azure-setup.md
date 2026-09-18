@@ -352,7 +352,7 @@ $geoProjectId = az resource show `
 az role assignment list --scope $geoProjectId -o table
 ```
 
-You should see `Azure AI Project Manager` for Team A's group and `Azure AI User` for Team B's
+You should see `Foundry Project Manager` for Team A's group and `Foundry User` for Team B's
 identity, both with a scope ending in `/projects/cardgeo`. If the deployment failed on those
 assignments instead, your tenant does not accept project-scoped RBAC; redeploy with
 `singleAccount=false` to fall back to one account per team, which scopes the same roles at the
@@ -707,7 +707,7 @@ common mistake this demo exists to correct. `singleAccount` decides which one yo
 |---|---|---|
 | Agents, threads, files | isolated | isolated |
 | Connections and tool servers | isolated | isolated |
-| Authoring rights (`Azure AI Project Manager`) | isolated | isolated |
+| Authoring rights (`Foundry Project Manager`) | isolated | isolated |
 | Model deployments | **shared** | isolated |
 | Token quota and throttling | **shared** | isolated |
 | Local-auth, networking, account settings | **shared** | isolated |

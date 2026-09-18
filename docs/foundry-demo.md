@@ -53,12 +53,12 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
 
 ## Why the boundaries are real
 
-* **Project-scoped ownership.** Each team's group holds `Azure AI Project Manager` on *its own
+* **Project-scoped ownership.** Each team's group holds `Foundry Project Manager` on *its own
   project only* — see the `ownerAssignment` in `infra/modules/foundry-project.bicep`, whose scope
   is the project resource. Team B cannot edit, redeploy or read the instructions of Team A's
   boundary agent even though both projects sit in the same account and the same resource group.
 * **Invoke-only cross-project access.** `infra/modules/cross-project-access.bicep` grants Team B's
-  identity `Azure AI User` on the `cardgeo` **project** — enough to run the agent, not enough to
+  identity `Foundry User` on the `cardgeo` **project** — enough to run the agent, not enough to
   change it. Scoping it to the project rather than the account matters: an account-scoped grant
   would hand Team B access to every project in the account, which is the opposite of the claim.
 * **Entra-only data plane.** The storage account has `allowSharedKeyAccess: false` and Cosmos has
@@ -121,7 +121,7 @@ az deployment sub create `
   --parameters grantIdentificationAccessToGeometry=false
 ```
 
-Bicep deletes the `Azure AI User` assignment on the `cardgeo` project. (RBAC changes can take a
+Bicep deletes the `Foundry User` assignment on the `cardgeo` project. (RBAC changes can take a
 minute or two to propagate; re-run the scan until it fails.)
 
 Then scan an image again. Expected result:
