@@ -42,6 +42,10 @@ Neither team identity has any Cosmos role assignment, so neither can read job st
 - An Azure subscription where you can create resource groups and **role assignments** (Owner or
   User Access Administrator — Contributor is not enough, because the deployment grants RBAC).
 - Azure CLI 2.60 or later with the Bicep tooling: `az bicep install`.
+- The **.NET 8 SDK**, for steps 5 and 6. A machine with only the runtime installed still has a
+  working `dotnet` command, so the missing SDK shows up as `dotnet publish` reporting
+  `The application 'publish' does not exist`. Check with `dotnet --list-sdks`, which must list an
+  `8.x` entry.
 - Permission to create Entra app registrations and security groups, or someone who can do it.
 - Quota for a vision-capable model (`gpt-4o`) in your chosen region.
 
@@ -535,6 +539,8 @@ foreach ($server in 'Imaging', 'CardCatalog.Mtg', 'CardCatalog.Pokemon') {
   $rg = if ($server -eq 'Imaging') { "$prefix-cardgeo" } else { "$prefix-cardid" }
 
   dotnet publish "src/Enfolderer.Ai.Mcp.$server" -c Release -o "$stage/$site"
+  if ($LASTEXITCODE -ne 0) { throw "publish failed for $server" }
+
   Compress-Archive -Path "$stage/$site/*" -DestinationPath "$stage/$site.zip" -Force
   az webapp deploy --resource-group $rg --name "$prefix-$site" --src-path "$stage/$site.zip" --type zip
 }
@@ -625,7 +631,9 @@ $stage = Join-Path $env:TEMP "enfolderer-deploy"
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 dotnet publish src/Enfolderer.Ai.Api    -c Release -o "$stage/api"
+if ($LASTEXITCODE -ne 0) { throw "publish failed for the API" }
 dotnet publish src/Enfolderer.Ai.Worker -c Release -o "$stage/worker"
+if ($LASTEXITCODE -ne 0) { throw "publish failed for the worker" }
 
 Compress-Archive -Path "$stage/api/*"    -DestinationPath "$stage/api.zip"    -Force
 Compress-Archive -Path "$stage/worker/*" -DestinationPath "$stage/worker.zip" -Force
@@ -635,6 +643,11 @@ az webapp deploy --resource-group $platformRg --name "$prefix-api" `
 az webapp deploy --resource-group $platformRg --name "$prefix-worker" `
   --src-path "$stage/worker.zip" --type zip
 ```
+
+The `$LASTEXITCODE` checks stop a failed publish from cascading. Without them PowerShell carries
+on, `Compress-Archive` complains that the output folder does not exist, and `az webapp deploy`
+complains about a missing zip — three errors describing one failure, with the real cause scrolled
+off the top.
 
 Note the `/*` in the `Compress-Archive` paths. Without it the archive contains a top-level `api`
 folder, App Service finds no `.dll` at the root, and the site starts and then 500s — a failure that
