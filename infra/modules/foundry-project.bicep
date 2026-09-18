@@ -1,7 +1,7 @@
 // One project inside a Foundry account, owned by one team.
 //
 // The project is the inner isolation tier and the one this demo is about: the owning team's group
-// gets Azure AI Project Manager scoped to *this project*, so it can author agents and connections
+// gets Foundry Project Manager scoped to *this project*, so it can author agents and connections
 // here and has no rights in any sibling project of the same account.
 //
 // What a project does not isolate is anything owned by the account: model deployments, quota,
@@ -39,8 +39,9 @@ resource project 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
   }
 }
 
-// Azure AI Project Manager: full authoring rights, granted only to the owning team's group and
-// only over this project. Scoping it here rather than at the account is what makes the boundary a
+// Foundry Project Manager (formerly Azure AI Project Manager): full authoring rights, granted only
+// to the owning team's group and only over this project. Scoping it here rather than at the
+// account is what makes the boundary a
 // Foundry one: with both projects in a single account, Team B still cannot edit Team A's agents.
 resource ownerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: project

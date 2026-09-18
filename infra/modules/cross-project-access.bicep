@@ -15,7 +15,7 @@ param geometryProjectName string
 @description('Principal id of Team B\'s user-assigned managed identity.')
 param identificationPrincipalId string
 
-// Azure AI User: run threads and invoke agents. It carries no authoring permission, so Team B
+// Foundry User (formerly Azure AI User): run threads and invoke agents. It carries no authoring permission, so Team B
 // cannot read the boundary agent's instructions, change its model or redeploy it.
 var azureAiUser = '53ca6127-db72-4b80-b1b0-d745d6d5456d'
 
