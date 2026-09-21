@@ -147,8 +147,32 @@ $teamBGroupId = az ad group show --group "Enfolderer Team B (Identification)" --
 $teamAGroupId, $teamBGroupId
 ```
 
-Keep both object ids. Add yourself to whichever group you want to demo from — and deliberately
-*not* to the other, so the 403s in the walkthrough are genuine.
+Keep both object ids. Add yourself to **both** groups for now — step 4 creates agents in both
+projects, and each project only admits its own owning group:
+
+```powershell
+$me = az ad signed-in-user show --query id -o tsv
+az ad group member add --group "Enfolderer Team A (Geometry)"       --member-id $me
+az ad group member add --group "Enfolderer Team B (Identification)" --member-id $me
+```
+
+Being a subscription Owner does not help here. Foundry's agent APIs are *data* actions, so they
+come only from a Foundry role assignment; without one you get
+
+```text
+The principal `you@example.com` lacks the required data action
+`Microsoft.CognitiveServices/accounts/AIServices/agents/read`
+```
+
+Group membership is carried in the token, so after joining a group run `az logout` and `az login`
+again, or the cached token still reflects the old membership.
+
+Once everything is provisioned, drop yourself from one group before demoing, so the 403s in the
+walkthrough are genuine:
+
+```powershell
+az ad group member remove --group "Enfolderer Team B (Identification)" --member-id $me
+```
 
 The backtick (`` ` ``) is PowerShell's line continuation. It must be the **last** character on the
 line: a trailing space after it is a syntax error, and an easy one to introduce when copying.
@@ -470,6 +494,11 @@ Preview what would be sent with `-WhatIf`, then drop it to apply:
 Drop `PokemonCardIdAgent` from `-Only` to provision MTG alone. The worker maps game to agent by
 name, so a card the boundary agent reports as Pokemon simply comes back unidentified rather than
 failing the job — and adding the game later is one more name in that list.
+
+If a run fails with `PermissionDenied` and `lacks the required data action
+...agents/read`, you are not in that project's owning group — see
+[step 1](#1-create-the-owner-groups). Each project admits only its own team, so it is normal for
+one of these two commands to succeed and the other to fail.
 
 ### Attaching the MCP tools
 
