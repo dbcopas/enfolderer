@@ -101,6 +101,36 @@ Anything still blank simply has not been created yet — go to the step that cre
 almost always means a display-name mismatch: the lookups match on the exact strings above, so if
 you named something differently, adjust the `--display-name` to suit.
 
+Once step 3 has deployed, add the deployment outputs. These are the project endpoints and MCP URLs
+that steps 4 onwards pass to `provision.ps1`, and they are read straight back out of the deployment
+record, so there is nothing to write down:
+
+```powershell
+$outputs = az deployment sub show --name enfolderer-scan --query properties.outputs -o json |
+           ConvertFrom-Json
+
+$geo    = $outputs.geometryProjectEndpoint.value
+$id     = $outputs.identificationProjectEndpoint.value
+$apiUrl = $outputs.apiUrl.value
+
+$mcp = @{}
+foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
+  (az deployment sub show --name enfolderer-scan --query "properties.outputs.$o.value" -o json |
+     ConvertFrom-Json) | ForEach-Object { $mcp[$_.name] = $_.url }
+}
+
+[pscustomobject]@{ geo = $geo; id = $id; api = $apiUrl } | Format-List
+$mcp
+```
+
+`$geo` and `$id` should end in `/api/projects/cardgeo` and `/api/projects/cardid`, and each MCP URL
+in `/mcp`.
+
+An unset PowerShell variable is an empty string rather than an error, so forgetting this block does
+not fail here — it fails later, at the point of use, as
+`Cannot bind argument to parameter 'ProjectEndpoint' because it is an empty string`. If you see
+that from `provision.ps1`, you have skipped this block rather than found a bug in the script.
+
 ## 1. Create the owner groups
 
 The two Foundry projects are owned by different Entra groups. This is what stops Team B editing
@@ -362,14 +392,16 @@ assignments instead, your tenant does not accept project-scoped RBAC; redeploy w
 `singleAccount=false` to fall back to one account per team, which scopes the same roles at the
 account.
 
-Collect the outputs:
+Collect the outputs — this is the same block as
+[Resuming in a new shell](#resuming-in-a-new-shell), and every later step reads these variables:
 
 ```powershell
 $outputs = az deployment sub show --name enfolderer-scan --query properties.outputs -o json |
            ConvertFrom-Json
-$outputs.apiUrl.value
-$outputs.geometryProjectEndpoint.value
-$outputs.identificationProjectEndpoint.value
+$geo    = $outputs.geometryProjectEndpoint.value
+$id     = $outputs.identificationProjectEndpoint.value
+$apiUrl = $outputs.apiUrl.value
+[pscustomobject]@{ geo = $geo; id = $id; api = $apiUrl } | Format-List
 ```
 
 You need those three for the steps below. Role assignments can take a couple of minutes to
@@ -412,14 +444,9 @@ Note which project each file belongs to. `agents/cardgeo/` is Team A's and `agen
 Team B's, and keeping them apart is the whole point of the demo — creating everything in one
 project would work but would destroy the boundary you are demonstrating.
 
-Set the two endpoints from the deployment outputs:
-
-```powershell
-$geo = az deployment sub show --name enfolderer-scan `
-  --query properties.outputs.geometryProjectEndpoint.value -o tsv
-$idp = az deployment sub show --name enfolderer-scan `
-  --query properties.outputs.identificationProjectEndpoint.value -o tsv
-```
+This step uses `$geo`, `$id` and `$mcp` from the deployment outputs. If you are in a fresh shell,
+run the [deployment outputs block](#resuming-in-a-new-shell) now — an unset variable is an empty
+string, so skipping it fails at the first `provision.ps1` call rather than here.
 
 ### Option A: the provisioning script
 
@@ -436,9 +463,13 @@ Preview what would be sent with `-WhatIf`, then drop it to apply:
 ./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo -WhatIf
 
 ./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo
-./agents/provision.ps1 -ProjectEndpoint $idp -Path ./agents/cardid `
+./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid `
   -Only MtgCardIdAgent, PokemonCardIdAgent, OrchestratorAgent
 ```
+
+Drop `PokemonCardIdAgent` from `-Only` to provision MTG alone. The worker maps game to agent by
+name, so a card the boundary agent reports as Pokemon simply comes back unidentified rather than
+failing the job — and adding the game later is one more name in that list.
 
 ### Attaching the MCP tools
 
@@ -452,12 +483,12 @@ URLs to attach the tools — agents are matched by name, so this updates them in
 
 ```powershell
 ./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo -McpServerUrl @{
-  'mcp-imaging' = 'https://<your-imaging-host>/mcp'
+  'mcp-imaging' = $mcp['mcp-imaging']
 }
-./agents/provision.ps1 -ProjectEndpoint $idp -Path ./agents/cardid `
+./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid `
   -Only MtgCardIdAgent, PokemonCardIdAgent, OrchestratorAgent -McpServerUrl @{
-    'mcp-cardcatalog-mtg'     = 'https://<your-mtg-host>/mcp'
-    'mcp-cardcatalog-pokemon' = 'https://<your-pokemon-host>/mcp'
+    'mcp-cardcatalog-mtg'     = $mcp['mcp-cardcatalog-mtg']
+    'mcp-cardcatalog-pokemon' = $mcp['mcp-cardcatalog-pokemon']
   }
 ```
 
@@ -551,13 +582,16 @@ run its first two lines to create it.
 
 ### Read the URLs
 
-The deployment tells you them, so there is nothing to look up:
+The deployment tells you them, so there is nothing to look up. This builds the `$mcp` hashtable in
+the shape `provision.ps1 -McpServerUrl` expects, keyed by the same server names the YAML uses:
 
 ```powershell
-az deployment sub show --name enfolderer-scan `
-  --query "properties.outputs.geometryMcpServerUrls.value" -o table
-az deployment sub show --name enfolderer-scan `
-  --query "properties.outputs.identificationMcpServerUrls.value" -o table
+$mcp = @{}
+foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
+  (az deployment sub show --name enfolderer-scan --query "properties.outputs.$o.value" -o json |
+     ConvertFrom-Json) | ForEach-Object { $mcp[$_.name] = $_.url }
+}
+$mcp
 ```
 
 Check each one is alive before wiring it to an agent. `/healthz` is deliberately left open so you
