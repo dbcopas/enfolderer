@@ -487,13 +487,31 @@ Preview what would be sent with `-WhatIf`, then drop it to apply:
 ./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo -WhatIf
 
 ./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo
-./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid `
-  -Only MtgCardIdAgent, PokemonCardIdAgent, OrchestratorAgent
 ```
+
+Team A first: the orchestrator in Team B connects to `CardBoundaryAgent`, and the data plane
+identifies a connected agent by **id**, not by name. Take the `asst_...` id the run above printed
+and pass it across the boundary — Team B cannot list Team A's agents to find it, which is the point:
+
+```powershell
+$boundaryId = "asst_..."   # from the cardgeo run
+
+./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid `
+  -Only MtgCardIdAgent, PokemonCardIdAgent, OrchestratorAgent `
+  -ConnectedAgentId @{ 'cardgeo/CardBoundaryAgent' = $boundaryId }
+```
+
+Agents in the *same* project are resolved automatically, including ones created earlier in the
+same run, so only the cross-project reference needs `-ConnectedAgentId`. A connected agent whose
+id cannot be resolved is left off with a warning rather than failing the run, so re-running later
+attaches it — which also means `-WhatIf` warns about same-project agents it has not really
+created.
 
 Drop `PokemonCardIdAgent` from `-Only` to provision MTG alone. The worker maps game to agent by
 name, so a card the boundary agent reports as Pokemon simply comes back unidentified rather than
-failing the job — and adding the game later is one more name in that list.
+failing the job — and adding the game later is one more name in that list. The orchestrator warns
+that it is leaving the Pokemon tool off, which is expected; re-run with the agent in `-Only` to
+attach it.
 
 If a run fails with `PermissionDenied` and `lacks the required data action
 ...agents/read`, you are not in that project's owning group — see
