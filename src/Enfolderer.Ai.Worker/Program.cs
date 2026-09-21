@@ -7,7 +7,10 @@ using Enfolderer.Ai.Worker.Agents;
 using Enfolderer.Ai.Worker.Pipeline;
 using Enfolderer.Ai.Worker.Queueing;
 
-var builder = Host.CreateApplicationBuilder(args);
+// A web host rather than a plain worker host: the pipeline itself is a hosted service and needs
+// no HTTP, but App Service decides a site has started by connecting to its port, so a worker with
+// no listener is reported as failing to start after ten minutes.
+var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddScanPlatform(builder.Configuration, registerUploadUrlIssuer: false);
 
@@ -71,8 +74,11 @@ foreach (var profile in GameAgentProfile.Live)
 builder.Services.AddSingleton<ScanJobProcessor>();
 builder.Services.AddHostedService<ScanJobWorker>();
 
-var host = builder.Build();
-host.Run();
+var app = builder.Build();
+
+app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+
+app.Run();
 
 static FoundryAgentClient CreateFoundryClient(IServiceProvider sp, string endpoint) => new(
     sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(FoundryAgentClient)),

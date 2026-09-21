@@ -740,11 +740,18 @@ That setting is not optional: a host can carry several user-assigned identities,
 credential cannot tell which one to present. If you attach another identity later, keep the setting
 pointing at the one that holds the role assignments.
 
-Check the API is up:
+Check both sites are up:
 
 ```powershell
 Invoke-RestMethod "https://$prefix-api.azurewebsites.net/healthz"
+Invoke-RestMethod "https://$prefix-worker.azurewebsites.net/healthz"
 ```
+
+The worker does its real work by draining the queue and never needs to be called over HTTP, but it
+is hosted as a web app and so serves `/healthz` anyway. App Service decides a site has started by
+connecting to its port: a host with no listener is reported as `Site failed to start` after ten
+minutes, with nothing in the logs to explain it, because nothing actually went wrong — the
+platform simply never got an answer.
 
 A warning in the API log that `AzureAd:TenantId` is not configured means the API is running
 unauthenticated — acceptable locally, not in a deployment. Confirm the setting survived.
