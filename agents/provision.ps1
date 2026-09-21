@@ -32,6 +32,15 @@
     Any MCP tool with no URL here is omitted, with a warning, and the agent is created without it.
     Re-run with the URL once the server is up; the agent is updated in place.
 
+.PARAMETER ConnectedAgentId
+    Maps an agent referenced by a connected_agent tool to its real agent id, keyed as
+    "project/AgentName" (e.g. 'cardgeo/CardBoundaryAgent' = 'asst_abc123').
+
+    The data plane identifies a connected agent by id, not by name. Agents in the project being
+    provisioned are resolved automatically — from the ones already there, and from any created
+    earlier in the same run. An agent in *another* project cannot be listed from here, which is
+    the boundary the demo is about, so its id has to be passed in.
+
 .PARAMETER Only
     Provision just these agents, by name. Without it, every agent file in the folder is
     provisioned, which includes the YugiohCardIdAgent and LorcanaCardIdAgent growth slots.
@@ -47,6 +56,13 @@
         -McpServerUrl @{ 'mcp-imaging' = 'https://enf-demo-mcp-imaging.azurewebsites.net/mcp' }
     Creates CardBoundaryAgent in Team A's project with its imaging tool attached.
 
+.EXAMPLE
+    ./provision.ps1 -ProjectEndpoint $id -Path ./cardid `
+        -Only MtgCardIdAgent, OrchestratorAgent `
+        -ConnectedAgentId @{ 'cardgeo/CardBoundaryAgent' = 'asst_5YS2jhx13zVgso1f5yE6Dm9c' }
+    Creates Team B's MTG agent and its orchestrator, pointing the orchestrator's cross-project
+    connection at the boundary agent id printed by the cardgeo run.
+
 .NOTES
     Requires the powershell-yaml module:  Install-Module powershell-yaml -Scope CurrentUser
     Requires an az login whose account can author agents in the target project.
@@ -57,6 +73,7 @@ param(
     [Parameter(Mandatory = $true)] [string] $Path,
     [string[]] $Only,
     [hashtable] $McpServerUrl = @{},
+    [hashtable] $ConnectedAgentId = @{},
     [string] $ApiVersion = 'v1'
 )
 
@@ -69,6 +86,9 @@ if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
 Import-Module powershell-yaml -ErrorAction Stop
 
 $endpoint = $ProjectEndpoint.TrimEnd('/')
+# Last path segment of the endpoint, matching the "project" key in the YAML. Used to tell a
+# connected agent in this project from one that lives across the boundary.
+$projectName = ($endpoint -split '/')[-1]
 
 # The Foundry data plane takes an Entra token for this resource, the same one the worker requests.
 function Get-FoundryToken {
@@ -83,7 +103,12 @@ function Get-FoundryToken {
 # service understands are sent: keys such as denied_connections and allowed_callers document the
 # boundaries that infra/main.bicep enforces, and have no data-plane equivalent.
 function ConvertTo-AgentPayload {
-    param([hashtable] $Definition, [hashtable] $McpUrls)
+    param(
+        [hashtable] $Definition,
+        [hashtable] $McpUrls,
+        [hashtable] $AgentIds,
+        [string] $ProjectName
+    )
 
     foreach ($required in 'name', 'model', 'instructions') {
         if (-not $Definition.ContainsKey($required)) {
@@ -143,15 +168,51 @@ function ConvertTo-AgentPayload {
                     }
                 }
                 'connected_agent' {
-                    # Resolved by name at provisioning time; the target agent must exist first,
-                    # which is why the orchestrator is provisioned last.
+                    # The data plane wants the target's real agent id, not its name, so the target
+                    # must already exist. Agents in this project are resolved from the listing
+                    # taken at start-up; agents in another project cannot be listed from here and
+                    # have to be supplied with -ConnectedAgentId.
+                    $key = "$($tool.project)/$($tool.agent)"
+                    $connectedId = if ($AgentIds.ContainsKey($key)) {
+                        [string] $AgentIds[$key]
+                    }
+                    elseif ($tool.project -eq $ProjectName -and $AgentIds.ContainsKey($tool.agent)) {
+                        [string] $AgentIds[$tool.agent]
+                    }
+                    else {
+                        $null
+                    }
+
+                    # Left off with a warning rather than failing, exactly like an MCP server with
+                    # no URL: provisioning one game only is a legitimate thing to do, and the
+                    # orchestrator is updated in place when the other agents arrive.
+                    if (-not $connectedId) {
+                        $hint = if ($tool.project -eq $ProjectName) {
+                            "Provision '$($tool.agent)' in this project and re-run."
+                        }
+                        else {
+                            "It lives in project '$($tool.project)', so pass its id and re-run: -ConnectedAgentId @{ '$key' = 'asst_...' }"
+                        }
+                        Write-Warning "Agent '$($Definition.name)': no id known for connected agent '$($tool.agent)', so that tool is being left off. $hint"
+                        continue
+                    }
+
+                    $connected = [ordered]@{
+                        id   = $connectedId
+                        name = $tool.name
+                    }
+                    # The service requires a description: it is what the calling model reads to
+                    # decide when to invoke this agent.
+                    $connected.description = if ($tool.ContainsKey('description')) {
+                        [string] $tool.description
+                    }
+                    else {
+                        "Delegates to $($tool.agent) in project $($tool.project)."
+                    }
+
                     $tools += [ordered]@{
                         type            = 'connected_agent'
-                        connected_agent = [ordered]@{
-                            name    = $tool.name
-                            project = $tool.project
-                            agent   = $tool.agent
-                        }
+                        connected_agent = $connected
                     }
                 }
                 default { throw "Agent '$($Definition.name)' uses unsupported tool type '$($tool.type)'." }
@@ -207,12 +268,23 @@ if ($token) {
     }
 }
 
+# Ids the payload builder may resolve a connected agent against: every agent already in this
+# project, plus anything the caller supplied for other projects.
+$knownAgentIds = @{}
+foreach ($entry in $existing.GetEnumerator()) { $knownAgentIds[$entry.Key] = $entry.Value }
+foreach ($entry in $ConnectedAgentId.GetEnumerator()) { $knownAgentIds[$entry.Key] = $entry.Value }
+
 $results = foreach ($file in $files) {
     $definition = ConvertFrom-Yaml -Yaml (Get-Content -Path $file.FullName -Raw)
-    $payload = ConvertTo-AgentPayload -Definition $definition -McpUrls $McpServerUrl
 
-    $name = $payload.name
+    # Filtered before the payload is built, so a skipped agent does not warn about MCP servers
+    # or fail to resolve a connected agent it was never going to be provisioned with.
+    $name = [string] $definition.name
     if ($Only -and $name -notin $Only) { continue }
+
+    $payload = ConvertTo-AgentPayload -Definition $definition -McpUrls $McpServerUrl `
+        -AgentIds $knownAgentIds -ProjectName $projectName
+
     $agentId = $existing[$name]
     $action = if ($agentId) { "Update agent '$name' ($agentId)" } else { "Create agent '$name'" }
 
@@ -227,6 +299,10 @@ $results = foreach ($file in $files) {
     else {
         Invoke-Foundry -Method 'POST' -RelativeUrl "/assistants?api-version=$ApiVersion" -Token $token -Body $payload
     }
+
+    # Newly created agents become resolvable targets for later files in this run, which is what
+    # lets the orchestrator connect to agents provisioned moments earlier.
+    if ($response.id) { $knownAgentIds[$name] = $response.id }
 
     [pscustomobject]@{
         Name = $name
