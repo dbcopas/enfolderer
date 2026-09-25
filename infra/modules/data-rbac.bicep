@@ -50,8 +50,21 @@ resource cosmos 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' existing = {
 }
 
 // --- API -------------------------------------------------------------------------------------
-// The API mints user-delegation SAS tokens but never reads image content itself, so it gets the
-// delegator role at account scope and no blob data role.
+// The API mints user-delegation SAS tokens rather than touching image content itself, but a
+// user-delegation SAS can only grant what the delegating identity already holds: without write on
+// the scans container the upload SAS mints happily and is then refused when the client uses it.
+// Contributor on that one container is the narrowest role that includes it; the API still has no
+// access to crops.
+resource apiScans 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: scans
+  name: guid(scans.id, apiPrincipalId, storageBlobDataContributor)
+  properties: {
+    principalId: apiPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
+  }
+}
+
 resource apiDelegator 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: storage
   name: guid(storage.id, apiPrincipalId, storageBlobDelegator)
