@@ -1,3 +1,4 @@
+using Azure;
 using Enfolderer.Ai.Api;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Infrastructure;
@@ -54,10 +55,31 @@ jobs.MapPost("/", async (
     CreateJobRequest request,
     IJobStore store,
     IUploadUrlIssuer issuer,
+    ILoggerFactory loggerFactory,
     CancellationToken ct) =>
 {
     var jobId = Guid.NewGuid().ToString("n");
-    var target = await issuer.IssueAsync(jobId, request.FileName, ct);
+
+    UploadTarget target;
+    try
+    {
+        target = await issuer.IssueAsync(jobId, request.FileName, ct);
+    }
+    catch (RequestFailedException ex)
+    {
+        // Minting the upload grant is the first thing that touches Azure, so a misconfigured or
+        // not-yet-propagated role assignment surfaces here. Report the storage error code rather
+        // than an unhandled 500, which says only that something went wrong somewhere.
+        loggerFactory.CreateLogger("Jobs").LogError(
+            ex, "Could not issue an upload URL for job {JobId}: {ErrorCode}", jobId, ex.ErrorCode);
+
+        return Results.Problem(
+            title: "Could not issue an upload URL.",
+            detail: $"Azure Storage returned {ex.Status} {ex.ErrorCode}. The API's managed identity "
+                  + "needs Storage Blob Delegator on the account and write access to the scans "
+                  + "container; a newly granted role can take several minutes to take effect.",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
 
     var job = new ScanJobDocument
     {
