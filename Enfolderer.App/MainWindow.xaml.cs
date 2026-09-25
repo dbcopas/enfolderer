@@ -426,8 +426,8 @@ public partial class MainWindow : Window
         try
         {
             var config = Utilities.AiScanConfig.Load(configPath);
-            config.DeviceCodePrompt = message => Dispatcher.Invoke(() =>
-                MessageBox.Show(this, message, "Sign in", MessageBoxButton.OK, MessageBoxImage.Information));
+            config.DeviceCodePrompt = details => Dispatcher.Invoke(
+                () => Utilities.DeviceCodeWindow.Show(this, details));
             return config;
         }
         catch (Exception ex)

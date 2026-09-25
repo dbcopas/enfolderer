@@ -777,8 +777,14 @@ scope=api://$apiAppId/Scan.Submit
 The `@"` … `"@` here-string expands variables; `@'` … `'@` would not, and would leave the literal
 `$prefix` in the file.
 
-Then **Tools → Scan Card Image…**, pick a photo, and sign in when prompted. Uncomment
-`use_device_code` if the machine has no usable browser.
+Then **Tools → Scan Card Image…**, pick a photo, and sign in when prompted.
+
+Set `use_device_code=true` if the interactive browser sign-in cannot complete on that machine. The
+usual reason is not a missing browser but a passkey: signing in with a phone needs a Bluetooth link
+between the phone and the PC, which hangs at *Connecting to device* on a virtual machine, over
+Remote Desktop, or with Bluetooth unavailable. Device code flow avoids the pairing altogether — the
+whole sign-in happens on the phone. The app opens the sign-in page, copies the code to the
+clipboard, shows both so they can be copied again, and closes the prompt once sign-in finishes.
 
 ## Verifying the boundaries
 

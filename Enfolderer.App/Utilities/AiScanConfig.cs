@@ -30,8 +30,12 @@ public sealed class AiScanConfig
     /// <summary>Optional game hint sent with each job, e.g. <c>mtg</c> or <c>pokemon</c>.</summary>
     public string? GameHint { get; init; }
 
-    /// <summary>Invoked with the device code message when <see cref="UseDeviceCode"/> is set.</summary>
-    public Action<string>? DeviceCodePrompt { get; set; }
+    /// <summary>
+    /// Invoked with the device code details when <see cref="UseDeviceCode"/> is set. The returned
+    /// handle is disposed once sign-in finishes, so the prompt can dismiss itself; returning
+    /// <see langword="null"/> is fine for a prompt that needs no cleanup.
+    /// </summary>
+    public Func<DeviceCodeDetails, IDisposable?>? DeviceCodePrompt { get; set; }
 
     /// <summary>Template written when no configuration file exists yet.</summary>
     public static string SampleContent =>

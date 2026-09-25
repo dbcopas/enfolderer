@@ -115,16 +115,28 @@ public static class BinderScanService
 
         if (config.UseDeviceCode)
         {
-            return new DeviceCodeCredential(new DeviceCodeCredentialOptions
+            // The prompt's dismissal handle is captured here and disposed by the wrapper below once
+            // the token arrives, so the prompt can be modeless: a modal one would block the
+            // library's polling until it was dismissed, which is the opposite of what is needed.
+            IDisposable? prompt = null;
+            var credential = new DeviceCodeCredential(new DeviceCodeCredentialOptions
             {
                 TenantId = config.TenantId,
                 ClientId = config.ClientId,
                 TokenCachePersistenceOptions = new TokenCachePersistenceOptions(),
                 DeviceCodeCallback = (info, _) =>
                 {
-                    config.DeviceCodePrompt?.Invoke(info.Message);
+                    prompt?.Dispose();
+                    prompt = config.DeviceCodePrompt?.Invoke(
+                        new DeviceCodeDetails(info.UserCode, info.VerificationUri.ToString(), info.Message));
                     return Task.CompletedTask;
                 }
+            });
+
+            return new PromptDismissingCredential(credential, () =>
+            {
+                prompt?.Dispose();
+                prompt = null;
             });
         }
 
