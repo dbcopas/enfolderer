@@ -56,7 +56,7 @@ internal sealed class RememberingCredential : TokenCredential
             {
                 return _inner.GetToken(requestContext, cancellationToken);
             }
-            catch (AuthenticationFailedException)
+            catch (AuthenticationRequiredException)
             {
                 Forget();
                 SignIn(requestContext, cancellationToken);
@@ -87,13 +87,15 @@ internal sealed class RememberingCredential : TokenCredential
             {
                 return await _inner.GetTokenAsync(requestContext, cancellationToken).ConfigureAwait(false);
             }
-            catch (AuthenticationFailedException)
+            catch (AuthenticationRequiredException)
             {
                 // The record is still valid as a name, but the token behind it has expired or been
-                // revoked, so silent authentication cannot succeed. AuthenticationRequiredException,
-                // which DisableAutomaticAuthentication raises for exactly this case, derives from
-                // AuthenticationFailedException and is caught here too. Sign in again rather than
+                // revoked, so silent authentication cannot succeed. Sign in again rather than
                 // failing the scan, and replace the record with the new one.
+                // Only this exception, which DisableAutomaticAuthentication raises for exactly that
+                // case, is treated this way: a network error or service outage is an
+                // AuthenticationFailedException too, and discarding a good record over one would be
+                // the very thing this class exists to avoid.
                 Forget();
                 await SignInAsync(requestContext, cancellationToken).ConfigureAwait(false);
                 return await _inner.GetTokenAsync(requestContext, cancellationToken).ConfigureAwait(false);
