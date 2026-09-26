@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -54,17 +55,19 @@ public sealed class AuthenticationRecordStore
 
             return matches ? record : null;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // A corrupt or unreadable record is not worth failing a scan over: sign in again and
             // overwrite it.
+            Debug.WriteLine($"Ignoring the authentication record at {_path}: {ex.Message}");
             return null;
         }
     }
 
     /// <summary>
     /// Saves the record, replacing any previous one. Failures are swallowed: not being able to
-    /// write it costs an extra sign-in next time, which is far better than losing the scan.
+    /// write it costs an extra sign-in next time, which is far better than losing the scan. A
+    /// read-only install directory is the usual cause, so the reason is traced rather than lost.
     /// </summary>
     public async Task SaveAsync(AuthenticationRecord record, CancellationToken ct = default)
     {
@@ -73,8 +76,23 @@ public sealed class AuthenticationRecordStore
             using var stream = File.Create(_path);
             await record.SerializeAsync(stream, ct).ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Debug.WriteLine($"Could not save the authentication record to {_path}: {ex.Message}");
+        }
+    }
+
+    /// <summary>Saves the record synchronously, for callers that must not block on a task.</summary>
+    public void Save(AuthenticationRecord record)
+    {
+        try
+        {
+            using var stream = File.Create(_path);
+            record.Serialize(stream);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Could not save the authentication record to {_path}: {ex.Message}");
         }
     }
 
@@ -85,8 +103,9 @@ public sealed class AuthenticationRecordStore
         {
             if (File.Exists(_path)) File.Delete(_path);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Debug.WriteLine($"Could not delete the authentication record at {_path}: {ex.Message}");
         }
     }
 }

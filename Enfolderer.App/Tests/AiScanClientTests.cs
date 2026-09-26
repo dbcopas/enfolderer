@@ -302,14 +302,17 @@ public static class AiScanClientTests
 
         var inner = new ScriptedCredential();
         var prompts = 0;
+        AuthenticationRecord Prompt()
+        {
+            prompts++;
+            inner.SilentFails = false;
+            return MakeRecord("tenant", "client");
+        }
+
         var credential = new RememberingCredential(
             inner,
-            (_, _) =>
-            {
-                prompts++;
-                inner.SilentFails = false;
-                return Task.FromResult(MakeRecord("tenant", "client"));
-            },
+            (_, _) => Prompt(),
+            (_, _) => Task.FromResult(Prompt()),
             store,
             hasRecord: true);
 
@@ -323,6 +326,7 @@ public static class AiScanClientTests
         prompts = 0;
         var silent = new RememberingCredential(
             new ScriptedCredential { SilentFails = false },
+            (_, _) => { prompts++; return MakeRecord("tenant", "client"); },
             (_, _) => { prompts++; return Task.FromResult(MakeRecord("tenant", "client")); },
             store,
             hasRecord: true);

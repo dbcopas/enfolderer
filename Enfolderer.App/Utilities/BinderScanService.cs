@@ -148,6 +148,7 @@ public static class BinderScanService
 
             var remembered = new RememberingCredential(
                 deviceCode,
+                (ctx, ct) => deviceCode.Authenticate(ctx, ct),
                 (ctx, ct) => deviceCode.AuthenticateAsync(ctx, ct),
                 store,
                 record is not null);
@@ -170,6 +171,7 @@ public static class BinderScanService
 
         return new RememberingCredential(
             browser,
+            (ctx, ct) => browser.Authenticate(ctx, ct),
             (ctx, ct) => browser.AuthenticateAsync(ctx, ct),
             store,
             record is not null);
