@@ -344,7 +344,7 @@ public static class AiScanClientTests
 
         public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
         {
-            if (SilentFails) throw new AuthenticationFailedException("interactive authentication is required");
+            if (SilentFails) throw new AuthenticationRequiredException("interactive authentication is required", requestContext);
             return new AccessToken("token", DateTimeOffset.UtcNow.AddHours(1));
         }
 
