@@ -19,25 +19,55 @@ namespace Enfolderer.App.Utilities;
 internal sealed class RememberingCredential : TokenCredential
 {
     private readonly TokenCredential _inner;
-    private readonly Func<TokenRequestContext, CancellationToken, Task<AuthenticationRecord>> _authenticate;
+    private readonly Func<TokenRequestContext, CancellationToken, AuthenticationRecord> _authenticate;
+    private readonly Func<TokenRequestContext, CancellationToken, Task<AuthenticationRecord>> _authenticateAsync;
     private readonly AuthenticationRecordStore _store;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _hasRecord;
 
     public RememberingCredential(
         TokenCredential inner,
-        Func<TokenRequestContext, CancellationToken, Task<AuthenticationRecord>> authenticate,
+        Func<TokenRequestContext, CancellationToken, AuthenticationRecord> authenticate,
+        Func<TokenRequestContext, CancellationToken, Task<AuthenticationRecord>> authenticateAsync,
         AuthenticationRecordStore store,
         bool hasRecord)
     {
         _inner = inner;
         _authenticate = authenticate;
+        _authenticateAsync = authenticateAsync;
         _store = store;
         _hasRecord = hasRecord;
     }
 
-    public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) =>
-        GetTokenAsync(requestContext, cancellationToken).AsTask().GetAwaiter().GetResult();
+    public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+    {
+        // Implemented without blocking on the async path: a caller on the UI thread would deadlock
+        // if the interactive sign-in it is waiting for needed that same thread.
+        _gate.Wait(cancellationToken);
+        try
+        {
+            if (!_hasRecord)
+            {
+                SignIn(requestContext, cancellationToken);
+                return _inner.GetToken(requestContext, cancellationToken);
+            }
+
+            try
+            {
+                return _inner.GetToken(requestContext, cancellationToken);
+            }
+            catch (AuthenticationFailedException)
+            {
+                Forget();
+                SignIn(requestContext, cancellationToken);
+                return _inner.GetToken(requestContext, cancellationToken);
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     public override async ValueTask<AccessToken> GetTokenAsync(
         TokenRequestContext requestContext, CancellationToken cancellationToken)
@@ -60,10 +90,11 @@ internal sealed class RememberingCredential : TokenCredential
             catch (AuthenticationFailedException)
             {
                 // The record is still valid as a name, but the token behind it has expired or been
-                // revoked, so silent authentication cannot succeed. Sign in again rather than
+                // revoked, so silent authentication cannot succeed. AuthenticationRequiredException,
+                // which DisableAutomaticAuthentication raises for exactly this case, derives from
+                // AuthenticationFailedException and is caught here too. Sign in again rather than
                 // failing the scan, and replace the record with the new one.
-                _store.Clear();
-                _hasRecord = false;
+                Forget();
                 await SignInAsync(requestContext, cancellationToken).ConfigureAwait(false);
                 return await _inner.GetTokenAsync(requestContext, cancellationToken).ConfigureAwait(false);
             }
@@ -74,9 +105,22 @@ internal sealed class RememberingCredential : TokenCredential
         }
     }
 
+    private void Forget()
+    {
+        _store.Clear();
+        _hasRecord = false;
+    }
+
+    private void SignIn(TokenRequestContext requestContext, CancellationToken cancellationToken)
+    {
+        var record = _authenticate(requestContext, cancellationToken);
+        _store.Save(record);
+        _hasRecord = true;
+    }
+
     private async Task SignInAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
     {
-        var record = await _authenticate(requestContext, cancellationToken).ConfigureAwait(false);
+        var record = await _authenticateAsync(requestContext, cancellationToken).ConfigureAwait(false);
         await _store.SaveAsync(record, cancellationToken).ConfigureAwait(false);
         _hasRecord = true;
     }
