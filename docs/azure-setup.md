@@ -786,6 +786,22 @@ Remote Desktop, or with Bluetooth unavailable. Device code flow avoids the pairi
 whole sign-in happens on the phone. The app opens the sign-in page, copies the code to the
 clipboard, shows both so they can be copied again, and closes the prompt once sign-in finishes.
 
+### Signing in once
+
+Sign-in is remembered across runs. The tokens live in the Azure SDK's persistent cache, and
+`aiauth.json` — written beside `aiconfig.txt` — records *which* account in that cache to reuse. It
+holds no token and no secret, only the username, home account id, tenant and client id. Delete it to
+force a fresh sign-in; changing `tenant_id` or `client_id` in `aiconfig.txt` invalidates it
+automatically, as does the cached token expiring or being revoked, each of which simply prompts
+again.
+
+On Windows the token cache is encrypted with DPAPI under the signed-in user's profile. Where
+encryption is unavailable the SDK refuses to write the cache rather than storing tokens in the
+clear, and the app leaves it that way: it prompts every scan instead. For a demo whose subject is
+security boundaries, prompting is the better failure. If you need the cache on such a machine, that
+is a deliberate change to `TokenCachePersistenceOptions.UnsafeAllowUnencryptedStorage` in
+`BinderScanService`, not a setting.
+
 ## Verifying the boundaries
 
 Once a scan succeeds end to end, confirm the demo assets are real:

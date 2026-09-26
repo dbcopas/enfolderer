@@ -113,17 +113,30 @@ public static class BinderScanService
     {
         if (config.Scopes.Length == 0) return null;
 
+        var store = AuthenticationRecordStore.BesideExecutable();
+        var record = store.Load(config.TenantId, config.ClientId);
+
+        // Naming the cache keeps this app's tokens apart from those of any other Azure SDK tool on
+        // the machine, so signing out of one does not disturb the other.
+        // UnsafeAllowUnencryptedStorage is deliberately left off: on Windows the cache is encrypted
+        // per user by DPAPI, and where encryption is unavailable the SDK declines to write it at
+        // all. That costs a sign-in per scan on such a machine, which is the failure this demo
+        // should prefer over writing tokens to disk in the clear.
+        var cache = new TokenCachePersistenceOptions { Name = "Enfolderer.Scan" };
+
         if (config.UseDeviceCode)
         {
             // The prompt's dismissal handle is captured here and disposed by the wrapper below once
             // the token arrives, so the prompt can be modeless: a modal one would block the
             // library's polling until it was dismissed, which is the opposite of what is needed.
             IDisposable? prompt = null;
-            var credential = new DeviceCodeCredential(new DeviceCodeCredentialOptions
+            var deviceCode = new DeviceCodeCredential(new DeviceCodeCredentialOptions
             {
                 TenantId = config.TenantId,
                 ClientId = config.ClientId,
-                TokenCachePersistenceOptions = new TokenCachePersistenceOptions(),
+                TokenCachePersistenceOptions = cache,
+                AuthenticationRecord = record,
+                DisableAutomaticAuthentication = true,
                 DeviceCodeCallback = (info, _) =>
                 {
                     prompt?.Dispose();
@@ -133,18 +146,32 @@ public static class BinderScanService
                 }
             });
 
-            return new PromptDismissingCredential(credential, () =>
+            var remembered = new RememberingCredential(
+                deviceCode,
+                (ctx, ct) => deviceCode.AuthenticateAsync(ctx, ct),
+                store,
+                record is not null);
+
+            return new PromptDismissingCredential(remembered, () =>
             {
                 prompt?.Dispose();
                 prompt = null;
             });
         }
 
-        return new InteractiveBrowserCredential(new InteractiveBrowserCredentialOptions
+        var browser = new InteractiveBrowserCredential(new InteractiveBrowserCredentialOptions
         {
             TenantId = config.TenantId,
             ClientId = config.ClientId,
-            TokenCachePersistenceOptions = new TokenCachePersistenceOptions()
+            TokenCachePersistenceOptions = cache,
+            AuthenticationRecord = record,
+            DisableAutomaticAuthentication = true
         });
+
+        return new RememberingCredential(
+            browser,
+            (ctx, ct) => browser.AuthenticateAsync(ctx, ct),
+            store,
+            record is not null);
     }
 }

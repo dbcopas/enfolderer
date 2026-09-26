@@ -1,7 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
+using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Azure.Core;
+using Azure.Identity;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.App.Utilities;
 
@@ -22,6 +28,8 @@ public static class AiScanClientTests
         failures += TestStatusDescriptions();
         failures += TestConfigParsing();
         failures += TestQuadBoundingBox();
+        failures += TestAuthenticationRecordStore();
+        failures += TestStaleRecordFallsBackToPrompt();
         return failures;
     }
 
@@ -238,5 +246,105 @@ public static class AiScanClientTests
         failures += Check(!new CardQuad([new ImagePoint(0, 0)]).IsValid, "a one-point quad is invalid");
 
         return failures;
+    }
+    /// <summary>
+    /// Builds an <see cref="AuthenticationRecord"/> without signing in. The type has no public
+    /// constructor, but its serialised form is documented by its own round trip, so deserialising
+    /// one is the supported way to obtain a fixture.
+    /// </summary>
+    private static AuthenticationRecord MakeRecord(string tenantId, string clientId)
+    {
+        var json = $$"""
+        {"username":"user@example.com","authority":"login.microsoftonline.com","homeAccountId":"home-id","tenantId":"{{tenantId}}","clientId":"{{clientId}}","version":"1.0"}
+        """;
+        return AuthenticationRecord.Deserialize(new MemoryStream(Encoding.UTF8.GetBytes(json)));
+    }
+
+    private static int TestAuthenticationRecordStore()
+    {
+        int failures = 0;
+        var path = Path.Combine(Path.GetTempPath(), $"enfolderer_authrecord_{Guid.NewGuid():N}.json");
+        var store = new AuthenticationRecordStore(path);
+
+        failures += Check(store.Load("tenant", "client") is null, "no record before the first sign-in");
+
+        store.SaveAsync(MakeRecord("tenant", "client")).GetAwaiter().GetResult();
+        var loaded = store.Load("tenant", "client");
+        failures += Check(loaded is not null, "the saved record is read back");
+        failures += Check(loaded?.Username == "user@example.com", "the account survives the round trip");
+        failures += Check(loaded?.HomeAccountId == "home-id", "the home account id survives the round trip");
+
+        // A record from another tenant or app registration can never match a cache entry, so it
+        // must be treated as absent rather than handed to the credential.
+        failures += Check(store.Load("other-tenant", "client") is null, "a record from another tenant is discarded");
+        failures += Check(store.Load("tenant", "other-client") is null, "a record from another app is discarded");
+
+        File.WriteAllText(path, "not json");
+        failures += Check(store.Load("tenant", "client") is null, "a corrupt record is discarded, not thrown");
+
+        store.Clear();
+        failures += Check(!File.Exists(path), "clearing removes the record");
+        store.Clear();
+
+        return failures;
+    }
+
+    /// <summary>
+    /// A saved record whose cached token has expired or been revoked must prompt again rather than
+    /// fail the scan, and the replacement record must be saved.
+    /// </summary>
+    private static int TestStaleRecordFallsBackToPrompt()
+    {
+        int failures = 0;
+        var path = Path.Combine(Path.GetTempPath(), $"enfolderer_authrecord_{Guid.NewGuid():N}.json");
+        var store = new AuthenticationRecordStore(path);
+        store.SaveAsync(MakeRecord("tenant", "client")).GetAwaiter().GetResult();
+
+        var inner = new ScriptedCredential();
+        var prompts = 0;
+        var credential = new RememberingCredential(
+            inner,
+            (_, _) =>
+            {
+                prompts++;
+                inner.SilentFails = false;
+                return Task.FromResult(MakeRecord("tenant", "client"));
+            },
+            store,
+            hasRecord: true);
+
+        var token = credential.GetToken(new TokenRequestContext(["scope"]), CancellationToken.None);
+
+        failures += Check(prompts == 1, "a stale record prompts exactly once");
+        failures += Check(token.Token == "token", "the scan gets its token despite the stale record");
+        failures += Check(store.Load("tenant", "client") is not null, "the replacement record is saved");
+
+        // With a usable record there must be no prompt at all: that is the whole point.
+        prompts = 0;
+        var silent = new RememberingCredential(
+            new ScriptedCredential { SilentFails = false },
+            (_, _) => { prompts++; return Task.FromResult(MakeRecord("tenant", "client")); },
+            store,
+            hasRecord: true);
+        silent.GetToken(new TokenRequestContext(["scope"]), CancellationToken.None);
+        failures += Check(prompts == 0, "a usable record signs in silently");
+
+        store.Clear();
+        return failures;
+    }
+
+    /// <summary>Stands in for a cached credential that may or may not be able to authenticate silently.</summary>
+    private sealed class ScriptedCredential : TokenCredential
+    {
+        public bool SilentFails { get; set; } = true;
+
+        public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+        {
+            if (SilentFails) throw new AuthenticationFailedException("interactive authentication is required");
+            return new AccessToken("token", DateTimeOffset.UtcNow.AddHours(1));
+        }
+
+        public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            => new(GetToken(requestContext, cancellationToken));
     }
 }
