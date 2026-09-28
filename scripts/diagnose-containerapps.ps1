@@ -67,6 +67,19 @@ function Invoke-AzJson {
     try { return $json | ConvertFrom-Json } catch { return $null }
 }
 
+# The CLI omits a property entirely when its value is null, so most of what this script looks for is
+# absent rather than empty on a healthy resource. Under Set-StrictMode reading one of those directly
+# throws, and with $ErrorActionPreference = 'Stop' that would end the run at the exact moment it had
+# good news to report.
+function Get-Prop {
+    param($Object, [string] $Name)
+
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
 $platformRg = "$Prefix-platform"
 $geoRg      = "$Prefix-cardgeo"
 $idRg       = "$Prefix-cardid"
@@ -91,10 +104,11 @@ foreach ($rg in $platformRg, $geoRg, $idRg) {
         continue
     }
     foreach ($e in @($found)) {
-        $staticIp = $e.properties.staticIp
-        $internal = $e.properties.vnetConfiguration.internal
-        $state = $e.properties.provisioningState
-        $profiles = @($e.properties.workloadProfiles | ForEach-Object { $_.name }) -join ','
+        $props = Get-Prop $e 'properties'
+        $staticIp = Get-Prop $props 'staticIp'
+        $internal = Get-Prop (Get-Prop $props 'vnetConfiguration') 'internal'
+        $state = Get-Prop $props 'provisioningState'
+        $profiles = @(Get-Prop $props 'workloadProfiles' | ForEach-Object { Get-Prop $_ 'name' }) -join ','
 
         # An external environment with no ingress IP never finished building its load balancer,
         # whatever it claims about its provisioning state. This is what a failed environment looks
@@ -103,7 +117,7 @@ foreach ($rg in $platformRg, $geoRg, $idRg) {
         $line = "$($e.name) in $rg : $state, staticIp=$(if ([string]::IsNullOrWhiteSpace($staticIp)) { '(none)' } else { $staticIp }), profiles=$profiles"
         if ($isBroken) {
             Write-Bad $line
-            $brokenEnvs += $e.name
+            $brokenEnvs += "$($e.name) in $rg"
         }
         else {
             Write-Good $line
@@ -127,16 +141,19 @@ foreach ($subnet in 'platform-apps', 'cardgeo-apps', 'cardid-apps') {
         continue
     }
     $notes = @()
-    if ($s.networkSecurityGroup) { $notes += "NSG $(Split-Path $s.networkSecurityGroup.id -Leaf)" }
-    if ($s.routeTable) { $notes += "route table $(Split-Path $s.routeTable.id -Leaf)" }
-    $delegation = @($s.delegations | ForEach-Object { $_.serviceName }) -join ','
+    $nsg = Get-Prop $s 'networkSecurityGroup'
+    $routeTable = Get-Prop $s 'routeTable'
+    if ($nsg) { $notes += "NSG $(Split-Path (Get-Prop $nsg 'id') -Leaf)" }
+    if ($routeTable) { $notes += "route table $(Split-Path (Get-Prop $routeTable 'id') -Leaf)" }
+    $delegation = @(Get-Prop $s 'delegations' | ForEach-Object { Get-Prop $_ 'serviceName' }) -join ','
+    $range = Get-Prop $s 'addressPrefix'
 
     if ($notes) {
-        Write-Bad "$subnet : $($s.addressPrefix), delegated to $delegation, $($notes -join ' and ') attached"
+        Write-Bad "$subnet : $range, delegated to $delegation, $($notes -join ' and ') attached"
         $attachedSubnets += $subnet
     }
     else {
-        Write-Good "$subnet : $($s.addressPrefix), delegated to $delegation, nothing attached"
+        Write-Good "$subnet : $range, delegated to $delegation, nothing attached"
     }
 }
 
@@ -161,11 +178,15 @@ foreach ($app in $apps) {
         continue
     }
 
-    $image = $a.properties.template.containers[0].image
-    $port = if ($a.properties.configuration.ingress) { $a.properties.configuration.ingress.targetPort } else { '(no ingress)' }
+    $props = Get-Prop $a 'properties'
+    $containers = @(Get-Prop (Get-Prop $props 'template') 'containers')
+    $image = if ($containers.Count) { Get-Prop $containers[0] 'image' } else { '(none)' }
+    $ingress = Get-Prop (Get-Prop $props 'configuration') 'ingress'
+    $port = if ($ingress) { Get-Prop $ingress 'targetPort' } else { '(no ingress)' }
+    $provisioningError = Get-Prop $props 'provisioningError'
     Write-Host "  $($app.Name)" -ForegroundColor White
-    Write-Note "state $($a.properties.provisioningState), image $image, targetPort $port"
-    if ($a.properties.provisioningError) { Write-Bad "provisioningError: $($a.properties.provisioningError)" }
+    Write-Note "state $(Get-Prop $props 'provisioningState'), image $image, targetPort $port"
+    if ($provisioningError) { Write-Bad "provisioningError: $provisioningError" }
 
     # The placeholder listens on 80 and our own images on 8080, so a mismatch here means the default
     # TCP startup probe can never connect and the revision is failed by the platform after roughly
@@ -192,11 +213,12 @@ foreach ($app in $apps) {
     }
 
     foreach ($r in @($revisions)) {
-        $detail = $r.properties.runningStateDetails
-        Write-Note "revision $($r.name): health=$($r.properties.healthState), running=$($r.properties.runningState), provisioning=$($r.properties.provisioningState)"
+        $rp = Get-Prop $r 'properties'
+        $detail = Get-Prop $rp 'runningStateDetails'
+        Write-Note "revision $(Get-Prop $r 'name'): health=$(Get-Prop $rp 'healthState'), running=$(Get-Prop $rp 'runningState'), provisioning=$(Get-Prop $rp 'provisioningState')"
         if (-not [string]::IsNullOrWhiteSpace($detail)) {
             Write-Bad "runningStateDetails: $detail"
-            $appFindings += "$($app.Name)/$($r.name): $detail"
+            $appFindings += "$($app.Name)/$(Get-Prop $r 'name'): $detail"
         }
     }
 }
