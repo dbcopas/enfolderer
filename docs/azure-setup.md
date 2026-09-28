@@ -607,11 +607,49 @@ likely to hit.
     start in an environment with no ingress IP, which is why all five apps fail together and why the
     message is empty. Check `properties.staticIp` on all three environments before looking at
     anything else. The fix is to delete and recreate them, not to redeploy the apps.
-  - **Nothing is listening on the ingress target port.** Container Apps probes `targetPort` before
-    it will call a revision provisioned. The first deployment runs every app on
+  - **Nothing is listening on the ingress target port.** Container Apps injects default TCP startup,
+    liveness and readiness probes bound to `targetPort` whenever ingress is enabled, and the startup
+    probe has to pass before a revision counts as provisioned. The first deployment runs every app on
     `mcr.microsoft.com/k8se/quickstart:latest`, which listens on **80**, while our own images listen
     on 8080 (`EXPOSE 8080` in `src/Dockerfile`), so the templates declare `targetPort: 80` while
     `imageTag` is empty and 8080 once it is set. If you hand-edit an app's image, move its port too.
+    This one usually reports `Error details: Operation expired.` rather than an empty string, and it
+    cannot explain the worker, which has no ingress and therefore no probes.
+
+  If neither fits, suspect **egress**. A VNet-injected environment pulls both its own platform
+  images and yours out through your subnet, so a tenant policy that attaches an NSG or a route table
+  to the `*-apps` subnets — neither of which this template creates — will stop every revision from
+  starting. One command discriminates it:
+
+  ```powershell
+  az network vnet subnet show -g $platformRg --vnet-name "$prefix-vnet" -n platform-apps `
+    --query "{nsg:networkSecurityGroup.id, routeTable:routeTable.id}" -o json
+  ```
+
+  Anything non-null there was added by policy, and whatever it does it must still allow outbound 443
+  to the `MicrosoftContainerRegistry`, `AzureFrontDoor.FirstParty` and `AzureActiveDirectory` service
+  tags (the last is needed because every app here uses a managed identity), and TCP+UDP 53 to
+  `168.63.129.16`. Behind a firewall the equivalent FQDN allow-list is `mcr.microsoft.com`,
+  `*.data.mcr.microsoft.com`, `packages.aks.azure.com`, `acs-mirror.azureedge.net`,
+  `login.microsoftonline.com` and `*.identity.azure.net`. `scripts/migrate-to-containerapps.ps1`
+  warns in its step 1 if it finds either attached.
+
+  Whichever cause it turns out to be, **the ARM message is truncated, not empty at the source.** The
+  full inner error is in the per-operation list, and the per-revision detail is in
+  `runningStateDetails`:
+
+  ```powershell
+  az deployment operation group list -g $platformRg --name hosting `
+    --query "[?properties.provisioningState=='Failed'].{name:properties.targetResource.resourceName, msg:properties.statusMessage}" -o json
+  az containerapp revision show -g $platformRg -n "$prefix-api" --revision $revision `
+    --query "{health:properties.healthState, running:properties.runningState, details:properties.runningStateDetails}" -o json
+  ```
+
+  An **empty** revision list means the app never got as far as creating a revision, which narrows it
+  to an image pull or template validation rather than a crash or a probe. In that state
+  `az containerapp logs show --type system` fails with `KeyError: 'eventStreamEndpoint'`, because
+  there is no revision to stream from; use `az monitor activity-log list -g $platformRg --query
+  "[?status.value=='Failed']"` instead.
 - **`MaxNumberOfRegionalEnvironmentsInSubExceeded`.** The deployment creates three environments,
   one per team, and some regions cap a subscription at very few. Delete unused environments in the
   region, request an increase, or deploy somewhere else.
