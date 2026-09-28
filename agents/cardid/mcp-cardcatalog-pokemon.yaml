@@ -6,7 +6,7 @@ name: mcp-cardcatalog-pokemon
 project: cardid
 owner: team-b-identification
 # Hosted over HTTPS, because the Foundry agent data plane will not accept any other kind of tool
-# server URL. The site lives in Team B's resource group; infra/main.bicep supplies its URL.
+# server URL. The container app lives in Team B's resource group; infra/main.bicep supplies its URL.
 transport: http
 site: mcp-cardcatalog-pokemon
 project_source: src/Enfolderer.Ai.Mcp.CardCatalog.Pokemon

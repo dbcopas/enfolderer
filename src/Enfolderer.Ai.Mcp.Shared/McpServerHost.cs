@@ -26,7 +26,7 @@ public static class McpServerHost
     /// <param name="args">Command-line arguments passed to the host.</param>
     /// <param name="serverName">MCP server name reported in the handshake, e.g. <c>mcp-imaging</c>.</param>
     /// <param name="configureServices">
-    /// Registers the server's own dependencies. Tools are discovered from the calling assembly.
+    /// Registers the server's own dependencies. Tools are discovered from the entry assembly.
     /// </param>
     public static WebApplication Create(
         string[] args,
@@ -40,7 +40,12 @@ public static class McpServerHost
         builder.Services
             .AddMcpServer(options => options.ServerInfo = new() { Name = serverName, Version = "1.0.0" })
             .WithHttpTransport()
-            .WithToolsFromAssembly(System.Reflection.Assembly.GetCallingAssembly());
+            // Not GetCallingAssembly: the JIT is free to inline this method into its caller, and
+            // if it does, tool discovery silently finds nothing. Every server here is its own
+            // entry point, so the entry assembly is both correct and stable.
+            .WithToolsFromAssembly(System.Reflection.Assembly.GetEntryAssembly()
+                ?? throw new InvalidOperationException(
+                    "MCP tools are discovered from the entry assembly, and there is none."));
 
         // Callers are Foundry projects presenting their own managed identity, so the token is an
         // app token: authorise on the object id of the calling principal rather than on a scope.
