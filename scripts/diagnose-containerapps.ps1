@@ -64,7 +64,10 @@ function Invoke-AzJson {
 
     $json = az @Arguments -o json 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
-    try { return $json | ConvertFrom-Json } catch { return $null }
+    # A native command's output arrives as an array of lines. Windows PowerShell's ConvertFrom-Json
+    # parses each pipeline item separately and throws on the first line of a multi-line document,
+    # which the catch below would turn into a confident "not deployed". Join first.
+    try { return ($json -join "`n") | ConvertFrom-Json } catch { return $null }
 }
 
 # The CLI omits a property entirely when its value is null, so most of what this script looks for is
@@ -88,6 +91,7 @@ $vnetName   = "$Prefix-vnet"
 # Findings are collected rather than printed as they are found, so that the verdict at the end can
 # rank them: several of these causes produce each other's symptoms, and the order matters.
 $brokenEnvs = @()
+$brokenRgs = @()
 $attachedSubnets = @()
 $appFindings = @()
 
@@ -112,12 +116,19 @@ foreach ($rg in $platformRg, $geoRg, $idRg) {
 
         # An external environment with no ingress IP never finished building its load balancer,
         # whatever it claims about its provisioning state. This is what a failed environment looks
-        # like after something redeployed over it, and it is the only failure here that lies.
-        $isBroken = $state -ne 'Succeeded' -or (-not $internal -and [string]::IsNullOrWhiteSpace($staticIp))
+        # like after something redeployed over it, and it is the only failure here that lies. One
+        # that is still building is not a failure at all, so leave it alone.
+        $isSettled = $state -notin 'Waiting', 'InProgress'
+        $isBroken = $isSettled -and
+            ($state -ne 'Succeeded' -or (-not $internal -and [string]::IsNullOrWhiteSpace($staticIp)))
         $line = "$($e.name) in $rg : $state, staticIp=$(if ([string]::IsNullOrWhiteSpace($staticIp)) { '(none)' } else { $staticIp }), profiles=$profiles"
         if ($isBroken) {
             Write-Bad $line
             $brokenEnvs += "$($e.name) in $rg"
+            $brokenRgs += $rg
+        }
+        elseif (-not $isSettled) {
+            Write-Note "$line — still provisioning, not a failure"
         }
         else {
             Write-Good $line
@@ -192,14 +203,14 @@ foreach ($app in $apps) {
     # TCP startup probe can never connect and the revision is failed by the platform after roughly
     # four minutes of trying.
     if ($port -ne '(no ingress)') {
-        $isPlaceholder = $image -like 'mcr.microsoft.com/k8se/quickstart*'
+        $isPlaceholder = $image -like 'mcr.microsoft.com/k8se/*'
         if ($isPlaceholder -and $port -ne 80) {
             Write-Bad "port mismatch: the placeholder image listens on 80 but targetPort is $port"
-            $appFindings += "$($app.Name): targetPort $port against a placeholder that listens on 80"
+            $appFindings += [pscustomobject]@{ Rg = $app.Rg; Text = "$($app.Name): targetPort $port against a placeholder that listens on 80" }
         }
         elseif (-not $isPlaceholder -and $port -ne 8080) {
             Write-Bad "port mismatch: this image listens on 8080 but targetPort is $port"
-            $appFindings += "$($app.Name): targetPort $port against an image that listens on 8080"
+            $appFindings += [pscustomobject]@{ Rg = $app.Rg; Text = "$($app.Name): targetPort $port against an image that listens on 8080" }
         }
     }
 
@@ -208,7 +219,7 @@ foreach ($app in $apps) {
         # No revision at all means the failure happened before one could be created, which rules out
         # crashes and probes and leaves the image pull.
         Write-Bad 'no revisions — the app never got as far as creating one, so this is an image pull or a template rejection'
-        $appFindings += "$($app.Name): no revision was ever created"
+        $appFindings += [pscustomobject]@{ Rg = $app.Rg; Text = "$($app.Name): no revision was ever created" }
         continue
     }
 
@@ -218,7 +229,7 @@ foreach ($app in $apps) {
         Write-Note "revision $(Get-Prop $r 'name'): health=$(Get-Prop $rp 'healthState'), running=$(Get-Prop $rp 'runningState'), provisioning=$(Get-Prop $rp 'provisioningState')"
         if (-not [string]::IsNullOrWhiteSpace($detail)) {
             Write-Bad "runningStateDetails: $detail"
-            $appFindings += "$($app.Name)/$(Get-Prop $r 'name'): $detail"
+            $appFindings += [pscustomobject]@{ Rg = $app.Rg; Text = "$($app.Name)/$(Get-Prop $r 'name'): $detail" }
         }
     }
 }
@@ -229,9 +240,13 @@ foreach ($app in $apps) {
 
 Write-Step '4. What to do'
 
+# Findings in a broken environment's resource group are symptoms of it and say nothing about the
+# app. Findings anywhere else are real and must survive the verdict rather than be waved away.
+$downstream = @($appFindings | Where-Object { $_.Rg -in $brokenRgs })
+$independent = @($appFindings | Where-Object { $_.Rg -notin $brokenRgs })
+
 if ($brokenEnvs) {
-    # Ranked first deliberately: an environment with no ingress IP makes every app in it fail, so
-    # anything found in section 3 is a symptom of this and not a separate problem.
+    # Ranked first deliberately: an environment with no ingress IP makes every app in it fail.
     Write-Bad "These environments are unusable: $($brokenEnvs -join ', ')"
     Write-Note 'An external environment with no staticIp never finished building its load balancer.'
     Write-Note 'Redeploying will not repair one. Delete and recreate:'
@@ -239,8 +254,18 @@ if ($brokenEnvs) {
     Write-Note "  ./scripts/migrate-to-containerapps.ps1 -Prefix $Prefix -Confirm:`$false"
     Write-Note ''
     Write-Note 'Its step 3b deletes the apps, then the environment, then waits for the ME_ resource'
-    Write-Note 'group to go too, which az containerapp env delete does not wait for. Ignore anything'
-    Write-Note 'reported above about individual apps until this is fixed — it is downstream of this.'
+    Write-Note 'group to go too, which az containerapp env delete does not wait for.'
+    if ($downstream) {
+        Write-Note ''
+        $rgList = (@($brokenRgs | Select-Object -Unique | Sort-Object)) -join ', '
+        Write-Note "Disregard the $($downstream.Count) finding(s) above for apps in ${rgList}: those"
+        Write-Note 'are downstream of the environment and will resolve with it.'
+    }
+    if ($independent) {
+        Write-Note ''
+        Write-Bad 'These are in healthy environments, so they are separate problems and will remain:'
+        foreach ($f in $independent) { Write-Note "  $($f.Text)" }
+    }
 }
 elseif ($attachedSubnets) {
     Write-Bad "Policy has attached something to: $($attachedSubnets -join ', ')"
@@ -254,7 +279,7 @@ elseif ($attachedSubnets) {
 }
 elseif ($appFindings) {
     Write-Bad 'Per-app problems:'
-    foreach ($f in $appFindings) { Write-Note "  $f" }
+    foreach ($f in $appFindings) { Write-Note "  $($f.Text)" }
 }
 else {
     Write-Good 'Nothing conclusive. The apps and environments look healthy from the control plane.'
