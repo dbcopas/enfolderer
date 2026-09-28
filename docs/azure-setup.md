@@ -14,6 +14,45 @@ string, a storage key, or a client secret: the storage account is created with
 `allowSharedKeyAccess: false` and Cosmos with `disableLocalAuth: true`, so key-based access is not
 merely discouraged, it is impossible.
 
+## One public entry point
+
+The only thing the outside world can reach is the **API**. The desktop client calls it over HTTPS
+with an Entra token and never talks to any other Azure resource — so it runs from anywhere, with no
+VPN, no private resolver and no jump host.
+
+Everything behind the API is private:
+
+```text
+desktop client ──HTTPS──▶  <prefix>-api  ─┐
+                                          │  VNet integration
+                           <prefix>-worker┤  (vnetRouteAllEnabled)
+                                          │
+                  cardgeo mcp-imaging  ───┘
+                                          │
+                                          ▼
+                             private endpoints (blob, queue)
+                                          │
+                                          ▼
+                                   storage account
+                             publicNetworkAccess: Disabled
+```
+
+Two consequences are worth knowing before you read the rest of this guide:
+
+- **The client uploads the image to the API, not to a blob.** Earlier versions handed out a
+  write-only blob SAS. A SAS is no use against an account with no public endpoint, so `POST /jobs`
+  now returns a relative URL, `jobs/{jobId}/content`, that the client PUTs to with its bearer token.
+  The API holds the write permission on the `scans` container and relays the bytes.
+- **Storage is private unconditionally.** There is no parameter to turn it back on. In a
+  policy-governed subscription `publicNetworkAccess: Enabled` is reverted anyway, and the demo is
+  more honest without it.
+
+The VNet, its subnets, the private endpoints and the private DNS zones are all created by
+`infra/modules/network.bicep` as part of the main deployment; there is no separate step. Each App
+Service plan gets its own integration subnet, because a subnet delegated to
+`Microsoft.Web/serverFarms` cannot be shared between plans. Team B's catalogue MCP servers touch no
+storage and are deliberately left outside the VNet.
+
 ## Why user-assigned
 
 The security boundary between Team A and Team B is expressed entirely as role assignments on
@@ -30,7 +69,7 @@ Four identities are created, one per role:
 
 | Identity | Resource group | Used by | Gets |
 |---|---|---|---|
-| `<prefix>-api-id` | `<prefix>-platform` | Job API | Cosmos read/write, blob SAS delegation, queue data |
+| `<prefix>-api-id` | `<prefix>-platform` | Job API | Cosmos read/write, write `scans`, queue data |
 | `<prefix>-worker-id` | `<prefix>-platform` | Worker | Cosmos read/write, read `scans`, write `crops`, queue data |
 | `<prefix>-cardgeo-id` | `<prefix>-cardgeo` | Team A's Foundry project | read `scans` only |
 | `<prefix>-cardid-id` | `<prefix>-cardid` | Team B's Foundry project | read `crops` only, invoke Team A's agent |
@@ -825,9 +864,9 @@ contradict the `--assignee` you passed, and looks as though the roles belong to 
 principal. They do not; it is the same identity under its other GUID. `principalId` is the object
 id and is what compares against the `oid` in the error.
 
-Expect **Storage Blob Delegator** on the account and **Storage Blob Data Contributor** scoped to the
-`scans` container. Delegator alone mints a SAS that is then refused on upload, because a
-user-delegation SAS cannot grant more than the delegating identity holds.
+Expect **Storage Blob Data Contributor** scoped to the `scans` container, and **Storage Queue Data
+Contributor** on the account. The API needs write on `scans` because it relays the client's upload
+into the container itself.
 
 If the object ids match *and* those roles are present, read the error code again. Storage
 distinguishes the two kinds of refusal, and only one of them is about permissions:
@@ -837,27 +876,34 @@ distinguishes the two kinds of refusal, and only one of them is about permission
 | `AuthorizationPermissionMismatch` | "…using this permission." | The identity is missing a role. |
 | `AuthorizationFailure` | "…to perform this operation." | The request was blocked before RBAC was consulted — a network rule. |
 
-`AuthorizationFailure` with every role in place means the storage account is refusing the request
-at the network layer. Check:
+`AuthorizationFailure` with every role in place means the request reached the storage account over
+the **public** endpoint, which is closed. That points at the private path, not at RBAC. Check that
+the site is integrated with the VNet and that it resolves the account privately:
 
 ```powershell
-$storageName = ($prefix -replace '-', '').ToLower() + 'stg'
-az storage account show -g $platformRg -n $storageName `
-  --query "{public:publicNetworkAccess, defaultAction:networkAcls.defaultAction}" -o json
+az webapp show -g $platformRg -n "$prefix-api" `
+  --query "{subnet:virtualNetworkSubnetId, routeAll:vnetRouteAllEnabled}" -o json
+
+# Then, from the site's Kudu console (https://<prefix>-api.scm.azurewebsites.net) — not your
+# laptop, which has no line of sight to the private zone — resolve the account. A 10.x address is
+# correct; a public one means DNS never reached the private zone.
+#   nslookup <storageaccount>.blob.core.windows.net
 ```
 
-`publicNetworkAccess` must be `Enabled`. The API and worker run on App Service and reach storage
-over its public endpoint from shared outbound addresses — this is not internal traffic, and turning
-public access off refuses them exactly as it refuses anyone else. The desktop app, which uploads
-with the SAS from wherever the operator is sitting, is refused too. `data.bicep` asserts the
-setting, so redeploying restores it:
+Both fields must be populated. `vnetRouteAllEnabled` matters as much as the subnet: with it off,
+only RFC1918 destinations are routed through the VNet, and the storage FQDN — which resolves to a
+private address only *because* of the linked DNS zone — is still attempted over the public path.
+
+Resolving to a public address instead means the private DNS zone link is missing. Confirm the zone
+exists and is linked to the VNet:
 
 ```powershell
-az storage account update -g $platformRg -n $storageName --public-network-access Enabled
+az network private-dns zone list -g $platformRg -o table
+az network private-dns link vnet list -g $platformRg -z "privatelink.blob.core.windows.net" -o table
 ```
 
-Genuinely locking storage down means private endpoints plus VNet integration for both App Services,
-which this demo does not deploy.
+Do **not** try to fix this by re-enabling public access. The account is private on purpose, and in a
+policy-governed subscription the setting will be reverted under you anyway.
 
 ## 7. Point the desktop app at the deployment
 
