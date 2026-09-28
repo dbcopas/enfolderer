@@ -46,6 +46,11 @@ Two consequences are worth knowing before you read the rest of this guide:
 - **Storage is private unconditionally.** There is no parameter to turn it back on. In a
   policy-governed subscription `publicNetworkAccess: Enabled` is reverted anyway, and the demo is
   more honest without it.
+- **The agents are sent image bytes, not image URLs.** Foundry runs the agents on Microsoft's own
+  service, outside your VNet, so it cannot fetch a private blob however the URL is signed. The
+  worker uploads the photo to Team A's project and each crop to Team B's project through the
+  Foundry Files API, references it as `image_file`, and deletes it when the run ends. A run that
+  dies before that leaves the upload behind; `scripts/cleanup.ps1 -FoundryFiles` sweeps them.
 
 The VNet, its subnets, the private endpoints and the private DNS zones are all created by
 `infra/modules/network.bicep` as part of the main deployment; there is no separate step. Each App
@@ -72,7 +77,7 @@ Four identities are created, one per role:
 | `<prefix>-api-id` | `<prefix>-platform` | Job API | Cosmos read/write, write `scans`, queue data |
 | `<prefix>-worker-id` | `<prefix>-platform` | Worker | Cosmos read/write, read `scans`, write `crops`, queue data |
 | `<prefix>-cardgeo-id` | `<prefix>-cardgeo` | Team A's Foundry project | read `scans` only |
-| `<prefix>-cardid-id` | `<prefix>-cardid` | Team B's Foundry project | read `crops` only, invoke Team A's agent |
+| `<prefix>-cardid-id` | `<prefix>-cardid` | Team B's Foundry project | invoke Team A's agent; no storage role at all |
 
 Neither team identity has any Cosmos role assignment, so neither can read job state.
 
@@ -1002,6 +1007,39 @@ model deployments, or that need different networking or data-residency settings.
 The rule of thumb: separate projects for teams that trust the same platform team, separate accounts
 for teams that do not. Either way nothing in `src/` changes; the worker holds one client per
 project endpoint and those endpoints keep their shape.
+
+## Removing what the templates no longer create
+
+ARM deployments are incremental. Removing a role assignment from a Bicep file does **not** remove
+it from the subscription — the next deployment simply stops asserting it, and the grant stays
+where it is, invisible in the templates and live in the tenant. Anything you created by hand while
+debugging is in the same position.
+
+`scripts/cleanup.ps1` deletes the ones this project has stopped using: the `Storage Blob
+Delegator` grants (nothing mints a SAS any more), any account-wide `Storage Blob Data Contributor`
+added by hand while chasing a 403, and Team B's old read on `crops`. Run it with `-WhatIf` first —
+it prints what it would delete and touches nothing:
+
+```powershell
+./scripts/cleanup.ps1 -Prefix $prefix -WhatIf
+./scripts/cleanup.ps1 -Prefix $prefix -Confirm:$false
+```
+
+It deletes by assignment id rather than by `--assignee`/`--role`/`--scope`, because that trio
+matches on the scope string exactly and silently finds nothing when the case differs — a grant
+written at `/resourcegroups/...` will not be matched by a filter spelling it `/resourceGroups/...`.
+
+The other kind of debris is Foundry file uploads. Each run uploads an image and deletes it
+afterwards, but a worker that crashes mid-run leaves one behind. Sweep uploads older than six
+hours, across both projects:
+
+```powershell
+./scripts/cleanup.ps1 -Prefix $prefix -FoundryFiles `
+  -GeometryProjectEndpoint $geo -IdentificationProjectEndpoint $id -WhatIf
+```
+
+Six hours is the `-FileAgeHours` default and exists so a sweep cannot delete an upload belonging to
+a run that is still going. Leave yourself that margin unless you know nothing is running.
 
 ## Costs and teardown
 

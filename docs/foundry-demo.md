@@ -15,7 +15,7 @@ back JSON listing every card.
 | Owner group | `teamAGroupObjectId` | `teamBGroupObjectId` |
 | Agents | `CardBoundaryAgent` | `OrchestratorAgent`, `MtgCardIdAgent`, `PokemonCardIdAgent` |
 | MCP servers | `mcp-imaging` | `mcp-cardcatalog-mtg`, `mcp-cardcatalog-pokemon` |
-| Data access | read `scans` | read `crops` |
+| Storage access | read `scans` | **none** |
 | Job state (Cosmos) | **none** | **none** |
 
 Team A's skill is *finding cards*: any game, any frame, borderless and full-art printings, cards
@@ -44,11 +44,13 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
    `scans/{jobId}/{filename}`. The storage account has no public endpoint, so the API is the only
    thing the client can reach — which is what lets the client run anywhere.
 4. `POST /jobs/{id}/submit` enqueues the job; the worker picks it up.
-5. Worker → `DetectingBoundaries`: calls Team A's `CardBoundaryAgent` through the `cardgeo`
-   project endpoint with a read-only SAS for the scan.
+5. Worker → `DetectingBoundaries`: uploads the photo to the `cardgeo` project and calls Team A's
+   `CardBoundaryAgent` with it as `image_file` message content. Storage is private, so an agent
+   cannot be handed a URL to fetch — and the upload is deleted as soon as the run ends.
 6. Worker crops each quadrilateral itself (perspective-correct warp) and writes the crops to
    `crops/{jobId}/`. Team A never gets blob write access.
-7. Worker → `Identifying`: fans the crops out to the per-game agents in the `cardid` project.
+7. Worker → `Identifying`: uploads each crop to the `cardid` project and fans them out to the
+   per-game agents. Team B receives one card at a time and never the whole page.
 8. Worker → `Completed`, writing the versioned result document to Cosmos.
 9. The app polls `GET /jobs/{id}` every 2s with exponential backoff and maps `cards[]` into the
    CSV shape the importer already understands.
@@ -71,8 +73,11 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
   to revoke the secret.
 * **Least-privilege identities.** The API can write `scans` and touch Cosmos, and has no access to
   `crops` — it cannot read what either team produces. Team A can read `scans` and nothing else.
-  Team B can read `crops` and nothing else. Neither project has any Cosmos role assignment, so
-  neither can read job state.
+  Neither project has any Cosmos role assignment, so neither can read job state.
+* **Team B holds no storage role at all.** Its agents receive each card as an uploaded file, so
+  there is nothing to grant. This is stronger than the container-scoped read it used to have:
+  read on `crops` would have let Team B enumerate *every* card of *every* job, where now it sees
+  only the single crop the orchestrator chose to send it, for as long as that run takes.
 * **One public entry point.** Storage is `publicNetworkAccess: Disabled` and reached only over
   private endpoints; the App Services route their outbound traffic through a VNet. The client's
   entire attack surface is one authenticated HTTPS API.
@@ -181,6 +186,10 @@ Two useful follow-ups with the same shape:
   `Storage Blob Data Contributor` there. This is why the boundary agent returns geometry only and
   the worker does the cropping: the alternative would hand Team A blob-write rights just to save
   a hop.
+* Have **Team B's** identity try to read anything in storage → 403 on every container, because it
+  holds no storage role whatsoever. Then point at the same job completing successfully: a team can
+  do its work without any standing access to the data it works on, because the orchestrator hands
+  it one card at a time and takes it back afterwards.
 
 ### 3. Show what the project boundary does *not* isolate
 

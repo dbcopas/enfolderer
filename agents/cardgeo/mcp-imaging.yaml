@@ -11,8 +11,9 @@ transport: http
 site: mcp-imaging
 project_source: src/Enfolderer.Ai.Mcp.Imaging
 tools:
-  - name: get_image_sas
-    description: Issues a short-lived read-only SAS URL for a blob in the scans container.
+  # There is deliberately no SAS-minting tool. Storage is private, so a URL is not something a
+  # Foundry-hosted model can fetch; the orchestrator uploads the image bytes to this project
+  # instead, and the agent sees them as message content.
   - name: crop_quad
     description: >
       Perspective-correct crop of a card from a four-point quad. Present in the server but not in
