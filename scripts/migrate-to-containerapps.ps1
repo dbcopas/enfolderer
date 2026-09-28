@@ -407,12 +407,21 @@ Write-Step '3b. Clear failed Container Apps environments'
 $failedEnvs = @()
 foreach ($rg in $platformRg, $geoRg, $idRg) {
     $json = az containerapp env list -g $rg `
-        --query "[].{Name:name, State:properties.provisioningState, Group:properties.infrastructureResourceGroup}" `
+        --query "[].{Name:name, State:properties.provisioningState, Group:properties.infrastructureResourceGroup, StaticIp:properties.staticIp, Internal:properties.vnetConfiguration.internal}" `
         -o json 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { continue }
     $failedEnvs += @(($json | ConvertFrom-Json) |
-        Where-Object { $_.State -notin 'Succeeded', 'Waiting', 'InProgress' } |
-        ForEach-Object { [pscustomobject]@{ Rg = $rg; Name = $_.Name; State = $_.State; Group = $_.Group } })
+        Where-Object {
+            # Outright failed, or the quieter version: reporting Succeeded after a repair attempt
+            # but with no ingress IP, which is what a redeployed-over failure looks like. The
+            # environment is unusable either way, and only the second kind looks healthy.
+            $_.State -notin 'Succeeded', 'Waiting', 'InProgress' -or
+            ($_.State -eq 'Succeeded' -and -not $_.Internal -and [string]::IsNullOrWhiteSpace($_.StaticIp))
+        } |
+        ForEach-Object {
+            $state = if ($_.State -eq 'Succeeded') { 'Succeeded but no staticIp' } else { $_.State }
+            [pscustomobject]@{ Rg = $rg; Name = $_.Name; State = $state; Group = $_.Group }
+        })
 }
 
 if (-not $failedEnvs) {

@@ -564,12 +564,14 @@ likely to hit.
   ```powershell
   foreach ($rg in $platformRg, $geometryRg, $identificationRg) {
     az containerapp env list -g $rg `
-      --query "[].{Name:name, State:properties.provisioningState, Group:properties.infrastructureResourceGroup}" -o table
+      --query "[].{Name:name, State:properties.provisioningState, Ip:properties.staticIp, Group:properties.infrastructureResourceGroup}" -o table
   }
   ```
 
-  Delete any that are not `Succeeded`, and wait for both the environment and its `ME_` resource
-  group to actually disappear — `az containerapp env delete` returns before the deletion finishes,
+  Delete any that are not `Succeeded`, **and any that say `Succeeded` but have an empty `Ip`** —
+  that is the repaired-but-broken state described above, and it is the one that looks fine. Wait for
+  both the environment and its `ME_` resource group to actually disappear — `az containerapp env
+  delete` returns before the deletion finishes,
   and creating over the top then fails with `ManagedEnvironmentScheduledForDelete`.
   `scripts/migrate-to-containerapps.ps1` does all of this, including the polling, in its step 3b,
   and refuses to deploy at all while the feature is unregistered.
@@ -588,6 +590,28 @@ likely to hit.
   endpoints — and this storage account has no public endpoint. The older Consumption-only
   environment type does not help either: it creates public IPs in your subscription too, in an
   `MC_` group.
+- **`ContainerAppOperationError: Failed to provision revision for container app '<name>'. Error
+  details: .`** — note the empty details, and note that it usually hits *every* app at once. The
+  environments are fine by this point; the apps inside them are not. ARM has nothing useful to say
+  because the real reason lives on the revision, so go and get it:
+
+  ```powershell
+  az containerapp revision list -g $platformRg -n "$prefix-api" `
+    --query "[].{Name:name, Active:properties.active, Running:properties.runningState, Health:properties.healthState, Error:properties.provisioningError}" -o table
+  az containerapp logs show -g $platformRg -n "$prefix-api" --type system --tail 100
+  ```
+
+  Two causes account for almost all of it:
+
+  - **The environment is one of the broken-but-`Succeeded` ones** from the entry above. Nothing can
+    start in an environment with no ingress IP, which is why all five apps fail together and why the
+    message is empty. Check `properties.staticIp` on all three environments before looking at
+    anything else. The fix is to delete and recreate them, not to redeploy the apps.
+  - **Nothing is listening on the ingress target port.** Container Apps probes `targetPort` before
+    it will call a revision provisioned. The first deployment runs every app on
+    `mcr.microsoft.com/k8se/quickstart:latest`, which listens on **80**, while our own images listen
+    on 8080 (`EXPOSE 8080` in `src/Dockerfile`), so the templates declare `targetPort: 80` while
+    `imageTag` is empty and 8080 once it is set. If you hand-edit an app's image, move its port too.
 - **`MaxNumberOfRegionalEnvironmentsInSubExceeded`.** The deployment creates three environments,
   one per team, and some regions cap a subscription at very few. Delete unused environments in the
   region, request an increase, or deploy somewhere else.
