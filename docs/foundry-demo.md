@@ -38,9 +38,11 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
 ## End-to-end flow
 
 1. Desktop app (`Scan Card Image…`) signs the user in with Entra ID and calls `POST /jobs`.
-2. The API creates the job document in Cosmos and returns a **write-only, single-blob,
-   short-lived user-delegation SAS** for `scans/{jobId}/{filename}`.
-3. The app uploads the image directly to Blob Storage — the API never sees the bytes.
+2. The API creates the job document in Cosmos and returns the relative URL
+   `jobs/{jobId}/content` to upload to.
+3. The app PUTs the image to the API with its bearer token, and the API writes it to
+   `scans/{jobId}/{filename}`. The storage account has no public endpoint, so the API is the only
+   thing the client can reach — which is what lets the client run anywhere.
 4. `POST /jobs/{id}/submit` enqueues the job; the worker picks it up.
 5. Worker → `DetectingBoundaries`: calls Team A's `CardBoundaryAgent` through the `cardgeo`
    project endpoint with a read-only SAS for the scan.
@@ -67,9 +69,13 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
   client id and scope. Sign-in is interactive (`InteractiveBrowserCredential`) or device code.
   If an old file still contains `client_secret`, the app refuses to start the scan and tells you
   to revoke the secret.
-* **Least-privilege identities.** The API can mint SAS tokens and touch Cosmos but has no blob
-  data role. Team A can read `scans` and nothing else. Team B can read `crops` and nothing else.
-  Neither project has any Cosmos role assignment, so neither can read job state.
+* **Least-privilege identities.** The API can write `scans` and touch Cosmos, and has no access to
+  `crops` — it cannot read what either team produces. Team A can read `scans` and nothing else.
+  Team B can read `crops` and nothing else. Neither project has any Cosmos role assignment, so
+  neither can read job state.
+* **One public entry point.** Storage is `publicNetworkAccess: Disabled` and reached only over
+  private endpoints; the App Services route their outbound traffic through a VNet. The client's
+  entire attack surface is one authenticated HTTPS API.
 
 ## Deploying
 
