@@ -455,6 +455,19 @@ foreach ($failed in $failedEnvs) {
         continue
     }
 
+    # An environment cannot be deleted while container apps still reference it, and after a failed
+    # deployment there are always some — they exist as resources even though their revisions never
+    # provisioned. Clear them first, or the delete below fails silently and we spend 20 minutes
+    # polling for something that was never going to happen.
+    $appsJson = az containerapp list -g $failed.Rg `
+        --query "[?ends_with(properties.environmentId, '/$($failed.Name)')].name" -o json 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($appsJson)) {
+        foreach ($appName in @($appsJson | ConvertFrom-Json)) {
+            az containerapp delete -g $failed.Rg -n $appName --yes -o none 2>$null
+            Write-Did "deleted app   $appName in $($failed.Rg)"
+        }
+    }
+
     az containerapp env delete -g $failed.Rg -n $failed.Name --yes -o none 2>$null
     # The CLI returns before the deletion finishes, and recreating over the top fails with
     # ManagedEnvironmentScheduledForDelete. Poll rather than trust the exit code.
