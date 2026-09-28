@@ -373,8 +373,8 @@ elseif ($SkipImageBuild) {
     # Echo back the values this run was given, not the defaults: resuming against a different
     # deployment or parameters file would deploy something other than what was just torn down.
     $resume = "  ./scripts/migrate-to-containerapps.ps1 -Prefix $Prefix -ImageTag $ImageTag " +
-              "-DeploymentName $DeploymentName -ParametersFile '$ParametersFile' " +
-              "-ImagesAlreadyPushed -Confirm:`$false"
+              "-Location $Location -DeploymentName $DeploymentName " +
+              "-ParametersFile '$ParametersFile' -ImagesAlreadyPushed -Confirm:`$false"
     Write-Host $resume -ForegroundColor DarkYellow
     return
 }

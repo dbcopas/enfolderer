@@ -15,7 +15,7 @@ using Microsoft.Azure.Cosmos;
 using Microsoft.Identity.Web;
 
 // 64 MB: comfortably above a phone photograph, well below anything that would exhaust the
-// B1 plan's memory while being relayed to blob storage.
+// container's 1Gi memory limit while being relayed to blob storage.
 const long MaxScanImageBytes = 64L * 1024 * 1024;
 
 var builder = WebApplication.CreateBuilder(args);
