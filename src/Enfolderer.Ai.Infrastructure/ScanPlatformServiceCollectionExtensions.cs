@@ -91,12 +91,9 @@ public static class ScanPlatformServiceCollectionExtensions
 
         if (registerUploadUrlIssuer)
         {
-            services.AddSingleton<IUploadUrlIssuer>(sp =>
-            {
-                if (!options.UsesAzureStorage)
-                    return new LocalUploadUrlIssuer(options.LocalApiBaseUrl, options.UploadUrlLifetime);
-                return new BlobSasUploadUrlIssuer(CreateBlobServiceClient(sp, options), options.UploadUrlLifetime);
-            });
+            // One issuer for both the local and the Azure case: the client always uploads to the
+            // API. Against Azure storage a SAS is not an option, because the account is private.
+            services.AddSingleton<IUploadUrlIssuer>(new ApiUploadUrlIssuer(options.UploadUrlLifetime));
         }
 
         return services;

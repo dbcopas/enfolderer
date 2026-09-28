@@ -192,7 +192,10 @@ public sealed record CreateJobResponse
 {
     [JsonPropertyName("jobId")] public string JobId { get; init; } = string.Empty;
 
-    /// <summary>Full write-only SAS URL for the blob the client must PUT the image to.</summary>
+    /// <summary>
+    /// Where the client must PUT the image, relative to its configured API base address. Storage is
+    /// private, so the upload goes through the API rather than straight to a blob.
+    /// </summary>
     [JsonPropertyName("uploadUrl")] public string UploadUrl { get; init; } = string.Empty;
 
     [JsonPropertyName("blobPath")] public string BlobPath { get; init; } = string.Empty;
