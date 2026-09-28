@@ -917,8 +917,8 @@ az ad app update --id $mcpAppId --identifier-uris "api://$prefix-mcp"
 az ad sp create --id $mcpAppId
 ```
 
-Then add `"mcpAudience": { "value": "api://enf-demo-mcp" }` to `infra/main.parameters.json` and
-re-run the deployment from step 3.
+Then add `"mcpAudience": { "value": "api://<prefix>-mcp" }` (the same identifier URI you just set) to
+`infra/main.parameters.json` and re-run the deployment from step 3.
 
 Until you do, the servers start with a warning in their log saying they are running
 unauthenticated. Treat that warning as a blocker before demoing the security boundaries, not after:
