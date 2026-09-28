@@ -30,6 +30,14 @@ param audience string = ''
 param storageAccountUrl string = ''
 
 @description('''
+Resource id of this team\'s VNet integration subnet. Required for a team whose servers read
+storage, because the account has no public endpoint. Leave empty for a team whose servers only make
+outbound HTTPS calls: integrating them anyway would route that traffic through the VNet for no
+reason.
+''')
+param integrationSubnetId string = ''
+
+@description('''
 One object per server: { name, allowedCallerObjectIds, needsStorage, settings }.
 allowedCallerObjectIds is the enforced form of the allowed_callers key in the server\'s YAML: it is
 the list of principals the server will answer, and anything else is refused with 403.
@@ -59,6 +67,8 @@ resource sites 'Microsoft.Web/sites@2023-12-01' = [for server in servers: {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
+    virtualNetworkSubnetId: empty(integrationSubnetId) ? null : integrationSubnetId
+    vnetRouteAllEnabled: !empty(integrationSubnetId)
     siteConfig: {
       linuxFxVersion: 'DOTNETCORE|8.0'
       ftpsState: 'Disabled'
