@@ -1,4 +1,5 @@
 using Azure;
+using Azure.Core;
 using Azure.Identity;
 using Enfolderer.Ai.Api;
 using Enfolderer.Ai.Contracts;
@@ -59,6 +60,8 @@ jobs.MapPost("/", async (
     IJobStore store,
     IUploadUrlIssuer issuer,
     ILoggerFactory loggerFactory,
+    TokenCredential credential,
+    ScanPlatformOptions platform,
     CancellationToken ct) =>
 {
     var jobId = Guid.NewGuid().ToString("n");
@@ -86,14 +89,25 @@ jobs.MapPost("/", async (
         // Creating a job is the first thing that touches Azure, so a misconfigured or
         // not-yet-propagated role assignment surfaces here. Report the storage error code rather
         // than an unhandled 500, which says only that something went wrong somewhere.
+        //
+        // Name the principal too. "The managed identity needs role X" is unhelpful when the real
+        // fault is that a different identity was presented than the one the role was granted to,
+        // which is the failure a host carrying several identities actually produces.
+        var principal = await IdentityDiagnostics.DescribeAsync(
+            credential, "https://storage.azure.com/.default", ct);
+
         loggerFactory.CreateLogger("Jobs").LogError(
-            ex, "Could not create job {JobId}: {ErrorCode}", jobId, ex.ErrorCode);
+            ex, "Azure refused job {JobId} for {Principal} (configured client id {ClientId}): {ErrorCode}",
+            jobId, principal, platform.ManagedIdentityClientId ?? "(unset)", ex.ErrorCode);
 
         return Results.Problem(
             title: "Could not create the scan job.",
-            detail: $"Azure Storage returned {ex.Status} {ex.ErrorCode}. The API's managed identity "
-                  + "needs Storage Blob Delegator on the account and write access to the scans "
-                  + "container; a newly granted role can take several minutes to take effect.",
+            detail: $"Azure Storage returned {ex.Status} {ex.ErrorCode} for the identity {principal}. "
+                  + "That principal needs Storage Blob Delegator on the account and write access to "
+                  + "the scans container. Compare the object id against `az role assignment list`: "
+                  + "if it does not match, the site is presenting a different identity than the one "
+                  + "the roles were granted to. A newly granted role can take several minutes to "
+                  + "take effect.",
             statusCode: StatusCodes.Status502BadGateway);
     }
     catch (CosmosException ex) when (ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)

@@ -766,6 +766,46 @@ zip above before reading anything into the failure.
 `az webapp deploy` returns before the site has restarted, so give it a few seconds and re-check
 `/healthz` rather than testing immediately.
 
+### If Azure returns 403
+
+`POST /jobs` reports a refusal as a 502 naming the principal Azure actually refused, for example:
+
+```text
+Azure Storage returned 403 AuthorizationFailure for the identity
+oid=6d85290d-… appid=… tid=…
+```
+
+That object id is the thing to check, because the common cause is not a missing role but the site
+presenting a *different* identity than the one the roles were granted to. Compare it:
+
+```powershell
+$apiPrincipal = az identity show -g $platformRg -n "$prefix-api-id" --query principalId -o tsv
+$apiPrincipal   # must equal the oid in the error
+
+# Which identities is the site actually carrying, and which was it told to present?
+az webapp identity show -g $platformRg -n "$prefix-api" -o json
+$settings = az webapp config appsettings list -g $platformRg -n "$prefix-api" -o json |
+            ConvertFrom-Json
+($settings | Where-Object name -eq 'ScanPlatform__ManagedIdentityClientId').value
+```
+
+The filtering is done in PowerShell rather than with `--query`, because `az` on Windows is a `.cmd`
+wrapper and `cmd` mangles a JMESPath expression containing `?`, `{` or `}`.
+
+The last value must be the identity's **client id**, not its principal id — they are different
+GUIDs, and the wrong one leaves the credential unable to find the identity at all.
+
+If the object ids do match, it really is the role assignment. Storage data-plane grants take a few
+minutes to propagate, so a role granted seconds earlier is expected to fail:
+
+```powershell
+az role assignment list --assignee $apiPrincipal --all -o table
+```
+
+Expect **Storage Blob Delegator** on the account and **Storage Blob Data Contributor** scoped to the
+`scans` container. Delegator alone mints a SAS that is then refused on upload, because a
+user-delegation SAS cannot grant more than the delegating identity holds.
+
 ## 7. Point the desktop app at the deployment
 
 Create `aiconfig.txt` beside `Enfolderer.App.exe` (the app writes a template on the first scan if
