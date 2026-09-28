@@ -99,6 +99,10 @@ az deployment sub create `
   --parameters infra/main.parameters.json
 ```
 
+That creates the container registry but no images, so every container app starts on a placeholder.
+Build the five images with `az acr build` and redeploy with `imageTag` set — the setup guide gives
+the commands.
+
 Then create the agents from the definitions in `agents/cardgeo/` and `agents/cardid/`, and put the
 resulting agent ids into the worker's `ScanPipeline:BoundaryAgentId` and
 `ScanPipeline:IdentificationAgentIds` settings (the defaults assume the agent *names* are usable as
@@ -165,8 +169,10 @@ The stronger version of this is to hand Team A the URL anyway and call it direct
 
 ```powershell
 $token = az account get-access-token --resource "api://$prefix-mcp" --query accessToken -o tsv
+$url = az containerapp show -g "$prefix-cardid" -n "$prefix-mcp-cardcatalog-mtg" `
+  --query properties.configuration.ingress.fqdn -o tsv
 Invoke-WebRequest -SkipHttpErrorCheck -Method Post `
-  -Uri "https://$prefix-mcp-cardcatalog-mtg.azurewebsites.net/mcp" `
+  -Uri "https://$url/mcp" `
   -Headers @{ Authorization = "******"; Accept = 'application/json, text/event-stream' } `
   -ContentType 'application/json' -Body '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 ```

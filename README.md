@@ -95,9 +95,9 @@ The remaining File-menu maintenance actions modify the local `mtgstudio.collecti
 
 ## Scanning cards with the Azure AI pipeline
 
-**Scan Card Image...** turns a photograph into binder entries: the app uploads a single image to
-Azure Blob Storage and polls a job API while a multi-agent Azure AI Foundry pipeline finds each
-card's outline and identifies it. **Scan Binder Images...** runs the same job API once per image in
+**Scan Card Image...** turns a photograph into binder entries: the app uploads a single image to a
+job API and polls it while a multi-agent Azure AI Foundry pipeline finds each card's outline and
+identifies it. That API is the only endpoint the app talks to, so it runs from anywhere. **Scan Binder Images...** runs the same job API once per image in
 a selected folder. Both write the `SET;NUMBER;;en;NAME` CSV the importer already understands.
 
 Configuration lives in `aiconfig.txt` beside the executable and contains **no secrets** — only the

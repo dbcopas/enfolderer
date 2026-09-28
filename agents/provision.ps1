@@ -53,7 +53,7 @@
 
 .EXAMPLE
     ./provision.ps1 -ProjectEndpoint $geo -Path ./cardgeo `
-        -McpServerUrl @{ 'mcp-imaging' = 'https://enf-demo-mcp-imaging.azurewebsites.net/mcp' }
+        -McpServerUrl @{ 'mcp-imaging' = 'https://enf-demo-mcp-imaging.politeocean-1234.swedencentral.azurecontainerapps.io/mcp' }
     Creates CardBoundaryAgent in Team A's project with its imaging tool attached.
 
 .EXAMPLE
