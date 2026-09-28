@@ -287,6 +287,27 @@ if (-not $vnetExists) {
     Write-Skip 'No VNet yet, so storage has had no private path at all. That alone would explain'
     Write-Skip 'every 403 so far: the account is publicNetworkAccess: Disabled.'
 }
+elseif ($vnetIsCurrent) {
+    # An environment pulls its own system images, and the app images, out through this subnet, and
+    # it needs AAD to use a managed identity. The template attaches neither an NSG nor a route
+    # table, so anything here was put there by tenant policy — and a deny-all or a 0.0.0.0/0 route
+    # to a firewall stops every revision from provisioning, with an empty ARM error to show for it.
+    foreach ($subnet in 'platform-apps', 'cardgeo-apps', 'cardid-apps') {
+        $json = az network vnet subnet show -g $platformRg --vnet-name $vnetName -n $subnet `
+            --query "{nsg:networkSecurityGroup.id, routeTable:routeTable.id}" -o json 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { continue }
+        $attached = $json | ConvertFrom-Json
+        $notes = @()
+        if ($attached.nsg) { $notes += "NSG $(Split-Path $attached.nsg -Leaf)" }
+        if ($attached.routeTable) { $notes += "route table $(Split-Path $attached.routeTable -Leaf)" }
+        if ($notes) {
+            Write-Skip "subnet $subnet has $($notes -join ' and ') attached, which this template did not add."
+            Write-Skip '  Outbound to MicrosoftContainerRegistry, AzureFrontDoor.FirstParty,'
+            Write-Skip '  AzureActiveDirectory (443) and 168.63.129.16 (53) must survive it, or no'
+            Write-Skip '  revision will start. See docs/azure-setup.md, "If the deployment fails".'
+        }
+    }
+}
 
 # ---------------------------------------------------------------------------------------------
 # 2. Delete the App Service tier
