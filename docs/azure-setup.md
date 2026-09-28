@@ -756,6 +756,16 @@ platform simply never got an answer.
 A warning in the API log that `AzureAd:TenantId` is not configured means the API is running
 unauthenticated — acceptable locally, not in a deployment. Confirm the setting survived.
 
+### Redeploy after every code change
+
+Granting a role and redeploying the Bicep does not update the running code, and pulling the repo
+does not either — the sites run whatever zip was last pushed. If a stack trace still names the line
+numbers of a version you have since changed, that is the whole explanation: repeat the publish and
+zip above before reading anything into the failure.
+
+`az webapp deploy` returns before the site has restarted, so give it a few seconds and re-check
+`/healthz` rather than testing immediately.
+
 ## 7. Point the desktop app at the deployment
 
 Create `aiconfig.txt` beside `Enfolderer.App.exe` (the app writes a template on the first scan if
