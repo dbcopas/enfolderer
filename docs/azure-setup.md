@@ -591,9 +591,17 @@ likely to hit.
   environment type does not help either: it creates public IPs in your subscription too, in an
   `MC_` group.
 - **`ContainerAppOperationError: Failed to provision revision for container app '<name>'. Error
-  details: .`** — note the empty details, and note that it usually hits *every* app at once. The
-  environments are fine by this point; the apps inside them are not. ARM has nothing useful to say
-  because the real reason lives on the revision, so go and get it:
+  details: .`** — note the empty details, and note that it usually hits *every* app at once. ARM has
+  nothing useful to say, and neither does `az deployment operation group list`: it returns the same
+  string with `details: null`. The real reason is spread across the environment, the subnet, the app
+  and the revision. Read all four at once:
+
+  ```powershell
+  ./scripts/diagnose-containerapps.ps1 -Prefix enf-demo
+  ```
+
+  That changes nothing, and it ends with a verdict naming which of the causes below applies. The
+  individual commands, if you would rather run them yourself:
 
   ```powershell
   az containerapp revision list -g $platformRg -n "$prefix-api" `
@@ -606,7 +614,10 @@ likely to hit.
   - **The environment is one of the broken-but-`Succeeded` ones** from the entry above. Nothing can
     start in an environment with no ingress IP, which is why all five apps fail together and why the
     message is empty. Check `properties.staticIp` on all three environments before looking at
-    anything else. The fix is to delete and recreate them, not to redeploy the apps.
+    anything else. The fix is to delete and recreate them, not to redeploy the apps — and note that
+    **`az deployment sub create` will not do this for you.** It is the whole reason
+    `scripts/migrate-to-containerapps.ps1` exists; running the raw deployment against a broken
+    environment fails the same way every time, however many times you retry it.
   - **Nothing is listening on the ingress target port.** Container Apps injects default TCP startup,
     liveness and readiness probes bound to `targetPort` whenever ingress is enabled, and the startup
     probe has to pass before a revision counts as provisioned. The first deployment runs every app on
