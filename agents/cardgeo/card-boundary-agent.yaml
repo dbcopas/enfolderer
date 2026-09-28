@@ -32,12 +32,14 @@ instructions: |
   - gameHint is your best guess of the game from the card back/frame; use "unknown" if unsure.
   - Emit no prose, no markdown fences, and no cards you are not confident are cards.
 
-tools:
-  - type: mcp
-    # Team A's own imaging server. Deliberately not shared with cardid.
-    server: mcp-imaging
-    server_label: imaging
-    allowed_tools: [get_image_sas]
+# No tools. The image arrives as message content, uploaded to this project by the orchestrator,
+# and the only tool Team A's imaging server offers is crop_quad, which is the worker's job and
+# which this agent's identity has no write access to perform anyway (see mcp-imaging.yaml).
+#
+# The imaging server is still deployed, still in Team A's resource group and still running as Team
+# A's identity; it is simply not attached here. Attaching a server and then allowing nothing from
+# it would be a more confusing thing to put on screen than not attaching it.
+tools: []
 
 # Everything Team A is *not* allowed to reach. Asserted by the RBAC in infra/main.bicep and
 # exercised by the "break it" scenarios in docs/foundry-demo.md.

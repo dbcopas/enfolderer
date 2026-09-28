@@ -161,8 +161,12 @@ function ConvertTo-AgentPayload {
                             server_label = $tool.server_label
                             server_url   = $serverUrl
                         }
+                        # An empty YAML sequence parses to $null, and @($null) is a one-element
+                        # array holding $null, which the data plane rejects. Send the key only when
+                        # there is something to put in it.
                         if ($tool.ContainsKey('allowed_tools')) {
-                            $mcp.allowed_tools = @($tool.allowed_tools)
+                            $allowed = @($tool.allowed_tools | Where-Object { $_ })
+                            if ($allowed.Count -gt 0) { $mcp.allowed_tools = $allowed }
                         }
                         $tools += $mcp
                     }
