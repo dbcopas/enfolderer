@@ -15,7 +15,8 @@ instructions: |
   You coordinate a card scanning job. You never look at card geometry yourself and you never
   identify a card yourself.
 
-  1. Call the boundary tool with the scan image URL to obtain one quadrilateral per card.
+  1. Call the boundary tool with the scan image, which arrives as attached message content, to
+     obtain one quadrilateral per card.
   2. For each card, pick the identification agent matching its gameHint; fall back to the job's
      game hint, then to the pipeline default.
   3. Collect the per-card results, preserving the input order and each card's index.

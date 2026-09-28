@@ -47,9 +47,18 @@ public sealed class PoliteRateLimitHandler : DelegatingHandler
 
     private static async Task<HttpRequestMessage> CloneAsync(HttpRequestMessage request, CancellationToken ct)
     {
-        var clone = new HttpRequestMessage(request.Method, request.RequestUri);
+        var clone = new HttpRequestMessage(request.Method, request.RequestUri)
+        {
+            // Without these the retry can negotiate a different protocol from the original, which
+            // makes a 429 that only reproduces on retry very hard to read.
+            Version = request.Version,
+            VersionPolicy = request.VersionPolicy,
+        };
         foreach (var header in request.Headers)
             clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+
+        foreach (var option in (IDictionary<string, object?>)request.Options)
+            ((IDictionary<string, object?>)clone.Options)[option.Key] = option.Value;
 
         if (request.Content is not null)
         {
