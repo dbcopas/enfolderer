@@ -79,8 +79,12 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
   read on `crops` would have let Team B enumerate *every* card of *every* job, where now it sees
   only the single crop the orchestrator chose to send it, for as long as that run takes.
 * **One public entry point.** Storage is `publicNetworkAccess: Disabled` and reached only over
-  private endpoints; the App Services route their outbound traffic through a VNet. The client's
-  entire attack surface is one authenticated HTTPS API.
+  private endpoints; every Container Apps environment sits on a subnet of this VNet, so that is
+  where their outbound traffic goes. The client's entire attack surface is one authenticated
+  HTTPS API.
+* **Each team operates its own environment.** Team A's containers run in `<prefix>-cardgeo-env` in
+  Team A's resource group, with their own log workspace. Team B cannot restart them, change their
+  scale, read their environment variables or read their console output.
 
 ## Deploying
 
