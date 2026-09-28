@@ -20,8 +20,8 @@
     container, which contradicts the boundary the demo claims, so leaving it in place invites
     exactly the question you cannot answer.
 
-    Nothing here deletes a resource group, an App Service, the storage account, Cosmos or a Foundry
-    project. It only removes grants and uploaded files.
+    Nothing here deletes a resource group, a container app, the storage account, Cosmos or a
+    Foundry project. It only removes grants and uploaded files.
 
     Every deletion goes through ShouldProcess, so -WhatIf lists what would go without touching
     anything, and without -Confirm:$false you are asked about each one.

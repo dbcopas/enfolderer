@@ -13,7 +13,7 @@ namespace Enfolderer.Ai.Infrastructure.Storage;
 /// <para>
 /// The URL is relative so that it resolves against whatever base address the client already uses.
 /// The API does not need to be told its own public hostname, which it cannot reliably discover from
-/// behind App Service's front end anyway.
+/// behind the Container Apps ingress proxy anyway.
 /// </para>
 /// </summary>
 public sealed class ApiUploadUrlIssuer : IUploadUrlIssuer

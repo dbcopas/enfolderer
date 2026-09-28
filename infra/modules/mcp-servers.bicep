@@ -1,18 +1,24 @@
-// The MCP servers one team owns, hosted over HTTPS.
+// The MCP servers one team owns, hosted over HTTPS as container apps.
 //
 // They are ASP.NET sites rather than the stdio processes they started as, because the Foundry
 // agent data plane will only accept an https:// URL for a tool server. Hosting them in the owning
-// team's resource group keeps the blast radius honest: Team B cannot redeploy, reconfigure or read
-// the logs of Team A's imaging server, and vice versa.
+// team's environment, in the owning team's resource group, keeps the blast radius honest: Team B
+// cannot redeploy, reconfigure or read the logs of Team A's imaging server, and vice versa.
 targetScope = 'resourceGroup'
 
 @description('Prefix for all resource names, e.g. "enf-demo".')
 param namePrefix string
 
-@description('Suffix distinguishing this team\'s plan, e.g. cardgeo or cardid.')
-param teamName string
-
 param location string = resourceGroup().location
+
+@description('Resource id of this team\'s Container Apps environment.')
+param environmentId string
+
+@description('Login server of the container registry, e.g. myacr.azurecr.io.')
+param registryLoginServer string
+
+@description('Tag of the images to run. Empty means "no images built yet" — see hosting.bicep.')
+param imageTag string = ''
 
 @description('Resource id of the identity the servers run as.')
 param identityId string
@@ -30,32 +36,24 @@ param audience string = ''
 param storageAccountUrl string = ''
 
 @description('''
-Resource id of this team\'s VNet integration subnet. Required for a team whose servers read
-storage, because the account has no public endpoint. Leave empty for a team whose servers only make
-outbound HTTPS calls: integrating them anyway would route that traffic through the VNet for no
-reason.
-''')
-param integrationSubnetId string = ''
-
-@description('''
-One object per server: { name, allowedCallerObjectIds, needsStorage, settings }.
+One object per server: { name, image, allowedCallerObjectIds, needsStorage, settings }.
+`image` is the repository under enfolderer/ in the registry, e.g. "mcp-imaging".
 allowedCallerObjectIds is the enforced form of the allowed_callers key in the server\'s YAML: it is
 the list of principals the server will answer, and anything else is refused with 403.
 ''')
 param servers array
 
-resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
-  name: '${namePrefix}-${teamName}-mcp-plan'
-  location: location
-  sku: {
-    name: 'B1'
-    tier: 'Basic'
-  }
-  kind: 'linux'
-  properties: { reserved: true }
-}
+var hasImages = !empty(imageTag)
+var placeholder = 'mcr.microsoft.com/k8se/quickstart:latest'
 
-resource sites 'Microsoft.Web/sites@2023-12-01' = [for server in servers: {
+var registries = hasImages ? [
+  {
+    server: registryLoginServer
+    identity: identityId
+  }
+] : []
+
+resource apps 'Microsoft.App/containerApps@2024-03-01' = [for server in servers: {
   name: '${namePrefix}-${server.name}'
   location: location
   identity: {
@@ -65,48 +63,76 @@ resource sites 'Microsoft.Web/sites@2023-12-01' = [for server in servers: {
     }
   }
   properties: {
-    serverFarmId: plan.id
-    httpsOnly: true
-    virtualNetworkSubnetId: empty(integrationSubnetId) ? null : integrationSubnetId
-    vnetRouteAllEnabled: !empty(integrationSubnetId)
-    siteConfig: {
-      linuxFxVersion: 'DOTNETCORE|8.0'
-      ftpsState: 'Disabled'
-      minTlsVersion: '1.2'
-      appSettings: concat(
-        [
-          {
-            name: 'McpServer__TenantId'
-            value: tenantId
+    environmentId: environmentId
+    workloadProfileName: 'Consumption'
+    configuration: {
+      activeRevisionsMode: 'Single'
+      // Public, because Foundry calls tool servers from its own service and not from this VNet.
+      // That is exactly why these servers check the caller's object id themselves: reachable by
+      // anyone is not the same as callable by anyone, and the allow-list below is what makes the
+      // difference.
+      ingress: {
+        external: true
+        targetPort: 8080
+        transport: 'auto'
+        allowInsecure: false
+      }
+      registries: registries
+    }
+    template: {
+      containers: [
+        {
+          name: server.name
+          image: hasImages ? '${registryLoginServer}/enfolderer/${server.image}:${imageTag}' : placeholder
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
           }
-          {
-            name: 'McpServer__Audience'
-            value: audience
-          }
-          // Comma-separated because App Service settings are flat strings; the server splits it.
-          {
-            name: 'McpServer__AllowedCallerObjectIds'
-            value: join(server.allowedCallerObjectIds, ',')
-          }
-        ],
-        // Only the imaging server touches storage. The catalogue servers make outbound HTTP calls
-        // and nothing else, so they are given no data-plane configuration at all.
-        server.needsStorage ? [
-          {
-            name: 'ScanPlatform__StorageAccountUrl'
-            value: storageAccountUrl
-          }
-          {
-            name: 'ScanPlatform__ManagedIdentityClientId'
-            value: identityClientId
-          }
-        ] : [],
-        server.?settings ?? [])
+          env: concat(
+            [
+              {
+                name: 'McpServer__TenantId'
+                value: tenantId
+              }
+              {
+                name: 'McpServer__Audience'
+                value: audience
+              }
+              // Comma-separated because environment variables are flat strings; the server splits
+              // it.
+              {
+                name: 'McpServer__AllowedCallerObjectIds'
+                value: join(server.allowedCallerObjectIds, ',')
+              }
+            ],
+            // Only the imaging server touches storage. The catalogue servers make outbound HTTP
+            // calls and nothing else, so they are given no data-plane configuration at all.
+            server.needsStorage ? [
+              {
+                name: 'ScanPlatform__StorageAccountUrl'
+                value: storageAccountUrl
+              }
+              {
+                name: 'ScanPlatform__ManagedIdentityClientId'
+                value: identityClientId
+              }
+            ] : [],
+            server.?settings ?? [])
+        }
+      ]
+      scale: {
+        // Not zero. An agent calling a cold tool server waits for the image to be pulled and the
+        // runtime to start, and Foundry gives up on a tool long before that finishes.
+        minReplicas: 1
+        maxReplicas: 2
+      }
     }
   }
 }]
 
 output serverUrls array = [for (server, i) in servers: {
   name: server.name
-  url: 'https://${sites[i].properties.defaultHostName}/mcp'
+  url: 'https://${apps[i].properties.configuration.ingress.fqdn}/mcp'
 }]
+
+output appNames array = [for server in servers: '${namePrefix}-${server.name}']

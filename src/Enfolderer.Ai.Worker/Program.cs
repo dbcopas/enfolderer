@@ -7,9 +7,10 @@ using Enfolderer.Ai.Worker.Agents;
 using Enfolderer.Ai.Worker.Pipeline;
 using Enfolderer.Ai.Worker.Queueing;
 
-// A web host rather than a plain worker host: the pipeline itself is a hosted service and needs
-// no HTTP, but App Service decides a site has started by connecting to its port, so a worker with
-// no listener is reported as failing to start after ten minutes.
+// A web host rather than a plain worker host. The pipeline is a hosted service and needs no HTTP,
+// and on Container Apps this runs with ingress disabled, so nothing reaches the listener. It stays
+// a web host because /healthz is the cheapest way to check a running replica from `az containerapp
+// exec`, and because dropping the listener buys nothing.
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddScanPlatform(builder.Configuration, registerUploadUrlIssuer: false);

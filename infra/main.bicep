@@ -45,6 +45,14 @@ param singleAccount bool = true
 @description('Audience the hosted MCP servers require in an incoming token, e.g. api://enf-demo-mcp. Leave empty to deploy them unauthenticated, which is only acceptable while you are still wiring the demo up: a public MCP endpoint lets any caller bypass the project boundaries the demo exists to show.')
 param mcpAudience string = ''
 
+@description('''
+Tag of the container images to run, e.g. "v1". Leave empty for the very first deployment: the
+registry it names does not exist yet, so every app starts on a placeholder image. Build the images
+with `az acr build`, then redeploy with the tag set. After that, a code change needs a new build
+and `az containerapp update --image`, not a redeployment of this template.
+''')
+param imageTag string = ''
+
 resource platformRg 'Microsoft.Resources/resourceGroups@2023-07-01' = {
   name: '${namePrefix}-platform'
   location: location
@@ -196,12 +204,66 @@ module identificationProject 'modules/foundry-project.bicep' = {
   ]
 }
 
+// One registry for all five images, owned by the platform team. Both teams can pull from it, which
+// is the same kind of shared platform dependency as the Foundry account and its model deployment —
+// see the "two isolation tiers" note at the top of this file.
+module registry 'modules/registry.bicep' = {
+  name: 'registry'
+  scope: platformRg
+  params: {
+    namePrefix: namePrefix
+    location: location
+    pullPrincipalIds: [
+      apiIdentity.outputs.principalId
+      workerIdentity.outputs.principalId
+      geometryIdentity.outputs.principalId
+      identificationIdentity.outputs.principalId
+    ]
+  }
+}
+
+// One Container Apps environment per team, each on its own subnet and with its own log workspace.
+// The environment is the thing a team operates, so sharing one would quietly undo the resource
+// group boundary the rest of this file is built on.
+module platformEnv 'modules/container-env.bicep' = {
+  name: 'platform-env'
+  scope: platformRg
+  params: {
+    name: '${namePrefix}-platform-env'
+    location: location
+    infrastructureSubnetId: network.outputs.platformSubnetId
+  }
+}
+
+module geometryEnv 'modules/container-env.bicep' = {
+  name: 'cardgeo-env'
+  scope: geometryRg
+  params: {
+    name: '${namePrefix}-cardgeo-env'
+    location: location
+    infrastructureSubnetId: network.outputs.geometrySubnetId
+  }
+}
+
+module identificationEnv 'modules/container-env.bicep' = {
+  name: 'cardid-env'
+  scope: identificationRg
+  params: {
+    name: '${namePrefix}-cardid-env'
+    location: location
+    infrastructureSubnetId: network.outputs.identificationSubnetId
+  }
+}
+
 module hosting 'modules/hosting.bicep' = {
   name: 'hosting'
   scope: platformRg
   params: {
     namePrefix: namePrefix
     location: location
+    environmentId: platformEnv.outputs.id
+    registryLoginServer: registry.outputs.loginServer
+    imageTag: imageTag
     storageAccountUrl: data.outputs.blobEndpoint
     queueAccountUrl: data.outputs.queueEndpoint
     cosmosEndpoint: data.outputs.cosmosEndpoint
@@ -211,7 +273,6 @@ module hosting 'modules/hosting.bicep' = {
     apiIdentityClientId: apiIdentity.outputs.clientId
     workerIdentityId: workerIdentity.outputs.id
     workerIdentityClientId: workerIdentity.outputs.clientId
-    integrationSubnetId: network.outputs.platformSubnetId
     geometryProjectEndpoint: geometryProject.outputs.projectEndpoint
     identificationProjectEndpoint: identificationProject.outputs.projectEndpoint
   }
@@ -224,19 +285,19 @@ module geometryMcp 'modules/mcp-servers.bicep' = {
   scope: geometryRg
   params: {
     namePrefix: namePrefix
-    teamName: 'cardgeo'
     location: location
+    environmentId: geometryEnv.outputs.id
+    registryLoginServer: registry.outputs.loginServer
+    imageTag: imageTag
     identityId: geometryIdentity.outputs.id
     identityClientId: geometryIdentity.outputs.clientId
     tenantId: tenantId
     audience: mcpAudience
     storageAccountUrl: data.outputs.blobEndpoint
-    // Team A's imaging server reads the scan, so it needs the private path. Team B's catalogue
-    // servers do not touch storage and are left un-integrated.
-    integrationSubnetId: network.outputs.geometrySubnetId
     servers: [
       {
         name: 'mcp-imaging'
+        image: 'mcp-imaging'
         needsStorage: true
         // Only Team A's own project may call it. Team B reaches Team A through the boundary
         // agent, not by calling Team A's imaging tools directly.
@@ -256,8 +317,10 @@ module identificationMcp 'modules/mcp-servers.bicep' = {
   scope: identificationRg
   params: {
     namePrefix: namePrefix
-    teamName: 'cardid'
     location: location
+    environmentId: identificationEnv.outputs.id
+    registryLoginServer: registry.outputs.loginServer
+    imageTag: imageTag
     identityId: identificationIdentity.outputs.id
     identityClientId: identificationIdentity.outputs.clientId
     tenantId: tenantId
@@ -265,6 +328,7 @@ module identificationMcp 'modules/mcp-servers.bicep' = {
     servers: [
       {
         name: 'mcp-cardcatalog-mtg'
+        image: 'mcp-cardcatalog-mtg'
         needsStorage: false
         allowedCallerObjectIds: [
           identificationIdentity.outputs.principalId
@@ -273,6 +337,7 @@ module identificationMcp 'modules/mcp-servers.bicep' = {
       }
       {
         name: 'mcp-cardcatalog-pokemon'
+        image: 'mcp-cardcatalog-pokemon'
         needsStorage: false
         allowedCallerObjectIds: [
           identificationIdentity.outputs.principalId
@@ -308,6 +373,8 @@ module crossProjectAccess 'modules/cross-project-access.bicep' = if (grantIdenti
 }
 
 output apiUrl string = hosting.outputs.apiUrl
+output registryName string = registry.outputs.name
+output registryLoginServer string = registry.outputs.loginServer
 output geometryProjectEndpoint string = geometryProject.outputs.projectEndpoint
 output identificationProjectEndpoint string = identificationProject.outputs.projectEndpoint
 output cosmosEndpoint string = data.outputs.cosmosEndpoint
