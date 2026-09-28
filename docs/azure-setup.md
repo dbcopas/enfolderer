@@ -805,7 +805,8 @@ $settings = az webapp config appsettings list -g $platformRg -n "$prefix-api" -o
 ```
 
 The filtering is done in PowerShell rather than with `--query`, because `az` on Windows is a `.cmd`
-wrapper and `cmd` mangles a JMESPath expression containing `?`, `{` or `}`.
+wrapper and `cmd` mangles a JMESPath expression containing `?`. A double-quoted projection such as
+`"[].{Role:roleDefinitionName}"` survives, which is why the role listing below can use `--query`.
 
 The last value must be the identity's **client id**, not its principal id — they are different
 GUIDs, and the wrong one leaves the credential unable to find the identity at all.
@@ -814,8 +815,15 @@ If the object ids do match, it really is the role assignment. Storage data-plane
 minutes to propagate, so a role granted seconds earlier is expected to fail:
 
 ```powershell
-az role assignment list --assignee $apiPrincipal --all -o table
+az role assignment list --assignee $apiPrincipal --all `
+  --query "[].{ObjectId:principalId, Role:roleDefinitionName, Scope:scope}" -o table
 ```
+
+The explicit `--query` matters. The default table output has a *Principal* column holding
+`principalName`, which for a managed identity is its **client id** — so the listing appears to
+contradict the `--assignee` you passed, and looks as though the roles belong to some other
+principal. They do not; it is the same identity under its other GUID. `principalId` is the object
+id and is what compares against the `oid` in the error.
 
 Expect **Storage Blob Delegator** on the account and **Storage Blob Data Contributor** scoped to the
 `scans` container. Delegator alone mints a SAS that is then refused on upload, because a
