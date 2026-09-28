@@ -108,6 +108,18 @@ module data 'modules/data.bicep' = {
   }
 }
 
+// The private path to storage. Deployed before anything that reaches the data plane, so the
+// endpoints and DNS zones exist by the time the API and worker start.
+module network 'modules/network.bicep' = {
+  name: 'network'
+  scope: platformRg
+  params: {
+    namePrefix: namePrefix
+    location: location
+    storageAccountId: data.outputs.storageAccountId
+  }
+}
+
 // Account topology. A project lives in the same resource group as its account, so singleAccount
 // decides both which account each project is created under and where it lands.
 var sharedAccountName = '${namePrefix}-ai'
@@ -199,6 +211,7 @@ module hosting 'modules/hosting.bicep' = {
     apiIdentityClientId: apiIdentity.outputs.clientId
     workerIdentityId: workerIdentity.outputs.id
     workerIdentityClientId: workerIdentity.outputs.clientId
+    integrationSubnetId: network.outputs.platformSubnetId
     geometryProjectEndpoint: geometryProject.outputs.projectEndpoint
     identificationProjectEndpoint: identificationProject.outputs.projectEndpoint
   }
@@ -218,6 +231,9 @@ module geometryMcp 'modules/mcp-servers.bicep' = {
     tenantId: tenantId
     audience: mcpAudience
     storageAccountUrl: data.outputs.blobEndpoint
+    // Team A's imaging server reads the scan, so it needs the private path. Team B's catalogue
+    // servers do not touch storage and are left un-integrated.
+    integrationSubnetId: network.outputs.geometrySubnetId
     servers: [
       {
         name: 'mcp-imaging'

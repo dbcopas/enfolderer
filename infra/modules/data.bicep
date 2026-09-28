@@ -21,16 +21,14 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
   properties: {
-    // Reached over the public endpoint by both the desktop app, which uploads with the SAS from
-    // wherever the operator is sitting, and the API and worker, whose App Service outbound traffic
-    // leaves from shared public addresses. Disabling this returns 403 AuthorizationFailure — a
-    // network refusal, raised before RBAC is consulted, so no amount of role assignment fixes it.
-    // Asserted rather than left to the default so a redeploy corrects an account that was switched
-    // off by hand or by policy. Locking it down needs private endpoints, which this demo does not
-    // deploy.
-    publicNetworkAccess: 'Enabled'
-    // The desktop app uploads with a user-delegation SAS, so shared keys are switched off:
-    // every caller must present an Entra identity.
+    // Private-only, which is both corporate policy in the tenant this demo was built against and
+    // the more honest posture for a store of customer photographs. Everything that reads or writes
+    // blobs reaches the account through the private endpoints in modules/network.bicep; nothing
+    // touches it from the public internet, including the desktop app, which uploads through the
+    // API instead of with a SAS.
+    publicNetworkAccess: 'Disabled'
+    // The API and worker present an Entra identity, so shared keys are switched off: there is no
+    // account key to leak, and a private endpoint on its own would not have prevented that.
     allowSharedKeyAccess: false
     allowBlobPublicAccess: false
     minimumTlsVersion: 'TLS1_2'

@@ -39,6 +39,9 @@ param workerIdentityId string
 @description('Client id of the worker\'s user-assigned managed identity.')
 param workerIdentityClientId string
 
+@description('Resource id of the subnet carrying this plan\'s outbound traffic to private storage.')
+param integrationSubnetId string
+
 var sharedSettings = [
   {
     name: 'ScanPlatform__StorageAccountUrl'
@@ -89,6 +92,11 @@ resource api 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
+    // Storage has no public endpoint, so outbound traffic has to leave through the VNet.
+    // vnetRouteAllEnabled matters as much as the subnet: without it only RFC1918 destinations are
+    // routed, and the storage FQDN would still be attempted over the public path.
+    virtualNetworkSubnetId: integrationSubnetId
+    vnetRouteAllEnabled: true
     siteConfig: {
       linuxFxVersion: 'DOTNETCORE|8.0'
       ftpsState: 'Disabled'
@@ -125,6 +133,8 @@ resource worker 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
+    virtualNetworkSubnetId: integrationSubnetId
+    vnetRouteAllEnabled: true
     siteConfig: {
       linuxFxVersion: 'DOTNETCORE|8.0'
       ftpsState: 'Disabled'
