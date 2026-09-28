@@ -909,14 +909,14 @@ Azure Storage returned 403 AuthorizationFailure for the identity
 oid=6d85290d-… appid=… tid=…
 ```
 
-That object id is the thing to check, because the common cause is not a missing role but the site
+That object id is the thing to check, because the common cause is not a missing role but the app
 presenting a *different* identity than the one the roles were granted to. Compare it:
 
 ```powershell
 $apiPrincipal = az identity show -g $platformRg -n "$prefix-api-id" --query principalId -o tsv
 $apiPrincipal   # must equal the oid in the error
 
-# Which identities is the site actually carrying, and which was it told to present?
+# Which identities is the app actually carrying, and which was it told to present?
 az containerapp show -g $platformRg -n "$prefix-api" --query identity -o json
 $env = az containerapp show -g $platformRg -n "$prefix-api" `
   --query "properties.template.containers[0].env" -o json | ConvertFrom-Json
@@ -958,7 +958,7 @@ distinguishes the two kinds of refusal, and only one of them is about permission
 
 `AuthorizationFailure` with every role in place means the request reached the storage account over
 the **public** endpoint, which is closed. That points at the private path, not at RBAC. Check that
-the site is integrated with the VNet and that it resolves the account privately:
+the environment is joined to the VNet and that the app resolves the account privately:
 
 ```powershell
 az containerapp env show -g $platformRg -n "$prefix-platform-env" `

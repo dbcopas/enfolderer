@@ -8,7 +8,7 @@ param storageAccountName string
 @description('Cosmos DB account name holding the jobs container.')
 param cosmosAccountName string
 
-@description('Principal id of the API\'s user-assigned identity (issues upload SAS, reads/writes job state).')
+@description('Principal id of the API\'s user-assigned identity (relays uploads into the scans container, reads/writes job state).')
 param apiPrincipalId string
 
 @description('Principal id of the worker\'s user-assigned identity (orchestrates the pipeline).')

@@ -8,7 +8,7 @@ owner: team-b-identification
 # Hosted over HTTPS, because the Foundry agent data plane will not accept any other kind of tool
 # server URL. The container app lives in Team B's resource group; infra/main.bicep supplies its URL.
 transport: http
-site: mcp-cardcatalog-mtg
+container_app: mcp-cardcatalog-mtg
 project_source: src/Enfolderer.Ai.Mcp.CardCatalog.Mtg
 upstream: Scryfall
 tools:

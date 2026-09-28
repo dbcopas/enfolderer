@@ -6,9 +6,9 @@ name: mcp-imaging
 project: cardgeo
 owner: team-a-geometry
 # Hosted over HTTPS, because the Foundry agent data plane will not accept any other kind of tool
-# server URL. The site lives in Team A's resource group; infra/main.bicep supplies its URL.
+# server URL. The container app lives in Team A's resource group; infra/main.bicep supplies its URL.
 transport: http
-site: mcp-imaging
+container_app: mcp-imaging
 project_source: src/Enfolderer.Ai.Mcp.Imaging
 tools:
   # There is deliberately no SAS-minting tool. Storage is private, so a URL is not something a
