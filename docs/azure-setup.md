@@ -1086,6 +1086,47 @@ The rule of thumb: separate projects for teams that trust the same platform team
 for teams that do not. Either way nothing in `src/` changes; the worker holds one client per
 project endpoint and those endpoints keep their shape.
 
+## Migrating a deployment that predates Container Apps
+
+If you deployed this before the move to Container Apps, **you cannot simply redeploy**. Two things
+are in the way, and both fail in ways that describe the symptom rather than the cause:
+
+- ARM incremental deployments never delete a resource merely removed from a template, so the old
+  App Service sites and plans survive every redeploy, keep billing, and keep holding their VNet
+  integration subnets.
+- The subnets changed size, name and delegation — a Container Apps environment needs a `/27`
+  delegated to `Microsoft.App/environments` where App Service needed a `/28` delegated to
+  `Microsoft.Web/serverFarms` — and the new ranges overlap the old ones. A subnet cannot be resized
+  or re-delegated while anything sits in it.
+
+So the old compute and the old VNet have to go *before* the deployment, not as part of it.
+`scripts/migrate-to-containerapps.ps1` does that in the right order. Preview first:
+
+```powershell
+./scripts/migrate-to-containerapps.ps1 -Prefix $prefix -WhatIf
+./scripts/migrate-to-containerapps.ps1 -Prefix $prefix -Confirm:$false
+```
+
+It surveys what actually exists before touching anything, so re-running it is safe and a step that
+is already done says so. Everything outside the compute tier is left alone and survives: the
+resource groups, the four managed identities and their role assignments, storage, Cosmos, the
+Foundry account, both projects, your agents and their `asst_` ids, the private DNS zones, and both
+app registrations.
+
+It stops short of three things that need a value only you have, and prints them with the values
+filled in: re-provisioning the agents, telling the worker their ids, and repointing `aiconfig.txt`
+at the API's new hostname.
+
+Two of those are easy to skip and shouldn't be. **The agents must be re-provisioned**, because
+`CardBoundaryAgent` no longer has any tools — it used to call `get_image_sas`, which no longer
+exists — and because every MCP URL changed when the servers moved off `azurewebsites.net`. And
+**the desktop app's `api_base_url` must change**, for the same reason.
+
+If `az acr build` is refused by policy in your tenant — the same class of block that closed the
+storage account's public endpoint — use `-SkipImageBuild`. The script then stops after the first
+deployment rather than pointing the apps at image tags that do not exist, so you can push the
+images another way and re-run.
+
 ## Removing what the templates no longer create
 
 ARM deployments are incremental. Removing a role assignment from a Bicep file does **not** remove
