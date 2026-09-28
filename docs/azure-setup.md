@@ -829,6 +829,36 @@ Expect **Storage Blob Delegator** on the account and **Storage Blob Data Contrib
 `scans` container. Delegator alone mints a SAS that is then refused on upload, because a
 user-delegation SAS cannot grant more than the delegating identity holds.
 
+If the object ids match *and* those roles are present, read the error code again. Storage
+distinguishes the two kinds of refusal, and only one of them is about permissions:
+
+| Error code | Message ends | Means |
+| --- | --- | --- |
+| `AuthorizationPermissionMismatch` | "…using this permission." | The identity is missing a role. |
+| `AuthorizationFailure` | "…to perform this operation." | The request was blocked before RBAC was consulted — a network rule. |
+
+`AuthorizationFailure` with every role in place means the storage account is refusing the request
+at the network layer. Check:
+
+```powershell
+$storageName = ($prefix -replace '-', '').ToLower() + 'stg'
+az storage account show -g $platformRg -n $storageName `
+  --query "{public:publicNetworkAccess, defaultAction:networkAcls.defaultAction}" -o json
+```
+
+`publicNetworkAccess` must be `Enabled`. The API and worker run on App Service and reach storage
+over its public endpoint from shared outbound addresses — this is not internal traffic, and turning
+public access off refuses them exactly as it refuses anyone else. The desktop app, which uploads
+with the SAS from wherever the operator is sitting, is refused too. `data.bicep` asserts the
+setting, so redeploying restores it:
+
+```powershell
+az storage account update -g $platformRg -n $storageName --public-network-access Enabled
+```
+
+Genuinely locking storage down means private endpoints plus VNet integration for both App Services,
+which this demo does not deploy.
+
 ## 7. Point the desktop app at the deployment
 
 Create `aiconfig.txt` beside `Enfolderer.App.exe` (the app writes a template on the first scan if
