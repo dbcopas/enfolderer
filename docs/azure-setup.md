@@ -24,9 +24,9 @@ Everything behind the API is private:
 
 ```text
 desktop client ──HTTPS──▶  <prefix>-api  ─┐
-                                          │  VNet integration
-                           <prefix>-worker┤  (vnetRouteAllEnabled)
-                                          │
+                                          │  every Container Apps
+                           <prefix>-worker┤  environment sits on a
+                                          │  subnet of the demo VNet
                   cardgeo mcp-imaging  ───┘
                                           │
                                           ▼
@@ -53,16 +53,41 @@ Two consequences are worth knowing before you read the rest of this guide:
   dies before that leaves the upload behind; `scripts/cleanup.ps1 -FoundryFiles` sweeps them.
 
 The VNet, its subnets, the private endpoints and the private DNS zones are all created by
-`infra/modules/network.bicep` as part of the main deployment; there is no separate step. Each App
-Service plan gets its own integration subnet, because a subnet delegated to
-`Microsoft.Web/serverFarms` cannot be shared between plans. Team B's catalogue MCP servers touch no
-storage and are deliberately left outside the VNet.
+`infra/modules/network.bicep` as part of the main deployment; there is no separate step. Each team
+gets its own `/27`, because a Container Apps environment takes the whole subnet: the delegation to
+`Microsoft.App/environments` is exclusive and the platform reserves addresses from it for the
+revisions it runs.
+
+## What runs where
+
+Everything is a **container app**; there is no App Service anywhere in the deployment. Five images
+are built from one `src/Dockerfile`, pushed to one Azure Container Registry, and run across three
+Container Apps environments:
+
+| Environment | Resource group | Apps | Ingress |
+|---|---|---|---|
+| `<prefix>-platform-env` | `<prefix>-platform` | `<prefix>-api`, `<prefix>-worker` | API public; worker **none** |
+| `<prefix>-cardgeo-env` | `<prefix>-cardgeo` | `<prefix>-mcp-imaging` | public |
+| `<prefix>-cardid-env` | `<prefix>-cardid` | `<prefix>-mcp-cardcatalog-mtg`, `-pokemon` | public |
+
+One environment per team rather than one shared environment, because the environment is the unit a
+team owns and operates — revisions, scale, secrets and console logs all belong to it. A shared
+environment would put both teams' containers in one resource under one set of permissions, and the
+resource-group boundary the rest of the demo rests on would stop being a boundary. Each
+environment gets its own Log Analytics workspace for the same reason.
+
+The MCP servers need public ingress because Foundry calls tool servers from its own service, not
+from your VNet. That is precisely why they authorise callers by object id themselves: reachable by
+anyone is not the same as callable by anyone.
+
+The worker has **no ingress at all** — not public, and not internal either. It takes its work from
+the queue, so nothing needs to reach it.
 
 ## Why user-assigned
 
 The security boundary between Team A and Team B is expressed entirely as role assignments on
 identities. A system-assigned identity is created and destroyed with its host, so deleting and
-recreating an App Service silently drops every role assignment granted to it, and the demo breaks
+recreating a container app silently drops every role assignment granted to it, and the demo breaks
 in a way that looks like a Foundry problem. User-assigned identities are separate resources
 created before anything that consumes them, so:
 
@@ -86,10 +111,10 @@ Neither team identity has any Cosmos role assignment, so neither can read job st
 - An Azure subscription where you can create resource groups and **role assignments** (Owner or
   User Access Administrator — Contributor is not enough, because the deployment grants RBAC).
 - Azure CLI 2.60 or later with the Bicep tooling: `az bicep install`.
-- The **.NET 8 SDK**, for steps 5 and 6. A machine with only the runtime installed still has a
-  working `dotnet` command, so the missing SDK shows up as `dotnet publish` reporting
-  `The application 'publish' does not exist`. Check with `dotnet --list-sdks`, which must list an
-  `8.x` entry.
+- The `containerapp` CLI extension: `az extension add --name containerapp --upgrade`.
+- **No Docker, and no .NET SDK.** Images are built by ACR Tasks in Azure, from source uploaded by
+  `az acr build`, so your machine needs neither. If you want to build locally as well you will
+  need both, but nothing in this guide does.
 - Permission to create Entra app registrations and security groups, or someone who can do it.
 - Quota for a vision-capable model (`gpt-4o`) in your chosen region.
 
@@ -647,8 +672,8 @@ The worker defaults to using the agent *names* as ids. If the ids differ — the
 returns `asst_…` values — set them explicitly:
 
 ```powershell
-az webapp config appsettings set `
-  --resource-group $platformRg --name "$prefix-worker" --settings `
+az containerapp update `
+  --resource-group $platformRg --name "$prefix-worker" --set-env-vars `
   ScanPipeline__BoundaryAgentId="<boundary agent id>" `
   ScanPipeline__IdentificationAgentIds__mtg="<mtg agent id>" `
   ScanPipeline__IdentificationAgentIds__pokemon="<pokemon agent id>"
@@ -664,27 +689,56 @@ an `https://` URL for a tool server — a stdio process has no address it can be
 that team's identity: `mcp-imaging` in `cardgeo`, `mcp-cardcatalog-mtg` and
 `mcp-cardcatalog-pokemon` in `cardid`. Nothing extra to create; they came with step 3.
 
-### Publish them
+### Build and push the images
+
+This is the same step for the MCP servers as for the API and the worker, so it is done once, here,
+for all five. Step 6 assumes it has been run.
+
+Every service is built from the single `src/Dockerfile`; `PROJECT` selects which one. The build
+happens in Azure — `az acr build` uploads the source and ACR Tasks compiles it — so you need
+neither Docker nor the .NET SDK locally.
 
 ```powershell
-foreach ($server in 'Imaging', 'CardCatalog.Mtg', 'CardCatalog.Pokemon') {
-  $site = switch ($server) {
-    'Imaging'             { 'mcp-imaging' }
-    'CardCatalog.Mtg'     { 'mcp-cardcatalog-mtg' }
-    'CardCatalog.Pokemon' { 'mcp-cardcatalog-pokemon' }
-  }
-  $rg = if ($server -eq 'Imaging') { "$prefix-cardgeo" } else { "$prefix-cardid" }
+$acr = az deployment sub show --name enfolderer-scan `
+  --query properties.outputs.registryName.value -o tsv
+$tag = 'v1'
 
-  dotnet publish "src/Enfolderer.Ai.Mcp.$server" -c Release -o "$stage/$site"
-  if ($LASTEXITCODE -ne 0) { throw "publish failed for $server" }
+$images = @{
+  'api'                     = 'Enfolderer.Ai.Api'
+  'worker'                  = 'Enfolderer.Ai.Worker'
+  'mcp-imaging'             = 'Enfolderer.Ai.Mcp.Imaging'
+  'mcp-cardcatalog-mtg'     = 'Enfolderer.Ai.Mcp.CardCatalog.Mtg'
+  'mcp-cardcatalog-pokemon' = 'Enfolderer.Ai.Mcp.CardCatalog.Pokemon'
+}
 
-  Compress-Archive -Path "$stage/$site/*" -DestinationPath "$stage/$site.zip" -Force
-  az webapp deploy --resource-group $rg --name "$prefix-$site" --src-path "$stage/$site.zip" --type zip
+foreach ($image in $images.Keys) {
+  az acr build --registry $acr --image "enfolderer/$image`:$tag" `
+    --build-arg "PROJECT=$($images[$image])" --file src/Dockerfile .
+  if ($LASTEXITCODE -ne 0) { throw "image build failed for $image" }
 }
 ```
 
-The same `/*` caveat as step 6 applies. `$stage` is defined there; if you are doing step 5 first,
-run its first two lines to create it.
+Run it from the repository root: the trailing `.` is the build context, and every service project
+has `ProjectReference`s reaching back up into `src/`. `.dockerignore` keeps the upload down to
+`src/` — without it the desktop app, its SQLite database and `images.zip` would go up too.
+
+The backtick in ``"enfolderer/$image`:$tag"`` escapes the colon. PowerShell would otherwise read
+`$image:` as a scoped variable and expand the whole thing to nothing.
+
+### Point the apps at the images
+
+The first deployment in step 3 had no images to run, so every app started on a Microsoft sample
+container. Redeploy with the tag to switch them over:
+
+```powershell
+az deployment sub create --name enfolderer-scan --location $location `
+  --template-file infra/main.bicep --parameters infra/main.parameters.json `
+  --parameters imageTag=$tag
+```
+
+This second deployment is not optional and cannot be replaced by `az containerapp update`: as well
+as the image, it adds the registry configuration that tells each app to pull as its own managed
+identity. Once it has run, later image changes *are* just an `update` — see step 6.
 
 ### Read the URLs
 
@@ -704,8 +758,11 @@ Check each one is alive before wiring it to an agent. `/healthz` is deliberately
 can do this without a token:
 
 ```powershell
-Invoke-RestMethod "https://$prefix-mcp-imaging.azurewebsites.net/healthz"
+Invoke-RestMethod "$($mcp['mcp-imaging'] -replace '/mcp$', '/healthz')"
 ```
+
+Container Apps FQDNs contain a generated suffix, so there is no hostname you can write out by
+hand — take it from `$mcp`, which you have just built.
 
 Then go back to [attaching the MCP tools](#attaching-the-mcp-tools) in step 4 and re-run
 `provision.ps1` with those URLs.
@@ -744,7 +801,7 @@ stays `200`:
 
 ```powershell
 $response = Invoke-WebRequest -SkipHttpErrorCheck -Method Post `
-  -Uri "https://$prefix-mcp-cardcatalog-mtg.azurewebsites.net/mcp" `
+  -Uri $mcp['mcp-cardcatalog-mtg'] `
   -Headers @{ Accept = 'application/json, text/event-stream' } `
   -ContentType 'application/json' -Body '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
 $response.StatusCode
@@ -760,57 +817,46 @@ The Pokémon catalogue works anonymously but is rate-limited; if you have a poke
 it on that site. Scryfall needs no key.
 
 ```powershell
-az webapp config appsettings set --resource-group "$prefix-cardid" `
-  --name "$prefix-mcp-cardcatalog-pokemon" --settings POKEMONTCG_API_KEY="<your key>"
+az containerapp update --resource-group "$prefix-cardid" `
+  --name "$prefix-mcp-cardcatalog-pokemon" --set-env-vars POKEMONTCG_API_KEY="<your key>"
 ```
 
-## 6. Deploy the API and worker
+`--set-env-vars` adds to what is there rather than replacing it, so this will not quietly drop the
+`McpServer__*` settings the Bicep put in. Each `az containerapp update` creates a new revision and
+the old one is drained, which takes a few seconds.
 
-```powershell
-$stage = Join-Path $env:TEMP "enfolderer-deploy"
-New-Item -ItemType Directory -Force -Path $stage | Out-Null
+## 6. Check the API and worker
 
-dotnet publish src/Enfolderer.Ai.Api    -c Release -o "$stage/api"
-if ($LASTEXITCODE -ne 0) { throw "publish failed for the API" }
-dotnet publish src/Enfolderer.Ai.Worker -c Release -o "$stage/worker"
-if ($LASTEXITCODE -ne 0) { throw "publish failed for the worker" }
+Their images were built and deployed in [step 5](#5-host-the-mcp-servers) along with the MCP
+servers'. There is nothing further to push; this step is about confirming it worked.
 
-Compress-Archive -Path "$stage/api/*"    -DestinationPath "$stage/api.zip"    -Force
-Compress-Archive -Path "$stage/worker/*" -DestinationPath "$stage/worker.zip" -Force
-
-az webapp deploy --resource-group $platformRg --name "$prefix-api" `
-  --src-path "$stage/api.zip" --type zip
-az webapp deploy --resource-group $platformRg --name "$prefix-worker" `
-  --src-path "$stage/worker.zip" --type zip
-```
-
-The `$LASTEXITCODE` checks stop a failed publish from cascading. Without them PowerShell carries
-on, `Compress-Archive` complains that the output folder does not exist, and `az webapp deploy`
-complains about a missing zip — three errors describing one failure, with the real cause scrolled
-off the top.
-
-Note the `/*` in the `Compress-Archive` paths. Without it the archive contains a top-level `api`
-folder, App Service finds no `.dll` at the root, and the site starts and then 500s — a failure that
-looks like a code problem rather than a packaging one.
-
-The Bicep already set every app setting, including
+The Bicep already set every environment variable, including
 `ScanPlatform__ManagedIdentityClientId` — the client id of that service's user-assigned identity.
-That setting is not optional: a host can carry several user-assigned identities, and without it the
+That setting is not optional: an app can carry several user-assigned identities, and without it the
 credential cannot tell which one to present. If you attach another identity later, keep the setting
 pointing at the one that holds the role assignments.
 
-Check both sites are up:
-
 ```powershell
-Invoke-RestMethod "https://$prefix-api.azurewebsites.net/healthz"
-Invoke-RestMethod "https://$prefix-worker.azurewebsites.net/healthz"
+$apiUrl = az deployment sub show --name enfolderer-scan `
+  --query properties.outputs.apiUrl.value -o tsv
+Invoke-RestMethod "$apiUrl/healthz"
 ```
 
-The worker does its real work by draining the queue and never needs to be called over HTTP, but it
-is hosted as a web app and so serves `/healthz` anyway. App Service decides a site has started by
-connecting to its port: a host with no listener is reported as `Site failed to start` after ten
-minutes, with nothing in the logs to explain it, because nothing actually went wrong — the
-platform simply never got an answer.
+There is no equivalent call for the worker: it has no ingress, public or internal, because it takes
+its work from the queue and nothing needs to reach it. Check it by looking at its log instead —
+see below. It still serves `/healthz` inside its own container, which `az containerapp exec` can
+reach if you ever want it.
+
+Confirm both apps are actually running your images rather than the placeholder from the first
+deployment:
+
+```powershell
+az containerapp list -g $platformRg `
+  --query "[].{Name:name, Image:properties.template.containers[0].image, Replicas:properties.runningStatus}" -o table
+```
+
+Anything still showing `mcr.microsoft.com/k8se/quickstart` never got the second deployment with
+`imageTag` set.
 
 A warning in the API log that `AzureAd:TenantId` is not configured means the API is running
 unauthenticated — acceptable locally, not in a deployment. Confirm the setting survived.
@@ -818,12 +864,38 @@ unauthenticated — acceptable locally, not in a deployment. Confirm the setting
 ### Redeploy after every code change
 
 Granting a role and redeploying the Bicep does not update the running code, and pulling the repo
-does not either — the sites run whatever zip was last pushed. If a stack trace still names the line
-numbers of a version you have since changed, that is the whole explanation: repeat the publish and
-zip above before reading anything into the failure.
+does not either — each app runs whatever image tag it was last pointed at. If a stack trace still
+names the line numbers of a version you have since changed, that is the whole explanation.
 
-`az webapp deploy` returns before the site has restarted, so give it a few seconds and re-check
-`/healthz` rather than testing immediately.
+Build a new tag and point the app at it:
+
+```powershell
+$tag = 'v2'
+az acr build --registry $acr --image "enfolderer/worker`:$tag" `
+  --build-arg PROJECT=Enfolderer.Ai.Worker --file src/Dockerfile .
+
+az containerapp update -g $platformRg -n "$prefix-worker" `
+  --image "$acr.azurecr.io/enfolderer/worker:$tag"
+```
+
+Use a new tag each time rather than overwriting `v1`. `az containerapp update` decides whether to
+create a revision by comparing the template it is given with the current one, so re-pushing the
+same tag changes nothing it can see and the old image keeps running — the exact failure this
+section exists to warn about, in a new costume.
+
+`az containerapp update` returns once the new revision is *created*, not once it is serving. Give
+it a few seconds and re-check `/healthz` rather than testing immediately.
+
+### Reading the logs
+
+```powershell
+az containerapp logs show -g $platformRg -n "$prefix-worker" --follow --tail 50
+```
+
+Unlike `az webapp log tail`, this does not replay the last few lines of every historical log file
+before it starts, so what you see is genuinely current. For history, query the environment's
+workspace — each environment has its own, so Team A's logs are in `<prefix>-cardgeo-env-logs` and
+are not readable from Team B's.
 
 ### If Azure returns 403
 
@@ -842,10 +914,10 @@ $apiPrincipal = az identity show -g $platformRg -n "$prefix-api-id" --query prin
 $apiPrincipal   # must equal the oid in the error
 
 # Which identities is the site actually carrying, and which was it told to present?
-az webapp identity show -g $platformRg -n "$prefix-api" -o json
-$settings = az webapp config appsettings list -g $platformRg -n "$prefix-api" -o json |
-            ConvertFrom-Json
-($settings | Where-Object name -eq 'ScanPlatform__ManagedIdentityClientId').value
+az containerapp show -g $platformRg -n "$prefix-api" --query identity -o json
+$env = az containerapp show -g $platformRg -n "$prefix-api" `
+  --query "properties.template.containers[0].env" -o json | ConvertFrom-Json
+($env | Where-Object name -eq 'ScanPlatform__ManagedIdentityClientId').value
 ```
 
 The filtering is done in PowerShell rather than with `--query`, because `az` on Windows is a `.cmd`
@@ -886,18 +958,18 @@ the **public** endpoint, which is closed. That points at the private path, not a
 the site is integrated with the VNet and that it resolves the account privately:
 
 ```powershell
-az webapp show -g $platformRg -n "$prefix-api" `
-  --query "{subnet:virtualNetworkSubnetId, routeAll:vnetRouteAllEnabled}" -o json
+az containerapp env show -g $platformRg -n "$prefix-platform-env" `
+  --query "properties.vnetConfiguration" -o json
 
-# Then, from the site's Kudu console (https://<prefix>-api.scm.azurewebsites.net) — not your
-# laptop, which has no line of sight to the private zone — resolve the account. A 10.x address is
-# correct; a public one means DNS never reached the private zone.
-#   nslookup <storageaccount>.blob.core.windows.net
+# Then resolve the account from inside a replica — not from your laptop, which has no line of
+# sight to the private zone. A 10.x address is correct; a public one means DNS never reached it.
+az containerapp exec -g $platformRg -n "$prefix-api" `
+  --command "getent hosts <storageaccount>.blob.core.windows.net"
 ```
 
-Both fields must be populated. `vnetRouteAllEnabled` matters as much as the subnet: with it off,
-only RFC1918 destinations are routed through the VNet, and the storage FQDN — which resolves to a
-private address only *because* of the linked DNS zone — is still attempted over the public path.
+`infrastructureSubnetId` must be populated. Unlike App Service there is no separate "route all"
+switch to forget: an environment on a custom VNet sends all its outbound traffic through the
+subnet.
 
 Resolving to a public address instead means the private DNS zone link is missing. Confirm the zone
 exists and is linked to the VNet:
@@ -917,9 +989,12 @@ the file is missing):
 
 ```powershell
 $tenantId = az account show --query tenantId -o tsv
+# The FQDN has a generated suffix, so read it back rather than composing it.
+$apiUrl   = az deployment sub show --name enfolderer-scan `
+  --query properties.outputs.apiUrl.value -o tsv
 
 @"
-api_base_url=https://$prefix-api.azurewebsites.net
+api_base_url=$apiUrl
 tenant_id=$tenantId
 client_id=$clientAppId
 scope=api://$apiAppId/Scan.Submit
@@ -1043,9 +1118,27 @@ a run that is still going. Leave yourself that margin unless you know nothing is
 
 ## Costs and teardown
 
-The Basic App Service plan, the provisioned-throughput Cosmos container, and the `gpt-4o`
-deployment all bill while they exist. Job documents self-expire after seven days via the container
-TTL, but the resources do not. Tear down when you are done:
+The provisioned-throughput Cosmos container and the `gpt-4o` deployment bill while they exist. The
+container apps bill per vCPU-second and GiB-second: five apps at one replica each, mostly idle, is
+roughly the same order as the App Service plans this replaced, and the three Container Apps
+environments themselves are free. The registry is Basic and the Log Analytics workspaces bill per
+GB ingested, which at demo volume is pennies.
+
+If a demo is weeks away, set the apps to scale to zero rather than tearing the whole thing down —
+the identities, role assignments and agents all survive:
+
+```powershell
+foreach ($app in "$prefix-api", "$prefix-worker") {
+  az containerapp update -g $platformRg -n $app --min-replicas 0
+}
+```
+
+Put them back to `--min-replicas 1` before demoing. A cold start is a few seconds of nothing
+happening at exactly the moment someone is watching, and the MCP servers should stay at 1
+regardless: Foundry times a tool call out long before a cold replica answers.
+
+Job documents self-expire after seven days via the container TTL, but the resources do not. Tear
+down when you are done:
 
 ```powershell
 az group delete --name $platformRg       --yes --no-wait
