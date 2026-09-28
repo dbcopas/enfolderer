@@ -8,6 +8,7 @@ using Enfolderer.Ai.Infrastructure.Storage;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Azure.Cosmos;
 using Microsoft.Identity.Web;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -65,49 +66,69 @@ jobs.MapPost("/", async (
     try
     {
         target = await issuer.IssueAsync(jobId, request.FileName, ct);
+
+        var job = new ScanJobDocument
+        {
+            Id = jobId,
+            JobId = jobId,
+            Status = ScanJobStatus.Pending,
+            BlobPath = target.BlobPath,
+            GameHint = string.IsNullOrWhiteSpace(request.GameHint) ? null : CardGames.Normalize(request.GameHint)
+        };
+
+        // Recording the job authenticates with the same identity, so it can fail the same two ways
+        // and belongs under the same handling.
+        await store.CreateAsync(job, ct);
     }
     catch (RequestFailedException ex)
     {
-        // Minting the upload grant is the first thing that touches Azure, so a misconfigured or
+        // Creating a job is the first thing that touches Azure, so a misconfigured or
         // not-yet-propagated role assignment surfaces here. Report the storage error code rather
         // than an unhandled 500, which says only that something went wrong somewhere.
         loggerFactory.CreateLogger("Jobs").LogError(
-            ex, "Could not issue an upload URL for job {JobId}: {ErrorCode}", jobId, ex.ErrorCode);
+            ex, "Could not create job {JobId}: {ErrorCode}", jobId, ex.ErrorCode);
 
         return Results.Problem(
-            title: "Could not issue an upload URL.",
-            detail: $"Azure Storage returned {ex.Status} {ex.ErrorCode}. The API's managed identity "
-                  + "needs Storage Blob Delegator on the account and write access to the scans "
-                  + "container; a newly granted role can take several minutes to take effect.",
+            title: "Could not create the scan job.",
+            detail: $"Azure returned {ex.Status} {ex.ErrorCode}. The API's managed identity needs "
+                  + "Storage Blob Delegator on the account, write access to the scans container, "
+                  + "and the Cosmos data contributor role; a newly granted role can take several "
+                  + "minutes to take effect.",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+    catch (CosmosException ex)
+    {
+        // Cosmos reports its own failures through its own exception type, so a missing data-plane
+        // role assignment would otherwise still surface as a bare 500.
+        loggerFactory.CreateLogger("Jobs").LogError(
+            ex, "Could not record job {JobId}: {StatusCode}", jobId, ex.StatusCode);
+
+        return Results.Problem(
+            title: "Could not create the scan job.",
+            detail: $"Azure Cosmos DB returned {(int)ex.StatusCode}. The API's managed identity "
+                  + "needs the Cosmos DB Built-in Data Contributor role on the account; that is a "
+                  + "data-plane assignment, so it does not appear in `az role assignment list`.",
             statusCode: StatusCodes.Status502BadGateway);
     }
     catch (AuthenticationFailedException ex)
     {
-        // Storage never saw the request: the identity could not get a token at all. That is a
+        // Azure never saw the request: the identity could not get a token at all. That is a
         // different fault from a refused one, and distinguishing them here saves guessing whether
         // to look at role assignments or at the site's identity configuration. The usual cause is
         // a site with more than one identity assigned and no ScanPlatform__ManagedIdentityClientId
         // to say which to present, which leaves the choice ambiguous.
+        // The message is logged but deliberately not returned: DefaultAzureCredential enumerates
+        // every credential it tried, which describes the inside of the host to its callers.
         loggerFactory.CreateLogger("Jobs").LogError(
-            ex, "Could not acquire a token to issue an upload URL for job {JobId}", jobId);
+            ex, "Could not acquire a token to create job {JobId}", jobId);
 
         return Results.Problem(
-            title: "Could not issue an upload URL.",
-            detail: "The API could not acquire a managed identity token, so Azure Storage was never "
-                  + "called. Check that the site has the expected user-assigned identity and that "
-                  + $"ScanPlatform__ManagedIdentityClientId names it. ({ex.Message})",
+            title: "Could not create the scan job.",
+            detail: "The API could not acquire a managed identity token, so Azure was never called. "
+                  + "Check that the site has the expected user-assigned identity and that "
+                  + "ScanPlatform__ManagedIdentityClientId names it. See the API log for details.",
             statusCode: StatusCodes.Status502BadGateway);
     }
-
-    var job = new ScanJobDocument
-    {
-        Id = jobId,
-        JobId = jobId,
-        Status = ScanJobStatus.Pending,
-        BlobPath = target.BlobPath,
-        GameHint = string.IsNullOrWhiteSpace(request.GameHint) ? null : CardGames.Normalize(request.GameHint)
-    };
-    await store.CreateAsync(job, ct);
 
     return Results.Ok(new CreateJobResponse
     {
