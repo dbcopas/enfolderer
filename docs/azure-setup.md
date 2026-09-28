@@ -1124,8 +1124,15 @@ exists — and because every MCP URL changed when the servers moved off `azurewe
 
 If `az acr build` is refused by policy in your tenant — the same class of block that closed the
 storage account's public endpoint — use `-SkipImageBuild`. The script then stops after the first
-deployment rather than pointing the apps at image tags that do not exist, so you can push the
-images another way and re-run.
+deployment rather than pointing the apps at image tags that do not exist. Push the five images
+another way, then finish the migration with `-ImagesAlreadyPushed`, which skips the build and
+carries straight on to the redeploy:
+
+```powershell
+./scripts/migrate-to-containerapps.ps1 -Prefix $prefix -SkipImageBuild -Confirm:$false
+# push enfolderer/{api,worker,mcp-imaging,mcp-cardcatalog-mtg,mcp-cardcatalog-pokemon}:v1
+./scripts/migrate-to-containerapps.ps1 -Prefix $prefix -ImagesAlreadyPushed -Confirm:$false
+```
 
 ## Removing what the templates no longer create
 

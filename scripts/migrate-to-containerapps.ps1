@@ -51,6 +51,11 @@
     tenant and you intend to push the images another way: the script stops before the redeploy that
     would point the apps at tags that do not exist.
 
+.PARAMETER ImagesAlreadyPushed
+    Skip the build and carry on to the redeploy regardless, because the images are already in the
+    registry under -ImageTag. This is how you finish a migration that -SkipImageBuild stopped: a
+    plain re-run would try to build again and fail at exactly the same point.
+
 .EXAMPLE
     ./scripts/migrate-to-containerapps.ps1 -Prefix enf-demo -WhatIf
     Surveys the deployment and prints every action it would take, changing nothing.
@@ -73,7 +78,8 @@ param(
     [string] $ParametersFile = 'infra/main.parameters.json',
     [string] $ImageTag = 'v1',
     [string] $DeploymentName = 'enfolderer-scan',
-    [switch] $SkipImageBuild
+    [switch] $SkipImageBuild,
+    [switch] $ImagesAlreadyPushed
 )
 
 Set-StrictMode -Version Latest
@@ -145,8 +151,13 @@ function Get-DeploymentOutput {
 
 Write-Step 'Preflight'
 
-$account = az account show -o json 2>$null | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or -not $account) { throw 'Not logged in. Run az login first.' }
+# Capture before converting: a failed az writes nothing to stdout, and ConvertFrom-Json on an
+# empty string throws under $ErrorActionPreference = 'Stop', losing the message that explains it.
+$accountJson = az account show -o json 2>$null
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accountJson)) {
+    throw 'Not logged in. Run az login first.'
+}
+$account = $accountJson | ConvertFrom-Json
 Write-Skip "subscription  $($account.name) ($($account.id))"
 
 if (-not (Test-Path $ParametersFile)) {
@@ -235,7 +246,10 @@ if (-not $sitesToDelete -and -not $plansToDelete) {
 foreach ($site in $sitesToDelete) {
     $what = "$($site.Name) in $($site.Rg)"
     if ($PSCmdlet.ShouldProcess($what, 'Delete App Service site')) {
-        az webapp delete -g $site.Rg -n $site.Name -o none
+        # --keep-empty-plan makes the plan loop below authoritative. Without it az decides for
+        # itself whether to take the plan with the site, and the plan this run already surveyed
+        # would then fail to delete because it was removed underneath us.
+        az webapp delete -g $site.Rg -n $site.Name --keep-empty-plan -o none
         if ($LASTEXITCODE -ne 0) { throw "Failed to delete site $what." }
         Write-Did "deleted site  $what"
     }
@@ -261,6 +275,27 @@ foreach ($plan in $plansToDelete) {
 # ---------------------------------------------------------------------------------------------
 
 Write-Step '3. Delete the old VNet'
+
+# A plan under a name the old templates never used still holds its integration subnet, and the
+# VNet delete would fail on it with a message about the subnet rather than about the plan. Name
+# the real obstacle instead.
+$knownPlanNames = @($oldPlans | ForEach-Object { $_.Name })
+$strayPlans = @()
+foreach ($rg in $platformRg, $geoRg, $idRg) {
+    $json = az appservice plan list -g $rg --query "[].name" -o json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { continue }
+    $strayPlans += @(($json | ConvertFrom-Json) |
+        Where-Object { $_ -notin $knownPlanNames } |
+        ForEach-Object { "$_ in $rg" })
+}
+if ($strayPlans) {
+    # Under -WhatIf the plans above have not actually been deleted, so this is a warning rather
+    # than a stop: the point is to surface it while there is still time to look.
+    $message = ('App Service plans this script does not know about are still present and will ' +
+                'hold their integration subnets: ' + ($strayPlans -join ', ') +
+                '. Delete them, then re-run.')
+    if ($WhatIfPreference) { Write-Warning $message } else { throw $message }
+}
 
 if (-not $vnetExists) {
     Write-Skip 'nothing to delete'
@@ -328,24 +363,30 @@ Write-Skip "registry      $registry"
 
 Write-Step '5. Build the images'
 
-if ($SkipImageBuild) {
+if ($ImagesAlreadyPushed) {
+    Write-Skip "-ImagesAlreadyPushed was given; assuming enfolderer/*:$ImageTag are in $registry"
+}
+elseif ($SkipImageBuild) {
     Write-Skip '-SkipImageBuild was given; not building'
     Write-Host ''
-    Write-Host "Push images tagged '$ImageTag' to $registry, then re-run without -SkipImageBuild." -ForegroundColor DarkYellow
+    Write-Host "Push images tagged '$ImageTag' to $registry, then finish with:" -ForegroundColor DarkYellow
+    Write-Host "  ./scripts/migrate-to-containerapps.ps1 -Prefix $Prefix -ImageTag $ImageTag -ImagesAlreadyPushed -Confirm:`$false" -ForegroundColor DarkYellow
     return
 }
+else {
 
-foreach ($image in $images.Keys) {
-    $project = $images[$image]
-    if ($PSCmdlet.ShouldProcess("$image`:$ImageTag", 'Build image in ACR')) {
-        az acr build --registry $registry --image "enfolderer/$image`:$ImageTag" `
-            --build-arg "PROJECT=$project" --file src/Dockerfile .
-        if ($LASTEXITCODE -ne 0) {
-            throw ("Image build failed for $image. If the registry refused the connection, your " +
-                   'tenant may block its public endpoint the same way it blocks storage; see ' +
-                   'docs/azure-setup.md.')
-        }
+    foreach ($image in $images.Keys) {
+        $project = $images[$image]
+        if ($PSCmdlet.ShouldProcess("$image`:$ImageTag", 'Build image in ACR')) {
+            az acr build --registry $registry --image "enfolderer/$image`:$ImageTag" `
+                --build-arg "PROJECT=$project" --file src/Dockerfile .
+            if ($LASTEXITCODE -ne 0) {
+                throw ("Image build failed for $image. If the registry refused the connection, " +
+                       'your tenant may block its public endpoint the same way it blocks storage; ' +
+                       'see docs/azure-setup.md.')
+            }
         Write-Did "built         enfolderer/$image`:$ImageTag"
+        }
     }
 }
 
@@ -367,14 +408,17 @@ if ($PSCmdlet.ShouldProcess($DeploymentName, "Redeploy with imageTag=$ImageTag")
 
 $placeholders = @()
 foreach ($rg in $platformRg, $geoRg, $idRg) {
-    $running = az containerapp list -g $rg `
-        --query "[].{Name:name, Image:properties.template.containers[0].image}" -o json 2>$null |
-        ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0 -or -not $running) { continue }
-    $placeholders += @($running | Where-Object { $_.Image -like 'mcr.microsoft.com/k8se/*' })
+    $json = az containerapp list -g $rg `
+        --query "[].{Name:name, Image:properties.template.containers[0].image}" -o json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { continue }
+    $placeholders += @(($json | ConvertFrom-Json) |
+        Where-Object { $_.Image -like 'mcr.microsoft.com/k8se/*' } |
+        ForEach-Object { "$($_.Name) in $rg" })
 }
 if ($placeholders) {
-    Write-Warning ("Still on the placeholder image: " + (($placeholders | ForEach-Object { $_.Name }) -join ', '))
+    Write-Warning ('Still on the placeholder image: ' +
+        (($placeholders | Select-Object -Unique) -join ', ') +
+        '. The redeploy did not reach them; check that the images exist in the registry.')
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -410,7 +454,8 @@ Write-Host @"
 
      az containerapp update -g $platformRg -n "$Prefix-worker" --set-env-vars ``
        ScanPipeline__BoundaryAgentId='<boundary asst_ id>' ``
-       ScanPipeline__IdentificationAgentIds__mtg='<mtg asst_ id>'
+       ScanPipeline__IdentificationAgentIds__mtg='<mtg asst_ id>' ``
+       ScanPipeline__IdentificationAgentIds__pokemon='<pokemon asst_ id>'
 
   3. Repoint the desktop app. The API hostname has changed:
 
