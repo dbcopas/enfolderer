@@ -99,7 +99,7 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
     public async Task<IdentifiedCard> IdentifyAsync(CardCrop crop, CancellationToken ct = default)
     {
         var prompt = BuildPrompt(_profile);
-        var reply = await _client.RunAsync(_agentId, prompt, crop.CropSasUrl, ct);
+        var reply = await _client.RunAsync(_agentId, prompt, crop.Image, ct);
 
         try
         {

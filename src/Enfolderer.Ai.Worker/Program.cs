@@ -43,9 +43,7 @@ builder.Services.AddSingleton<ICardBoundaryAgent>(sp =>
 {
     if (!pipeline.UsesFoundryGeometry)
     {
-        return new StubCardBoundaryAgent(
-            sp.GetRequiredService<IScanImageStore>(),
-            sp.GetRequiredService<ILogger<StubCardBoundaryAgent>>());
+        return new StubCardBoundaryAgent(sp.GetRequiredService<ILogger<StubCardBoundaryAgent>>());
     }
 
     var client = CreateFoundryClient(sp, pipeline.GeometryProjectEndpoint!);

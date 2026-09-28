@@ -8,22 +8,21 @@ using ModelContextProtocol.Server;
 namespace Enfolderer.Ai.Mcp.Imaging;
 
 /// <summary>
-/// Imaging tools owned by Team A (they pair with the geometry skill): perspective-correct cropping
-/// and read-URL minting. Storage access is limited by the RBAC of whatever identity runs this
-/// server — in the demo that identity can read <c>scans</c> and write <c>crops</c>, and has no
-/// Cosmos access at all.
+/// Imaging tools owned by Team A (they pair with the geometry skill). Storage access is limited by
+/// the RBAC of whatever identity runs this server — in the demo that identity can read
+/// <c>scans</c>, and has no Cosmos access at all.
+/// <para>
+/// There is deliberately no tool for minting a read URL. The storage account is private, so a URL
+/// is not something a Foundry-hosted model can fetch; images reach an agent as uploaded file
+/// content instead.
+/// </para>
 /// </summary>
 [McpServerToolType]
 public sealed class ImagingTools
 {
     private readonly IScanImageStore _images;
-    private readonly IReadUrlProvider _readUrls;
 
-    public ImagingTools(IScanImageStore images, IReadUrlProvider readUrls)
-    {
-        _images = images;
-        _readUrls = readUrls;
-    }
+    public ImagingTools(IScanImageStore images) => _images = images;
 
     [McpServerTool(Name = "crop_quad")]
     [Description("Perspective-correct crop of a quadrilateral out of a stored image, written as a PNG blob. Use for cards photographed at an angle.")]
@@ -51,22 +50,6 @@ public sealed class ImagingTools
             blobPath = destinationBlobPath,
             width = size.Width,
             height = size.Height
-        });
-    }
-
-    [McpServerTool(Name = "get_image_sas")]
-    [Description("Mint a short-lived read-only URL for a stored image so a vision model can fetch it without any storage credential.")]
-    public async Task<string> GetImageSasAsync(
-        [Description("Blob path as 'container/name'.")] string blobPath,
-        [Description("Lifetime of the URL in minutes (1-120).")] int lifetimeMinutes = 30,
-        CancellationToken ct = default)
-    {
-        var lifetime = TimeSpan.FromMinutes(Math.Clamp(lifetimeMinutes, 1, 120));
-        var url = await _readUrls.GetReadUrlAsync(blobPath, lifetime, ct);
-        return JsonSerializer.Serialize(new
-        {
-            url = url.ToString(),
-            expiresAt = DateTimeOffset.UtcNow.Add(lifetime)
         });
     }
 

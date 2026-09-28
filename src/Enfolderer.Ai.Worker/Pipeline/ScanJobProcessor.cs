@@ -18,7 +18,6 @@ public sealed class ScanJobProcessor
 
     private readonly IJobStore _jobs;
     private readonly IScanImageStore _images;
-    private readonly IReadUrlProvider _readUrls;
     private readonly ICardBoundaryAgent _boundaryAgent;
     private readonly IReadOnlyDictionary<string, ICardIdentificationAgent> _idAgents;
     private readonly ScanPipelineOptions _options;
@@ -27,7 +26,6 @@ public sealed class ScanJobProcessor
     public ScanJobProcessor(
         IJobStore jobs,
         IScanImageStore images,
-        IReadUrlProvider readUrls,
         ICardBoundaryAgent boundaryAgent,
         IEnumerable<ICardIdentificationAgent> idAgents,
         ScanPipelineOptions options,
@@ -35,7 +33,6 @@ public sealed class ScanJobProcessor
     {
         _jobs = jobs;
         _images = images;
-        _readUrls = readUrls;
         _boundaryAgent = boundaryAgent;
         _idAgents = idAgents.ToDictionary(a => a.Game, StringComparer.OrdinalIgnoreCase);
         _options = options;
@@ -59,9 +56,12 @@ public sealed class ScanJobProcessor
             // eighteen cards, and re-fetching the photo per card multiplies blob egress.
             using var source = await BufferAsync(job.BlobPath, ct);
             var dimensions = PerspectiveCropper.ReadDimensions(source);
-            var imageUrl = await _readUrls.GetReadUrlAsync(job.BlobPath, _options.ReadUrlLifetime, ct);
 
-            var boundaries = await _boundaryAgent.DetectAsync(imageUrl, ct);
+            // Team A gets the photograph and nothing else: no job id, no storage path, no hint of
+            // what the customer wrote in the notes.
+            var scanName = Path.GetFileName(job.BlobPath);
+            var scan = new AgentImage(source.ToArray(), scanName, ScanBlobPaths.ContentTypeFor(scanName));
+            var boundaries = await _boundaryAgent.DetectAsync(scan, ct);
             job = await _jobs.UpsertAsync(
                 job with { Status = ScanJobStatus.Identifying, CardsDetected = boundaries.Count },
                 ct);
@@ -142,10 +142,13 @@ public sealed class ScanJobProcessor
             try
             {
                 var cropPath = $"{ScanBlobPaths.CropsContainer}/{ScanBlobPaths.BuildCropBlobName(job.JobId, index)}";
-                await WriteCropAsync(source, boundary.Quad, cropPath, ct);
-                var cropUrl = await _readUrls.GetReadUrlAsync(cropPath, _options.ReadUrlLifetime, ct);
+                // Written to storage for the audit trail — you can open the container mid-demo and
+                // see the rectified faces — and handed to the agent as bytes, because Team B cannot
+                // reach the container either.
+                var cropBytes = await WriteCropAsync(source, boundary.Quad, cropPath, ct);
 
-                var crop = new CardCrop(index, cropUrl, boundary.Quad, boundary.GameHint);
+                var image = new AgentImage(cropBytes, Path.GetFileName(cropPath), "image/png");
+                var crop = new CardCrop(index, image, boundary.Quad, boundary.GameHint);
                 var card = await agent.IdentifyAsync(crop, ct);
 
                 // Geometry always comes from Team A, whatever the identification agent echoed back.
@@ -191,7 +194,8 @@ public sealed class ScanJobProcessor
         return buffer;
     }
 
-    private async Task WriteCropAsync(MemoryStream source, CardQuad quad, string cropBlobPath, CancellationToken ct)
+    /// <summary>Crops one card, stores it, and returns the same bytes for the agent call.</summary>
+    private async Task<byte[]> WriteCropAsync(MemoryStream source, CardQuad quad, string cropBlobPath, CancellationToken ct)
     {
         source.Position = 0;
 
@@ -200,5 +204,6 @@ public sealed class ScanJobProcessor
         crop.Position = 0;
 
         await _images.WriteAsync(cropBlobPath, crop, "image/png", ct);
+        return crop.ToArray();
     }
 }

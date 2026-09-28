@@ -17,12 +17,8 @@ param workerPrincipalId string
 @description('Principal id of Team A\'s user-assigned identity.')
 param geometryPrincipalId string
 
-@description('Principal id of Team B\'s user-assigned identity.')
-param identificationPrincipalId string
-
 var storageBlobDataReader = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
 var storageBlobDataContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-var storageBlobDelegator = 'db58b8e5-c6ad-4a2a-8342-4190687cbf4a'
 var storageQueueDataContributor = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
 var cosmosDataContributorId = '00000000-0000-0000-0000-000000000002'
 
@@ -106,16 +102,6 @@ resource workerCrops 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource workerDelegator 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: storage
-  name: guid(storage.id, workerPrincipalId, storageBlobDelegator)
-  properties: {
-    principalId: workerPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDelegator)
-  }
-}
-
 resource workerQueue 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: storage
   name: guid(storage.id, workerPrincipalId, storageQueueDataContributor)
@@ -150,13 +136,7 @@ resource geometryScans 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 // --- Team B (identification) -----------------------------------------------------------------
-// Read on crops only. Team B never sees the original photo, only the rectified card faces.
-resource identificationCrops 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: crops
-  name: guid(crops.id, identificationPrincipalId, storageBlobDataReader)
-  properties: {
-    principalId: identificationPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReader)
-  }
-}
+// Deliberately nothing. Team B's agents receive each card as an uploaded file, so they never read
+// the crops container — and Team B's identity has no way to reach the original photograph, the job
+// state, or any crop the orchestrator did not choose to send. Granting a container-scoped read
+// here would look like a tighter boundary on a slide and be a looser one in fact.

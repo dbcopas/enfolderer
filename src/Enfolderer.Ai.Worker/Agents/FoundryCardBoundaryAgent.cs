@@ -45,9 +45,9 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
 
     public string AgentId => $"cardgeo/{_agentId}";
 
-    public async Task<IReadOnlyList<DetectedBoundary>> DetectAsync(Uri imageSasUrl, CancellationToken ct = default)
+    public async Task<IReadOnlyList<DetectedBoundary>> DetectAsync(AgentImage image, CancellationToken ct = default)
     {
-        var reply = await _client.RunAsync(_agentId, Prompt, imageSasUrl, ct);
+        var reply = await _client.RunAsync(_agentId, Prompt, image, ct);
         var boundaries = ParseBoundaries(reply);
         _log.LogInformation("Boundary agent {AgentId} returned {Count} card(s).", AgentId, boundaries.Count);
         return boundaries;

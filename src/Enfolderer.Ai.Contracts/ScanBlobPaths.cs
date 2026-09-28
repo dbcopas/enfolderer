@@ -3,7 +3,7 @@ using System.Text;
 namespace Enfolderer.Ai.Contracts;
 
 /// <summary>
-/// Blob layout shared by the API (which mints upload SAS tokens) and the worker (which reads the
+/// Blob layout shared by the API (which relays client uploads) and the worker (which reads the
 /// uploads and writes crops). Kept here so the two tiers cannot drift apart.
 /// </summary>
 public static class ScanBlobPaths
@@ -50,6 +50,27 @@ public static class ScanBlobPaths
         if (ext.Length is 0 or > 8) ext = "jpg";
 
         return $"{stem}.{ext}";
+    }
+
+    /// <summary>
+    /// Image content type implied by a file name or blob path. The worker needs it when uploading
+    /// the image to a Foundry project, where the part's content type is all the service has to go
+    /// on. Anything unrecognised is reported as JPEG, which is what the upload endpoint already
+    /// defaults an extensionless name to.
+    /// </summary>
+    public static string ContentTypeFor(string? fileNameOrPath)
+    {
+        var dot = (fileNameOrPath ?? string.Empty).LastIndexOf('.');
+        var ext = dot >= 0 ? fileNameOrPath![(dot + 1)..].ToLowerInvariant() : string.Empty;
+        return ext switch
+        {
+            "png" => "image/png",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
+            "webp" => "image/webp",
+            "heic" => "image/heic",
+            _ => "image/jpeg"
+        };
     }
 
     /// <summary>Keeps only characters that are unambiguous in a blob path segment.</summary>

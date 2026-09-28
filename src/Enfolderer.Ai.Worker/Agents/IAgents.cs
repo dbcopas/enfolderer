@@ -2,6 +2,13 @@ using Enfolderer.Ai.Contracts;
 
 namespace Enfolderer.Ai.Worker.Agents;
 
+/// <summary>
+/// An image handed to an agent, as bytes. Storage is private, so an agent cannot be given a URL to
+/// fetch: the orchestrator uploads the bytes to the target project instead, which also means each
+/// project receives only what it was sent.
+/// </summary>
+public sealed record AgentImage(ReadOnlyMemory<byte> Content, string FileName, string ContentType);
+
 /// <summary>Result of a single boundary detection.</summary>
 public sealed record DetectedBoundary(CardQuad Quad, double Confidence, string? GameHint);
 
@@ -16,14 +23,15 @@ public interface ICardBoundaryAgent
     string AgentId { get; }
 
     /// <summary>
-    /// Locates every collectible card in the image. The image is passed as a read SAS URL so the
-    /// agent never receives storage credentials.
+    /// Locates every collectible card in the image. The image is passed as bytes, which are
+    /// uploaded to Team A's project: the agent never receives a storage credential, and Team A
+    /// sees only the photograph it was given.
     /// </summary>
-    Task<IReadOnlyList<DetectedBoundary>> DetectAsync(Uri imageSasUrl, CancellationToken ct = default);
+    Task<IReadOnlyList<DetectedBoundary>> DetectAsync(AgentImage image, CancellationToken ct = default);
 }
 
 /// <summary>A crop handed to an identification agent.</summary>
-public sealed record CardCrop(int Index, Uri CropSasUrl, CardQuad Quad, string? GameHint);
+public sealed record CardCrop(int Index, AgentImage Image, CardQuad Quad, string? GameHint);
 
 /// <summary>
 /// Team B's per-game identification agents (Foundry project <c>cardid</c>). Each implementation owns

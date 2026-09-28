@@ -30,6 +30,23 @@ public static class AiScanClientTests
         failures += TestQuadBoundingBox();
         failures += TestAuthenticationRecordStore();
         failures += TestStaleRecordFallsBackToPrompt();
+        failures += TestUploadContentTypes();
+        return failures;
+    }
+
+    /// <summary>
+    /// The worker sends the image to Foundry as an uploaded file part, and the part's content type
+    /// is all the service has to identify it by, so an unrecognised extension must still produce a
+    /// usable image type rather than application/octet-stream.
+    /// </summary>
+    private static int TestUploadContentTypes()
+    {
+        int failures = 0;
+        failures += Check(ScanBlobPaths.ContentTypeFor("page1.png") == "image/png", "png content type");
+        failures += Check(ScanBlobPaths.ContentTypeFor("page1.JPG") == "image/jpeg", "uppercase jpg content type");
+        failures += Check(ScanBlobPaths.ContentTypeFor("scans/abc/page1.jpeg") == "image/jpeg", "content type from a blob path");
+        failures += Check(ScanBlobPaths.ContentTypeFor("noextension") == "image/jpeg", "extensionless falls back to jpeg");
+        failures += Check(ScanBlobPaths.ContentTypeFor(null) == "image/jpeg", "null falls back to jpeg");
         return failures;
     }
 

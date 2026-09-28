@@ -39,9 +39,6 @@ public sealed class ScanPipelineOptions
     /// <summary>Game assumed when neither the caller nor the boundary agent offers a usable hint.</summary>
     public string DefaultGame { get; set; } = CardGames.Magic;
 
-    /// <summary>Lifetime of the read SAS URLs handed to agents.</summary>
-    public TimeSpan ReadUrlLifetime { get; set; } = TimeSpan.FromMinutes(30);
-
     /// <summary>Height in pixels of each perspective-corrected card crop.</summary>
     public int CropHeight { get; set; } = 1024;
 
