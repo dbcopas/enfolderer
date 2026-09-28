@@ -481,8 +481,11 @@ the location the deployment already uses, and deploy again.
 This creates three resource groups (`<prefix>-platform`, `<prefix>-cardgeo`, `<prefix>-cardid`),
 the four managed identities, the storage account with the `scans` and `crops` containers and the
 `scan-jobs` queue, the Cosmos account with the `jobs` container, one Foundry account holding both
-the `cardgeo` and `cardid` projects and a shared `gpt-4o` deployment, the API and worker App
-Services, and all the role assignments.
+the `cardgeo` and `cardid` projects and a shared `gpt-4o` deployment, the container registry, the
+three Container Apps environments and the five container apps, and all the role assignments.
+
+On the first run the registry has no images, so every container app starts on a placeholder — see
+[step 5](#5-host-the-mcp-servers).
 
 Confirm the project-scoped role assignments landed, because this is the boundary the whole demo
 rests on and ARM will tell you plainly if it did not:
