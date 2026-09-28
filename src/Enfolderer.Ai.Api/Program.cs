@@ -7,11 +7,16 @@ using Enfolderer.Ai.Infrastructure;
 using Enfolderer.Ai.Infrastructure.Queueing;
 using Enfolderer.Ai.Infrastructure.Storage;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using System.Net;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Identity.Web;
+
+// 64 MB: comfortably above a phone photograph, well below anything that would exhaust the
+// B1 plan's memory while being relayed to blob storage.
+const long MaxScanImageBytes = 64L * 1024 * 1024;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -168,17 +173,20 @@ jobs.MapPost("/", async (
     });
 });
 
-// 2. Local development only: accept the image directly when no storage account is configured.
+// 2. Accept the image. The storage account is private, so the client cannot write to it directly;
+// the API is the one public entry point and relays the bytes on the caller's behalf.
 jobs.MapPut("/{jobId}/content", async (
     string jobId,
     HttpRequest request,
     IJobStore store,
-    IUploadUrlIssuer issuer,
     IScanImageStore images,
     CancellationToken ct) =>
 {
-    if (issuer is not LocalUploadUrlIssuer)
-        return Results.NotFound();
+    // Photographs of a full binder page are larger than Kestrel's 30 MB default, and the failure
+    // mode is an opaque 413 mid-upload, so the ceiling is raised deliberately rather than removed.
+    var sizeLimit = request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
+    if (sizeLimit is { IsReadOnly: false })
+        sizeLimit.MaxRequestBodySize = MaxScanImageBytes;
 
     var job = await store.GetAsync(jobId, ct);
     if (job is null) return Results.NotFound();

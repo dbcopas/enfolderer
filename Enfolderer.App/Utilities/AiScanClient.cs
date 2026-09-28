@@ -139,14 +139,16 @@ public sealed class AiScanClient
         using var content = new StreamContent(file);
         content.Headers.ContentType = new MediaTypeHeaderValue(GuessContentType(imagePath));
 
-        using var request = new HttpRequestMessage(HttpMethod.Put, uploadUrl) { Content = content };
+        // The API issues a relative URL, so it resolves against whatever base address this client
+        // was configured with and the API never has to know its own public hostname.
+        var target = new Uri(_apiBaseUrl, uploadUrl);
+        using var request = new HttpRequestMessage(HttpMethod.Put, target) { Content = content };
 
-        // A blob SAS URL authenticates itself; the local development upload endpoint is on the API
-        // and therefore still needs the caller's bearer token.
-        if (IsApiUrl(uploadUrl))
-            await AuthorizeAsync(request, ct);
-        else
-            request.Headers.Add("x-ms-blob-type", "BlockBlob");
+        // Storage is private, so the upload always goes to the API and always needs a bearer token.
+        // An absolute URL pointing anywhere else is refused rather than sent unauthenticated.
+        if (!IsApiUrl(target))
+            throw new InvalidOperationException($"The scan API asked for an upload to an unexpected host: {target}.");
+        await AuthorizeAsync(request, ct);
 
         using var response = await _http.SendAsync(request, ct);
         await EnsureSuccessAsync(response, "upload the image", ct);
@@ -194,9 +196,8 @@ public sealed class AiScanClient
         throw new InvalidOperationException($"Failed to {what}: HTTP {(int)response.StatusCode}. {body}");
     }
 
-    private bool IsApiUrl(string url) =>
-        Uri.TryCreate(url, UriKind.Absolute, out var parsed) &&
-        Uri.Compare(parsed, _apiBaseUrl, UriComponents.SchemeAndServer, UriFormat.SafeUnescaped, StringComparison.OrdinalIgnoreCase) == 0;
+    internal bool IsApiUrl(Uri url) =>
+        Uri.Compare(url, _apiBaseUrl, UriComponents.SchemeAndServer, UriFormat.SafeUnescaped, StringComparison.OrdinalIgnoreCase) == 0;
 
     private static string GuessContentType(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {

@@ -42,9 +42,6 @@ public sealed class ScanPlatformOptions
     public string LocalStorageRoot { get; set; } =
         Path.Combine(Path.GetTempPath(), "enfolderer-scan-dev");
 
-    /// <summary>Base URL the API advertises to clients when issuing local upload URLs.</summary>
-    public string LocalApiBaseUrl { get; set; } = "http://localhost:5080";
-
     public bool UsesAzureStorage => !string.IsNullOrWhiteSpace(StorageAccountUrl);
 
     public bool UsesAzureQueue => !string.IsNullOrWhiteSpace(QueueAccountUrl);
