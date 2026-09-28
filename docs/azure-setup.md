@@ -112,6 +112,17 @@ Neither team identity has any Cosmos role assignment, so neither can read job st
   User Access Administrator — Contributor is not enough, because the deployment grants RBAC).
 - Azure CLI 2.60 or later with the Bicep tooling: `az bicep install`.
 - The `containerapp` CLI extension: `az extension add --name containerapp --upgrade`.
+- **The subscription registered for `Microsoft.Network/AllowBringYourOwnPublicIpAddress`.** Each
+  Container Apps environment here sits on your own VNet, and such an environment creates a public
+  IP and a load balancer *in your subscription*, in a managed resource group prefixed `ME_`. That
+  counts as bringing your own public IP, and it is gated:
+
+  ```powershell
+  az feature show --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress -o table
+  ```
+
+  If that does not say `Registered`, do it now rather than at deployment time — see
+  [step 3](#3-deploy-the-infrastructure), where the consequences of skipping it are spelled out.
 - **No Docker, and no .NET SDK.** Images are built by ACR Tasks in Azure, from source uploaded by
   `az acr build`, so your machine needs neither. If you want to build locally as well you will
   need both, but nothing in this guide does.
@@ -520,10 +531,66 @@ propagate; if the first scan fails with a 403, wait and retry before assuming a 
 
 ### If the deployment fails
 
-Re-running the deployment is safe. ARM templates are declarative, so a second `az deployment sub
-create` reconciles whatever already exists rather than duplicating it; there is no need to delete
-the resource groups after a partial failure.
+Re-running the deployment is usually safe. ARM templates are declarative, so a second `az
+deployment sub create` reconciles whatever already exists rather than duplicating it; there is no
+need to delete the resource groups after a partial failure. **The one exception is a failed
+Container Apps environment** — see the first entry below, which is also the failure you are most
+likely to hit.
 
+- **`SubscriptionNotRegisteredForFeature ... Microsoft.Network/AllowBringYourOwnPublicIpAddress`**,
+  reported by `ConfigureAllocatedClusterHandler` after a long wait, for every environment at once.
+  Nothing is wrong with the template. A Container Apps environment on a custom VNet creates a
+  public IP and a load balancer in your subscription, and your subscription is not registered for
+  the feature that permits it. The gate is not enforced when ARM accepts the deployment, which is
+  why it costs you twenty minutes before saying so.
+
+  ```powershell
+  az feature register --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress
+  az feature show --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress -o table
+  # once it reads Registered:
+  az provider register --namespace Microsoft.Network --wait
+  ```
+
+  Registration is self-service and usually takes seconds. The provider re-registration is **not**
+  optional — the feature has no effect until `Microsoft.Network` is refreshed.
+
+  Then **delete the failed environments before redeploying.** This is the exception to "re-running
+  is safe": an environment that failed this way can come back from a retry reporting `Succeeded`
+  while its `staticIp` is null and its `ME_` group contains no public IP or load balancer, after
+  which every app in it fails to start for reasons that look nothing like the real cause. A failed
+  environment also keeps a service association link on its subnet, so the subnet cannot be reused
+  until it is gone.
+
+  ```powershell
+  foreach ($rg in $platformRg, $geometryRg, $identificationRg) {
+    az containerapp env list -g $rg `
+      --query "[].{Name:name, State:properties.provisioningState, Group:properties.infrastructureResourceGroup}" -o table
+  }
+  ```
+
+  Delete any that are not `Succeeded`, and wait for both the environment and its `ME_` resource
+  group to actually disappear — `az containerapp env delete` returns before the deletion finishes,
+  and creating over the top then fails with `ManagedEnvironmentScheduledForDelete`.
+  `scripts/migrate-to-containerapps.ps1` does all of this, including the polling, in its step 3b,
+  and refuses to deploy at all while the feature is unregistered.
+
+  If registration succeeds but the deployment is then refused with `RequestDisallowedByPolicy`, a
+  tenant policy is blocking public IP creation outright. That needs a policy exemption, and you can
+  prove it in isolation for the price of one IP:
+
+  ```powershell
+  az network public-ip create -g $platformRg -n byoip-probe --sku Standard --allocation-method Static
+  az network public-ip delete -g $platformRg -n byoip-probe
+  ```
+
+  There is no workaround inside the template. An environment with no custom VNet cannot reach a
+  private endpoint — Container Apps on the default network can only talk to internet-accessible
+  endpoints — and this storage account has no public endpoint. The older Consumption-only
+  environment type does not help either: it creates public IPs in your subscription too, in an
+  `MC_` group.
+- **`MaxNumberOfRegionalEnvironmentsInSubExceeded`.** The deployment creates three environments,
+  one per team, and some regions cap a subscription at very few. Delete unused environments in the
+  region, request an increase, or deploy somewhere else.
 - **`NoRegisteredProviderFound ... for type 'accounts/projects'`**, listing supported API versions.
   The Bicep is pinned to an API version your tenant's resource provider does not offer. Take the
   newest stable version (no `-preview` suffix) from the list in the error and update the
