@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -15,6 +16,9 @@ namespace Enfolderer.Ai.Worker.Agents;
 public sealed class FoundryAgentClient
 {
     private static readonly string[] Scopes = ["https://ai.azure.com/.default"];
+
+    // In preference order; see UploadImageAsync for why there is more than one.
+    private static readonly string[] FilePurposes = ["assistants", "vision"];
 
     private readonly HttpClient _http;
     private readonly TokenCredential _credential;
@@ -47,37 +51,129 @@ public sealed class FoundryAgentClient
 
     /// <summary>
     /// Runs <paramref name="agentId"/> against a single user message containing
-    /// <paramref name="prompt"/> and, optionally, an image URL, then returns the agent's reply text.
+    /// <paramref name="prompt"/> and, optionally, an image, then returns the agent's reply text.
+    /// <para>
+    /// The image is uploaded to the project and referenced by file id rather than passed as a URL.
+    /// The storage account is private, so a blob URL — SAS or not — is not something the Foundry
+    /// service can fetch: it runs outside our VNet. Uploading also means each project receives only
+    /// the bytes the orchestrator chose to send it, which is a tighter boundary than a
+    /// container-scoped read grant.
+    /// </para>
     /// </summary>
-    public async Task<string> RunAsync(string agentId, string prompt, Uri? imageUrl, CancellationToken ct)
+    public async Task<string> RunAsync(string agentId, string prompt, AgentImage? image, CancellationToken ct)
     {
-        var content = new List<object> { new { type = "text", text = prompt } };
-        if (imageUrl is not null)
-            content.Add(new { type = "image_url", image_url = new { url = imageUrl.ToString() } });
-
-        using var thread = await SendAsync(
-            HttpMethod.Post,
-            $"/threads?api-version={_apiVersion}",
-            new { messages = new[] { new { role = "user", content } } },
-            ct);
-        var threadId = RequireString(thread, "id", "thread id");
-
-        using var run = await SendAsync(
-            HttpMethod.Post,
-            $"/threads/{threadId}/runs?api-version={_apiVersion}",
-            new { assistant_id = agentId },
-            ct);
-        var runId = RequireString(run, "id", "run id");
-
-        var (status, lastError) = await WaitForRunAsync(threadId, runId, ct);
-        if (!IsCompleted(status))
+        string? fileId = null;
+        try
         {
-            // The job's Error field only carries ex.Message, so the reason has to travel with it.
-            var reason = string.IsNullOrEmpty(lastError) ? string.Empty : $": {lastError}";
-            throw new InvalidOperationException($"Agent '{agentId}' run ended with status '{status}'{reason}.");
+            var content = new List<object> { new { type = "text", text = prompt } };
+            if (image is not null)
+            {
+                fileId = await UploadImageAsync(image, ct);
+                // "high" detail: a collector number is small print, and the default downsamples it
+                // to the point where the catalogue lookup has nothing to work with.
+                content.Add(new { type = "image_file", image_file = new { file_id = fileId, detail = "high" } });
+            }
+
+            using var thread = await SendAsync(
+                HttpMethod.Post,
+                $"/threads?api-version={_apiVersion}",
+                new { messages = new[] { new { role = "user", content } } },
+                ct);
+            var threadId = RequireString(thread, "id", "thread id");
+
+            using var run = await SendAsync(
+                HttpMethod.Post,
+                $"/threads/{threadId}/runs?api-version={_apiVersion}",
+                new { assistant_id = agentId },
+                ct);
+            var runId = RequireString(run, "id", "run id");
+
+            var (status, lastError) = await WaitForRunAsync(threadId, runId, ct);
+            if (!IsCompleted(status))
+            {
+                // The job's Error field only carries ex.Message, so the reason has to travel with it.
+                var reason = string.IsNullOrEmpty(lastError) ? string.Empty : $": {lastError}";
+                throw new InvalidOperationException($"Agent '{agentId}' run ended with status '{status}'{reason}.");
+            }
+
+            return await ReadLastAssistantMessageAsync(threadId, ct);
+        }
+        finally
+        {
+            // An uploaded file outlives the thread, so without this a binder page leaves nineteen
+            // images sitting in the project after every scan.
+            if (fileId is not null) await TryDeleteFileAsync(fileId);
+        }
+    }
+
+    /// <summary>
+    /// Uploads an image to the project and returns its file id.
+    /// </summary>
+    /// <remarks>
+    /// The service's own enum carries both <c>assistants</c> and <c>vision</c>, and its
+    /// documentation and its samples disagree about which applies to an agent image input. The
+    /// samples use <c>assistants</c>, so that is tried first and <c>vision</c> is the fallback; a
+    /// rejection shows up as a 400, not as a run failure further down.
+    /// </remarks>
+    private async Task<string> UploadImageAsync(AgentImage image, CancellationToken ct)
+    {
+        foreach (var purpose in FilePurposes)
+        {
+            try
+            {
+                using var document = await UploadAsync(image, purpose, ct);
+                var id = RequireString(document, "id", "file id");
+                _log.LogDebug("Uploaded {FileName} to {Endpoint} as {FileId} (purpose {Purpose}).",
+                    image.FileName, _projectEndpoint, id, purpose);
+                return id;
+            }
+            catch (FoundryAccessException ex) when (ex.StatusCode == 400 && purpose != FilePurposes[^1])
+            {
+                _log.LogWarning("Upload with purpose '{Purpose}' was rejected; retrying. {Message}", purpose, ex.Message);
+            }
         }
 
-        return await ReadLastAssistantMessageAsync(threadId, ct);
+        throw new UnreachableException();
+    }
+
+    private async Task<JsonDocument> UploadAsync(AgentImage image, string purpose, CancellationToken ct)
+    {
+        var token = await _credential.GetTokenAsync(new TokenRequestContext(Scopes), ct);
+
+        using var form = new MultipartFormDataContent();
+        var file = new ReadOnlyMemoryContent(image.Content);
+        file.Headers.ContentType = new MediaTypeHeaderValue(image.ContentType);
+        // The service reads the name from this part's Content-Disposition.
+        form.Add(file, "file", image.FileName);
+        form.Add(new StringContent(purpose), "purpose");
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_projectEndpoint}/files?api-version={_apiVersion}")
+        {
+            Content = form
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+
+        using var response = await _http.SendAsync(request, ct);
+        return await ReadAsync(response, HttpMethod.Post, "/files", ct);
+    }
+
+    /// <summary>
+    /// Best-effort delete. A leaked file costs a little project storage and nothing else, so it
+    /// must never turn a successful identification into a failed job — but it is logged, because
+    /// repeated failures here are what fill a project up. <c>scripts/cleanup.ps1</c> sweeps them.
+    /// </summary>
+    private async Task TryDeleteFileAsync(string fileId)
+    {
+        try
+        {
+            // Deliberately not the caller's token: cleanup must still run when the job is cancelled.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var _ = await SendAsync(HttpMethod.Delete, $"/files/{fileId}?api-version={_apiVersion}", null, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not delete uploaded file {FileId} from {Endpoint}.", fileId, _projectEndpoint);
+        }
     }
 
     private static bool IsCompleted(string status) =>
@@ -154,6 +250,11 @@ public sealed class FoundryAgentClient
         if (body is not null) request.Content = JsonContent.Create(body);
 
         using var response = await _http.SendAsync(request, ct);
+        return await ReadAsync(response, method, path, ct);
+    }
+
+    private async Task<JsonDocument> ReadAsync(HttpResponseMessage response, HttpMethod method, string path, CancellationToken ct)
+    {
         var payload = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)

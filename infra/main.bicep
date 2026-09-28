@@ -292,7 +292,6 @@ module dataRbac 'modules/data-rbac.bicep' = {
     apiPrincipalId: apiIdentity.outputs.principalId
     workerPrincipalId: workerIdentity.outputs.principalId
     geometryPrincipalId: geometryIdentity.outputs.principalId
-    identificationPrincipalId: identificationIdentity.outputs.principalId
   }
 }
 
