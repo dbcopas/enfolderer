@@ -394,6 +394,21 @@ az deployment sub create `
   --parameters infra/main.parameters.json
 ```
 
+`--location` says where the deployment *record* is stored, not where the resources go — that comes
+from the `location` parameter in the file above. But a subscription-scope deployment pins its
+location to its name on the first run, so every later deployment called `enfolderer-scan` must pass
+the same one or Azure refuses it:
+
+```
+InvalidDeploymentLocation: Invalid deployment location 'westeurope'.
+The deployment 'ENFOLDERER-SCAN' already exists in location 'swedencentral'.
+```
+
+That is a rejection, not a partial deployment: nothing was changed. If you see it, you are either
+in a new shell where `$location` was never set or set differently, or you edited the parameters
+file by hand without updating the variable. Re-run the variable block at the top of this guide with
+the location the deployment already uses, and deploy again.
+
 This creates three resource groups (`<prefix>-platform`, `<prefix>-cardgeo`, `<prefix>-cardid`),
 the four managed identities, the storage account with the `scans` and `crops` containers and the
 `scan-jobs` queue, the Cosmos account with the `jobs` container, one Foundry account holding both
