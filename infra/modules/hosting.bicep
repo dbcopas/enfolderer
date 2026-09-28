@@ -61,6 +61,11 @@ var hasImages = !empty(imageTag)
 var placeholder = 'mcr.microsoft.com/k8se/quickstart:latest'
 var apiImage = hasImages ? '${registryLoginServer}/enfolderer/api:${imageTag}' : placeholder
 var workerImage = hasImages ? '${registryLoginServer}/enfolderer/worker:${imageTag}' : placeholder
+// Our images serve on 8080 (see src/Dockerfile), but the placeholder listens on 80. Container Apps
+// probes the ingress target port before it will call a revision provisioned, so declaring 8080
+// while the placeholder is in place fails the whole deployment with an empty
+// "Failed to provision revision" — the port has to follow the image.
+var targetPort = hasImages ? 8080 : 80
 
 var apiRegistries = hasImages ? [
   {
@@ -121,7 +126,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
       // to — storage, Cosmos, the Foundry projects — is reached from in here.
       ingress: {
         external: true
-        targetPort: 8080
+        targetPort: targetPort
         transport: 'auto'
         allowInsecure: false
       }
