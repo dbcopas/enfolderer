@@ -8,6 +8,7 @@ using Enfolderer.Ai.Infrastructure.Storage;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using System.Net;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Identity.Web;
 
@@ -90,24 +91,38 @@ jobs.MapPost("/", async (
 
         return Results.Problem(
             title: "Could not create the scan job.",
-            detail: $"Azure returned {ex.Status} {ex.ErrorCode}. The API's managed identity needs "
-                  + "Storage Blob Delegator on the account, write access to the scans container, "
-                  + "and the Cosmos data contributor role; a newly granted role can take several "
-                  + "minutes to take effect.",
+            detail: $"Azure Storage returned {ex.Status} {ex.ErrorCode}. The API's managed identity "
+                  + "needs Storage Blob Delegator on the account and write access to the scans "
+                  + "container; a newly granted role can take several minutes to take effect.",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+    catch (CosmosException ex) when (ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+    {
+        // Cosmos reports its own failures through its own exception type, so a missing data-plane
+        // role assignment would otherwise still surface as a bare 500. Only a refusal is read as a
+        // permissions problem: throttling and outages use the same exception and must not send the
+        // reader off to check role assignments.
+        loggerFactory.CreateLogger("Jobs").LogError(
+            ex, "Cosmos refused job {JobId}: {StatusCode}/{SubStatusCode}", jobId, ex.StatusCode, ex.SubStatusCode);
+
+        return Results.Problem(
+            title: "Could not create the scan job.",
+            detail: $"Azure Cosmos DB returned {(int)ex.StatusCode}/{ex.SubStatusCode}. The API's "
+                  + "managed identity needs the Cosmos DB Built-in Data Contributor role on the "
+                  + "account; that is a data-plane assignment, so it does not appear in "
+                  + "`az role assignment list` and is not granted by Owner.",
             statusCode: StatusCodes.Status502BadGateway);
     }
     catch (CosmosException ex)
     {
-        // Cosmos reports its own failures through its own exception type, so a missing data-plane
-        // role assignment would otherwise still surface as a bare 500.
+        // Anything else Cosmos reports — throttling, a conflict, an outage — is relayed as-is
+        // rather than guessed at.
         loggerFactory.CreateLogger("Jobs").LogError(
-            ex, "Could not record job {JobId}: {StatusCode}", jobId, ex.StatusCode);
+            ex, "Could not record job {JobId}: {StatusCode}/{SubStatusCode}", jobId, ex.StatusCode, ex.SubStatusCode);
 
         return Results.Problem(
             title: "Could not create the scan job.",
-            detail: $"Azure Cosmos DB returned {(int)ex.StatusCode}. The API's managed identity "
-                  + "needs the Cosmos DB Built-in Data Contributor role on the account; that is a "
-                  + "data-plane assignment, so it does not appear in `az role assignment list`.",
+            detail: $"Azure Cosmos DB returned {(int)ex.StatusCode}/{ex.SubStatusCode}. See the API log for details.",
             statusCode: StatusCodes.Status502BadGateway);
     }
     catch (AuthenticationFailedException ex)
