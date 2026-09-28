@@ -1,4 +1,5 @@
 using Azure;
+using Azure.Identity;
 using Enfolderer.Ai.Api;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Infrastructure;
@@ -78,6 +79,23 @@ jobs.MapPost("/", async (
             detail: $"Azure Storage returned {ex.Status} {ex.ErrorCode}. The API's managed identity "
                   + "needs Storage Blob Delegator on the account and write access to the scans "
                   + "container; a newly granted role can take several minutes to take effect.",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+    catch (AuthenticationFailedException ex)
+    {
+        // Storage never saw the request: the identity could not get a token at all. That is a
+        // different fault from a refused one, and distinguishing them here saves guessing whether
+        // to look at role assignments or at the site's identity configuration. The usual cause is
+        // a site with more than one identity assigned and no ScanPlatform__ManagedIdentityClientId
+        // to say which to present, which leaves the choice ambiguous.
+        loggerFactory.CreateLogger("Jobs").LogError(
+            ex, "Could not acquire a token to issue an upload URL for job {JobId}", jobId);
+
+        return Results.Problem(
+            title: "Could not issue an upload URL.",
+            detail: "The API could not acquire a managed identity token, so Azure Storage was never "
+                  + "called. Check that the site has the expected user-assigned identity and that "
+                  + $"ScanPlatform__ManagedIdentityClientId names it. ({ex.Message})",
             statusCode: StatusCodes.Status502BadGateway);
     }
 
