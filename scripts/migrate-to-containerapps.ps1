@@ -206,6 +206,46 @@ foreach ($name in 'teamAGroupObjectId', 'teamBGroupObjectId', 'apiClientId') {
 }
 Write-Skip "parameters    $ParametersFile"
 
+# A Container Apps environment on a custom VNet creates a public IP and a load balancer in *your*
+# subscription, in a managed resource group prefixed ME_. That is a bring-your-own-public-IP
+# operation as far as Microsoft.Network is concerned, and it is gated on a subscription feature.
+#
+# The reason to check it here rather than let the deployment find out: the gate is not enforced at
+# ARM admission. The deployment is accepted, runs for twenty minutes, allocates a cluster, and only
+# then fails inside ConfigureAllocatedClusterHandler with a message about a feature. Worse, the
+# environment is left in a state that a later retry cannot repair.
+$featureState = az feature show --namespace Microsoft.Network `
+    --name AllowBringYourOwnPublicIpAddress --query properties.state -o tsv 2>$null
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($featureState)) { $featureState = 'Unknown' }
+$featureState = $featureState.Trim()
+
+if ($featureState -ne 'Registered') {
+    # Printed rather than thrown: PowerShell reflows a multi-line exception message and the
+    # commands below are the whole point of it.
+    Write-Host ''
+    Write-Host "Microsoft.Network/AllowBringYourOwnPublicIpAddress is $featureState." -ForegroundColor Red
+    Write-Host 'Every Container Apps environment on a custom VNet will fail without it. Register it:' -ForegroundColor Red
+    Write-Host ''
+    Write-Host '  az feature register --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress'
+    Write-Host '  az feature show --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress -o table'
+    Write-Host '  # once it reads Registered:'
+    Write-Host '  az provider register --namespace Microsoft.Network --wait'
+    Write-Host ''
+    Write-Host 'Registration is self-service and usually takes seconds. The provider re-registration is'
+    Write-Host 'not optional: the feature has no effect until Microsoft.Network is refreshed. If the'
+    Write-Host 'state is still Registering after a day, raise a support request.'
+    Write-Host ''
+    Write-Host 'If registration succeeds but the deployment is then refused with RequestDisallowedByPolicy,'
+    Write-Host 'a tenant policy is blocking public IP creation outright. That needs a policy exemption,'
+    Write-Host 'not a change in this repository. Prove it cheaply before redeploying:'
+    Write-Host ''
+    Write-Host "  az network public-ip create -g $platformRg -n byoip-probe --sku Standard --allocation-method Static"
+    Write-Host "  az network public-ip delete -g $platformRg -n byoip-probe"
+    Write-Host ''
+    throw 'Subscription is not registered for Microsoft.Network/AllowBringYourOwnPublicIpAddress.'
+}
+Write-Skip "byo public ip $featureState"
+
 # ---------------------------------------------------------------------------------------------
 # 1. Survey
 # ---------------------------------------------------------------------------------------------
@@ -218,11 +258,27 @@ $sitesToDelete = @($oldSites | Where-Object {
 $plansToDelete = @($oldPlans | Where-Object {
     Test-AzResource $_.Rg $_.Name 'Microsoft.Web' 'serverfarms'
 })
+# The old and new VNets share a name, so existence alone cannot tell them apart. The subnet names
+# can: the App Service templates made 'platform', the Container Apps templates make 'platform-apps'.
+# Getting this wrong is expensive in both directions — deleting the new VNet throws away private
+# endpoints that are already correct, and keeping the old one makes the deployment fail on a subnet
+# it cannot resize.
+$subnetNames = @()
 $vnetExists = Test-AzResource $platformRg $vnetName 'Microsoft.Network' 'virtualNetworks'
+if ($vnetExists) {
+    $json = az network vnet show -g $platformRg -n $vnetName --query "subnets[].name" -o json 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($json)) {
+        $subnetNames = @($json | ConvertFrom-Json)
+    }
+}
+$vnetIsCurrent = $vnetExists -and ($subnetNames -contains 'platform-apps')
 
 Write-Skip "App Service sites   $($sitesToDelete.Count) of $($oldSites.Count)"
 Write-Skip "App Service plans   $($plansToDelete.Count) of $($oldPlans.Count)"
-Write-Skip "old VNet            $(if ($vnetExists) { $vnetName } else { 'none' })"
+Write-Skip ("VNet                " + $(
+    if (-not $vnetExists) { 'none' }
+    elseif ($vnetIsCurrent) { "$vnetName (already migrated, keeping)" }
+    else { "$vnetName (App Service era, replacing)" }))
 
 if (-not $vnetExists) {
     # Worth saying plainly: an account with public access disabled and no private path refuses
@@ -300,6 +356,9 @@ if ($strayPlans) {
 if (-not $vnetExists) {
     Write-Skip 'nothing to delete'
 }
+elseif ($vnetIsCurrent) {
+    Write-Skip 'already has the Container Apps subnets; leaving it and its private endpoints alone'
+}
 else {
     # Private endpoints first; the VNet will not delete while they are in it. The private DNS
     # zones are deliberately left: a VNet's resource id is path-based, so when the template
@@ -321,14 +380,74 @@ else {
     if ($PSCmdlet.ShouldProcess($vnetName, 'Delete virtual network')) {
         az network vnet delete -g $platformRg -n $vnetName -o none
         if ($LASTEXITCODE -ne 0) {
-            throw ("Failed to delete $vnetName. Something is still using a subnet — check for " +
-                   'resources the old templates did not create.')
+            throw ("Failed to delete $vnetName. Something is still using a subnet. As well as " +
+                   'resources the old templates did not create, look for a Container Apps ' +
+                   'environment: a failed one still holds a service association link on its ' +
+                   "subnet. az network vnet subnet show -g $platformRg --vnet-name $vnetName " +
+                   "-n platform-apps --query serviceAssociationLinks")
         }
         Write-Did "deleted vnet  $vnetName"
     }
     else {
         Write-Would "delete vnet   $vnetName"
     }
+}
+
+# ---------------------------------------------------------------------------------------------
+# 3b. Remove Container Apps environments left in a failed state
+# ---------------------------------------------------------------------------------------------
+
+Write-Step '3b. Clear failed Container Apps environments'
+
+# A failed environment cannot be repaired by redeploying over it. It can come back reporting
+# Succeeded while its staticIp is null and its managed resource group holds no public IP or load
+# balancer, at which point every app in it fails to start for reasons that have nothing to do with
+# the app. It also keeps a service association link on its subnet, so the subnet cannot be reused.
+# Delete it and wait for it to actually be gone.
+$failedEnvs = @()
+foreach ($rg in $platformRg, $geoRg, $idRg) {
+    $json = az containerapp env list -g $rg `
+        --query "[].{Name:name, State:properties.provisioningState, Group:properties.infrastructureResourceGroup}" `
+        -o json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { continue }
+    $failedEnvs += @(($json | ConvertFrom-Json) |
+        Where-Object { $_.State -notin 'Succeeded', 'Waiting', 'InProgress' } |
+        ForEach-Object { [pscustomobject]@{ Rg = $rg; Name = $_.Name; State = $_.State; Group = $_.Group } })
+}
+
+if (-not $failedEnvs) {
+    Write-Skip 'none'
+}
+foreach ($failed in $failedEnvs) {
+    $what = "$($failed.Name) in $($failed.Rg) ($($failed.State))"
+    if (-not $PSCmdlet.ShouldProcess($what, 'Delete failed Container Apps environment')) {
+        Write-Would "delete env    $what"
+        continue
+    }
+
+    az containerapp env delete -g $failed.Rg -n $failed.Name --yes -o none 2>$null
+    # The CLI returns before the deletion finishes, and recreating over the top fails with
+    # ManagedEnvironmentScheduledForDelete. Poll rather than trust the exit code.
+    $deadline = (Get-Date).AddMinutes(20)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-AzResource $failed.Rg $failed.Name 'Microsoft.App' 'managedEnvironments')) { break }
+        Start-Sleep -Seconds 15
+    }
+    if (Test-AzResource $failed.Rg $failed.Name 'Microsoft.App' 'managedEnvironments') {
+        throw "Timed out waiting for $what to delete. Check it in the portal before re-running."
+    }
+
+    # The ME_ group outlives the environment by a little, and its leftover load balancer is enough
+    # to keep the subnet's service association link alive.
+    if ($failed.Group) {
+        $deadline = (Get-Date).AddMinutes(20)
+        while ((Get-Date) -lt $deadline) {
+            az group show -n $failed.Group -o none 2>$null
+            if ($LASTEXITCODE -ne 0) { break }
+            Start-Sleep -Seconds 15
+        }
+    }
+    Write-Did "deleted env   $what"
 }
 
 # ---------------------------------------------------------------------------------------------
