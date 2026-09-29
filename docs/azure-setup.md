@@ -1041,9 +1041,47 @@ backing agent resources, so **no capability host plus a failing data plane is th
 `infra/modules/foundry-account.bicep` and `infra/modules/foundry-project.bicep` now create one each
 — an account-level host that enables Agent Service, and a project-level host per team so each
 team's agents and conversations stay in its own project. Neither declares any storage or
-vector-store connections, which is what selects the Microsoft-managed resources behind them. If you
-deployed before they were added, redeploy [step 3](#3-deploy-the-infrastructure) and then
-[re-provision the agents](#re-provisioning-the-agents-after-a-redeploy).
+vector-store connections, which is what selects the Microsoft-managed resources behind them.
+
+The two are not quite the same shape, which is worth knowing if you compare them against a sample
+you find elsewhere: the **account** host takes `capabilityHostKind: 'Agents'`, and the **project**
+host has no such property at all. Its schema is only the four connection lists, so its `properties`
+is deliberately empty. Some Microsoft samples pass `capabilityHostKind` on the project host anyway;
+the ARM spec's `ProjectCapabilityHost` does not define it.
+
+If you deployed before these were added, redeploy and then re-provision:
+
+```powershell
+# $location and $prefix are the ones you set in step 3; re-set them if this is a new shell.
+az deployment sub what-if `
+  --location $location `
+  --template-file infra/main.bicep `
+  --parameters infra/main.parameters.json
+```
+
+The what-if output should show the two capability hosts as the only creates. If it wants to change
+anything else, read it before continuing — that would mean the deployed infrastructure has drifted
+from the templates for some other reason.
+
+```powershell
+az deployment sub create `
+  --name enfolderer-scan `
+  --location $location `
+  --template-file infra/main.bicep `
+  --parameters infra/main.parameters.json
+```
+
+Then confirm the capability hosts exist before doing anything else — this is the check that tells
+you the redeploy actually fixed the thing you were chasing:
+
+```powershell
+./scripts/diagnose-foundry.ps1 -Prefix $prefix
+```
+
+Section 4 should now list `<account>-caphost` and `<project>-caphost` as `Succeeded`, and section 6
+should get a `200` instead of a 500. Only once section 6 answers is it worth running
+`agents/provision.ps1` again — see
+[Re-provisioning the agents after a redeploy](#re-provisioning-the-agents-after-a-redeploy).
 
 Capability hosts **cannot be updated in place**. If one is stuck in `Failed`, delete it and let the
 next deployment recreate it — note this destroys the agents in that project, which for us is
