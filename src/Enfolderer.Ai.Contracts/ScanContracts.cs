@@ -167,6 +167,13 @@ public sealed record ScanJobDocument
 
     [JsonPropertyName("createdAt")] public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 
+    /// <summary>
+    /// When the upload window advertised by <c>POST /jobs</c> closes. Stored rather than recomputed
+    /// so that the deadline enforced by <c>PUT /jobs/{id}/content</c> is exactly the one the client
+    /// was given, even if the configured lifetime changes in between.
+    /// </summary>
+    [JsonPropertyName("uploadExpiresAt")] public DateTimeOffset UploadExpiresAt { get; init; }
+
     [JsonPropertyName("updatedAt")] public DateTimeOffset UpdatedAt { get; init; } = DateTimeOffset.UtcNow;
 
     [JsonPropertyName("error")] public string? Error { get; init; }

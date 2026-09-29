@@ -82,6 +82,7 @@ jobs.MapPost("/", async (
             JobId = jobId,
             Status = ScanJobStatus.Pending,
             BlobPath = target.BlobPath,
+            UploadExpiresAt = target.ExpiresAt,
             GameHint = string.IsNullOrWhiteSpace(request.GameHint) ? null : CardGames.Normalize(request.GameHint)
         };
 
@@ -98,10 +99,12 @@ jobs.MapPost("/", async (
         // Name the principal too. "The managed identity needs role X" is unhelpful when the real
         // fault is that a different identity was presented than the one the role was granted to,
         // which is the failure a host carrying several identities actually produces.
-        var principal = await IdentityDiagnostics.DescribeAsync(
-            credential, "https://storage.azure.com/.default", ct);
+        var log = loggerFactory.CreateLogger("Jobs");
 
-        loggerFactory.CreateLogger("Jobs").LogError(
+        var principal = await IdentityDiagnostics.DescribeAsync(
+            credential, "https://storage.azure.com/.default", ct, log);
+
+        log.LogError(
             ex, "Azure refused job {JobId} for {Principal} (configured client id {ClientId}): {ErrorCode}",
             jobId, principal, platform.ManagedIdentityClientId ?? "(unset)", ex.ErrorCode);
 
@@ -192,6 +195,15 @@ jobs.MapPut("/{jobId}/content", async (
     if (job is null) return Results.NotFound();
     if (job.Status != ScanJobStatus.Pending)
         return Results.Conflict(new { error = $"Job is already {job.Status}." });
+
+    // The upload window advertised by POST /jobs has to mean something, or a pending job would
+    // accept an image indefinitely. Jobs created before this field existed carry default(DateTimeOffset),
+    // which is not a deadline anyone was given, so it is not enforced.
+    if (job.UploadExpiresAt != default && DateTimeOffset.UtcNow > job.UploadExpiresAt)
+        return Results.Problem(
+            title: "The upload window for this job has closed.",
+            detail: $"The upload window closed at {job.UploadExpiresAt:O}. Create a new job with POST /jobs.",
+            statusCode: StatusCodes.Status410Gone);
 
     await images.WriteAsync(job.BlobPath, request.Body, request.ContentType ?? "application/octet-stream", ct);
     return Results.Accepted();
