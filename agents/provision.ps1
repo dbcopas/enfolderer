@@ -266,7 +266,35 @@ $token = if ($PSCmdlet.ShouldProcess($endpoint, 'Acquire Foundry token')) { Get-
 
 $existing = @{}
 if ($token) {
-    $list = Invoke-Foundry -Method 'GET' -RelativeUrl "/assistants?api-version=$ApiVersion" -Token $token
+    # The first call is the one that proves the endpoint, the token and the project all line up.
+    # Its failures are about the deployment rather than about anything in the YAML, so they are
+    # translated here instead of surfacing as an Invoke-RestMethod stack trace from Invoke-Foundry.
+    try {
+        $list = Invoke-Foundry -Method 'GET' -RelativeUrl "/assistants?api-version=$ApiVersion" -Token $token
+    }
+    catch {
+        $body = ''
+        $detail = $_.PSObject.Properties['ErrorDetails']
+        if ($detail -and $detail.Value) { $body = [string] $detail.Value.Message }
+
+        Write-Host ''
+        Write-Host "Could not read the agents in $endpoint" -ForegroundColor Red
+        if ($body) { Write-Host "  $($body -replace '\s+', ' ')" -ForegroundColor DarkGray }
+        Write-Host ''
+
+        if ($body -match 'Unable to get resource information') {
+            Write-Host 'That message means the service could not resolve the project behind this' -ForegroundColor DarkYellow
+            Write-Host 'endpoint. It is about the deployment, not about the agent files.' -ForegroundColor DarkYellow
+        }
+        Write-Host 'Find out which part is missing:' -ForegroundColor DarkYellow
+        Write-Host ''
+        Write-Host "  ./scripts/diagnose-foundry.ps1 -Prefix <your prefix>"
+        Write-Host ''
+        Write-Host 'It checks the account, its subdomain, any soft-deleted account holding the name,'
+        Write-Host 'the projects, your roles and the model deployments, then repeats this same call.'
+        Write-Host ''
+        throw "Could not list agents in $endpoint."
+    }
     foreach ($agent in $list.data) {
         if ($agent.name) { $existing[$agent.name] = $agent.id }
     }
