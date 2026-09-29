@@ -55,5 +55,9 @@ resource ownerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 
 output projectId string = project.id
 output projectName string = project.name
-output projectEndpoint string = 'https://${accountName}.services.ai.azure.com/api/projects/${projectName}'
+// The host comes from the account's customSubDomainName, not its resource name. They are equal in
+// this deployment because foundry-account.bicep sets the subdomain to the account name, but reading
+// the account means a rename of either one cannot silently point every app at a host that does not
+// exist.
+output projectEndpoint string = 'https://${account.properties.customSubDomainName}.services.ai.azure.com/api/projects/${projectName}'
 output projectPrincipalId string = project.identity.principalId
