@@ -177,7 +177,10 @@ else {
     else {
         $names = @($endpoints.PSObject.Properties | ForEach-Object { $_.Name })
         Write-Note "endpoints advertised: $($names -join ', ')"
-        $foundry = @($names | Where-Object { $_ -match 'Foundry|Agent' })
+        # 'AI Foundry API' is the documented key, and its value is the services.ai.azure.com host
+        # the scripts call. Accept a couple of near neighbours in case the service renames it, but
+        # anchor them so an unrelated key that merely contains 'agent' cannot pass for it.
+        $foundry = @($names | Where-Object { $_ -eq 'AI Foundry API' -or $_ -match '^(AI )?(Foundry|Agent)' })
         if ($foundry.Count -gt 0) {
             Write-Good "the account advertises an agents endpoint ($($foundry -join ', '))"
         }
@@ -512,7 +515,7 @@ if ($findings.Count -eq 0) {
         # cause to offer. Saying so is more useful than implying everything is well.
         Write-Bad 'The control plane looks healthy, but the data-plane call above did not succeed.'
         Write-Note 'Nothing in the account, the projects, the roles or the model deployments explains it.'
-        Write-Note 'Re-read the error printed in section 5 and see docs/azure-setup.md, "If provision.ps1 fails".'
+        Write-Note 'Re-read the error printed in section 6 and see docs/azure-setup.md, "If provision.ps1 fails".'
     }
     else {
         Write-Good 'Nothing wrong found. The account, the projects, the roles and the data plane all answered.'
