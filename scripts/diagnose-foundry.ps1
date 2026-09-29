@@ -162,6 +162,45 @@ else {
 
     $reported = Get-Prop $props 'endpoint'
     if ($reported) { Write-Note "endpoint reported by the account: $reported" }
+
+    # properties.endpoint (singular) is the legacy Cognitive Services host and is present on every
+    # account, so it says nothing about agents. properties.endpoints (plural) is the map the
+    # control plane actually advertises, and the agents data plane only answers for an account
+    # that lists a Foundry entry there. An account can be Succeeded and still be missing it.
+    $endpoints = Get-Prop $props 'endpoints'
+    if (-not $endpoints) {
+        Write-Bad 'the account advertises no endpoints map at all'
+        $findings += ('The account reports no properties.endpoints. That is the map the agents data plane ' +
+                      'is published in, so an account without it will refuse every project. See ' +
+                      '"Neither agent surface answers" in docs/azure-setup.md.')
+    }
+    else {
+        $names = @($endpoints.PSObject.Properties | ForEach-Object { $_.Name })
+        Write-Note "endpoints advertised: $($names -join ', ')"
+        $foundry = @($names | Where-Object { $_ -match 'Foundry|Agent' })
+        if ($foundry.Count -gt 0) {
+            Write-Good "the account advertises an agents endpoint ($($foundry -join ', '))"
+        }
+        else {
+            Write-Bad 'no Foundry/agent entry in the endpoints map'
+            $findings += ('The account advertises ' + ($names -join ', ') + " but nothing for Foundry or agents. " +
+                          'The agent backend was never wired up, which is why the data plane fails while every ' +
+                          'control-plane state reads Succeeded. See "Neither agent surface answers" in docs/azure-setup.md.')
+        }
+    }
+
+    # The documented kill switch for the classic agents surface. It is a plain account tag, so it
+    # survives redeployment and is easy to set by accident.
+    $tags = Get-Prop $account 'tags'
+    if ($tags) {
+        $killSwitch = Get-Prop $tags 'MS-AOAI-Feature-Assistants'
+        if ($killSwitch -and $killSwitch -eq 'Disabled') {
+            Write-Bad 'the account tag MS-AOAI-Feature-Assistants=Disabled is set'
+            $findings += ('The account carries the tag MS-AOAI-Feature-Assistants=Disabled, which turns off the ' +
+                          'classic agents surface. Remove it with: az resource tag --ids <account id> --tags ' +
+                          'MS-AOAI-Feature-Assistants= --is-incremental')
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -305,6 +344,31 @@ function Invoke-Probe {
     }
 }
 
+# Before blaming the agents API, establish whether anything at all answers on this host. The
+# model-inference route shares the gateway and the account but not the agent backend, so a 200
+# here narrows the fault to agents, while a failure means the account or the region is sick and
+# no amount of changing which agent URL we call will help.
+if ($endpointHost) {
+    $csToken = az account get-access-token --resource 'https://cognitiveservices.azure.com' --query accessToken -o tsv 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($csToken)) {
+        $script:lastProbeBody = ''
+        $gateway = Invoke-Probe 'gateway (openai/deployments, not agents)' `
+            "$endpointHost/openai/deployments?api-version=2024-10-21" $csToken.Trim()
+        if ($gateway) {
+            Write-Good '  the account answers on this host, so the gateway and DNS are fine'
+            $gatewayOk = $true
+        }
+        else {
+            $gatewayOk = $false
+            $findings += ('The account fails on a non-agent route too, so this is not about which agent API ' +
+                          'the scripts call. The account data plane or the region is at fault: see ' +
+                          '"Neither agent surface answers" in docs/azure-setup.md.')
+        }
+    }
+    else { $gatewayOk = $null }
+}
+else { $gatewayOk = $null }
+
 if ($token -and $endpointHost) {
     foreach ($name in $liveProjects) {
         Write-Host "  $name" -ForegroundColor White
@@ -332,22 +396,35 @@ if ($token -and $endpointHost) {
 
         if ($classic -or $current) { $probeSucceeded = $true }
 
+        # Classify on both replies together. The service alternates between 408 and 500 for the
+        # same underlying fault, so keying off whichever arrived first would describe one project
+        # differently from its identical twin.
+        $bothBodies = @($classicBody, $script:lastProbeBody) -join ' '
+
         if (-not $classic -and $current) {
-            $findings += ("Project '$name' is healthy, but the Assistants surface the scripts call is gone. " +
-                          'It retired on 2026-08-26 and /agents answered in its place. This needs a code ' +
-                          'change, not a redeployment: see "The Assistants API has retired" in docs/azure-setup.md.')
+            $findings += ("Project '$name' is reachable, but the Assistants surface the scripts call is not. " +
+                          'It retired on 2026-08-26 and /agents answered in its place, so this is a code ' +
+                          'change rather than a redeployment: see "The Assistants API has retired" in ' +
+                          'docs/azure-setup.md.')
         }
         elseif (-not $classic -and -not $current) {
-            if ($classicBody -match 'Unable to get resource information') {
-                $findings += ("Neither surface answered for '$name', and the control plane above looks healthy. " +
-                              'That points at the account rather than the project: check Azure Service Health ' +
-                              'for this region, then see "If provision.ps1 fails" in docs/azure-setup.md.')
-            }
-            elseif ($classicBody -match 'PermissionDenied|AuthorizationFailed|Forbidden') {
+            if ($bothBodies -match 'PermissionDenied|AuthorizationFailed|Forbidden') {
                 $findings += "You have no agent-authoring role on '$name'. Subscription Owner does not grant one: agent APIs are data actions."
             }
+            elseif ($gatewayOk -eq $false) {
+                # The gateway probe already reported this, and it is an account-wide fault rather
+                # than a per-project one, so repeating it once per project would only bury it.
+            }
             else {
-                $findings += "Neither data-plane surface answered for '$name'. The errors above are the service's own."
+                # Neither surface answered, so nothing about which API the code calls is at issue.
+                # The gateway resolved the host and replied, so this is the account's data plane
+                # rather than the project or the request.
+                $detail = if ($bothBodies -match 'Timeout|InternalServerError|Unable to get resource information') {
+                    'It answered with a timeout or an internal error, which is the service failing behind the gateway, not a rejection of the request. '
+                } else { '' }
+                $findings += ("Neither data-plane surface answered for '$name'. $detail" +
+                              'Because /agents fails too, the retired Assistants API is not the cause. ' +
+                              'See "Neither agent surface answers" in docs/azure-setup.md.')
             }
         }
     }
