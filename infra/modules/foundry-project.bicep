@@ -62,9 +62,12 @@ resource ownerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 resource projectCapabilityHost 'Microsoft.CognitiveServices/accounts/projects/capabilityHosts@2025-06-01' = {
   parent: project
   name: '${projectName}-caphost'
-  properties: {
-    capabilityHostKind: 'Agents'
-  }
+  // Deliberately empty. Unlike the account-level host, the project schema has no capabilityHostKind
+  // — its only properties are the four connection lists (aiServices, storage, threadStorage,
+  // vectorStore), and leaving them unset is what selects the Microsoft-managed resources behind the
+  // project. Some Microsoft samples pass capabilityHostKind here; the ARM spec's
+  // ProjectCapabilityHost does not define it.
+  properties: {}
 }
 
 output projectId string = project.id

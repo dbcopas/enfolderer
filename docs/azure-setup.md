@@ -975,15 +975,22 @@ Both `/assistants` and `/agents` fail, with some mixture of:
 408 { "error": { "code": "Timeout",             "message": "The operation was timeout." } }
 ```
 
-The two alternate for the same URL between runs a minute apart. That alternation is itself the most
-useful signal in the whole failure: a deterministic client-side mistake — wrong path, wrong
-api-version, wrong token audience, missing role — gives you the **same** answer every time, and a
-different one. A wrong audience gives 401, a missing role gives 403, an unknown path gives 404.
-Timeouts and internal errors that come and go are the service failing *behind* the gateway, after it
-has already accepted your request as well-formed and authorised.
+The two alternate for the same URL between runs a minute apart, and that alternation is the most
+useful signal in the whole failure. A client-side mistake — wrong path, wrong api-version, wrong
+token audience, missing role — is **deterministic**, and it names itself: a wrong audience gives
+401, a missing role gives 403, an unknown path gives 404. Timeouts and internal errors that come
+and go are the service failing *behind* the gateway, after it has already accepted your request as
+well-formed and authorised.
 
-So before changing any code, establish how wide the fault is. Work down this list in order; each
-step narrows it.
+**In this repository the usual cause is a missing capability host** — the agent backend, which ARM
+provisions as a separate sub-resource, so the account and the project both report `Succeeded` with
+nothing behind them. Step 2 is therefore the one to check first. The rest of the list exists to
+rule out the alternatives, roughly in order of how cheaply each can be dismissed.
+
+A word on reading status codes while you work down it, because it is easy to get backwards: a
+**4xx is good news**. It means the gateway resolved the host, read your token and made a
+deliberate decision, so the front door is healthy and the fault is further in. Only a **408 or a
+5xx** means the service broke trying to serve you.
 
 **1. Does the account advertise an agents endpoint at all?** `properties.endpoint` (singular) is the
 legacy `*.cognitiveservices.azure.com` host and is present on every Cognitive Services account, so
@@ -1017,14 +1024,36 @@ foreach ($p in 'cardgeo', 'cardid') {
 }
 ```
 
-An agent-enabled account normally has an implicitly created one named
-`<account>@aml_aiagentservice`. An empty list is not automatically a fault — Microsoft's docs say an
-explicit capability host is optional and the service falls back to Microsoft-managed storage — but a
-capability host stuck in `Failed` or `Creating` **is**, and it is exactly the state that produces a
-green control plane over a dead data plane. Capability hosts cannot be updated in place; the
-sanctioned fix is to delete and recreate, which for a project capability host destroys its agents.
-Since our agents are re-provisioned from YAML, recreating the whole account (step 5 below) is the
-simpler path here. The diagnostic reports all of this in section 4.
+Read the result together with step 3 below, because neither is conclusive alone:
+
+| Capability hosts | Agents data plane | Reading |
+| --- | --- | --- |
+| present, `Succeeded` | fails | the backend exists; keep going down this list |
+| present, `Failed`/`Creating` | fails | **this is the fault** — the backend never finished provisioning |
+| none | fails, gateway answers | **this is the fault** — there is no backend to resolve the project to |
+| none | works | fine; the service is using Microsoft-managed defaults |
+
+That last row is why an empty list is not damning on its own: Microsoft's docs say an explicit
+capability host is optional and the service falls back to Microsoft-managed resources without one.
+But "Unable to get resource information" is precisely the gateway failing to resolve a project's
+backing agent resources, so **no capability host plus a failing data plane is the whole story**.
+
+`infra/modules/foundry-account.bicep` and `infra/modules/foundry-project.bicep` now create one each
+— an account-level host that enables Agent Service, and a project-level host per team so each
+team's agents and conversations stay in its own project. Neither declares any storage or
+vector-store connections, which is what selects the Microsoft-managed resources behind them. If you
+deployed before they were added, redeploy [step 3](#3-deploy-the-infrastructure) and then
+[re-provision the agents](#re-provisioning-the-agents-after-a-redeploy).
+
+Capability hosts **cannot be updated in place**. If one is stuck in `Failed`, delete it and let the
+next deployment recreate it — note this destroys the agents in that project, which for us is
+harmless because they are re-provisioned from YAML:
+
+```powershell
+az rest --method delete --url "https://management.azure.com$accountId/projects/cardgeo/capabilityHosts/cardgeo-caphost?api-version=2025-06-01"
+```
+
+The diagnostic reports all of this in section 4.
 
 **3. Does anything at all answer on that host?** The model-inference route shares the gateway, the
 DNS name and the account with the agents API, but not the agent backend. It needs a token for a
@@ -1036,15 +1065,17 @@ $headers = @{ Authorization = 'Bearer ' + $csToken }
 Invoke-RestMethod "https://$prefix-ai.services.ai.azure.com/openai/deployments?api-version=2024-10-21" -Headers $headers
 ```
 
-A 200 narrows the fault to the agent service. A failure here too means the account or the region is
-at fault, and no change to which agent URL the scripts call will help. The diagnostic runs this as
-the first probe in section 6.
+Both a 200 and a clean **404** narrow the fault to the agent service — not every account serves
+this particular route, and what matters is that something answered deliberately rather than broke.
+A **408 or 5xx here** is the account or the region, and no change to which agent URL the scripts
+call will help. The diagnostic runs this as the first probe in section 6 and draws that distinction
+for you.
 
 For a second opinion that shares none of our code, the CLI has its own preview data-plane command
 that reaches the same surface through Microsoft's client stack:
 
 ```powershell
-az cognitiveservices agent list -n "$prefix-ai" -g "$prefix-platform" --project-name cardgeo
+az cognitiveservices agent list -a "$prefix-ai" -g "$prefix-platform" --project-name cardgeo
 ```
 
 If that fails the same way, the fault is definitively not in anything this repository does.
@@ -1065,9 +1096,13 @@ $accountId = az cognitiveservices account show -n "$prefix-ai" -g "$prefix-platf
 az resource tag --ids $accountId --tags "MS-AOAI-Feature-Assistants=" --is-incremental
 ```
 
-**5. Is the region unwell?** Sweden Central is the default here, and if you also hit
-`ManagedEnvironmentNoAvailableCapacityInRegion` on the Container Apps deployment, that is more than
-a coincidence — **the two services share a dependency.** Foundry Agent Service runs agents on Azure
+**5. Is the region unwell?** Reach for this only once steps 1-4 are clean, and be sceptical of it:
+a regional fault should take the whole host down with it, so if step 3 got a deliberate answer from
+the gateway, the region is probably fine and something specific to the agent backend is not.
+
+That said, there is a real shared dependency worth knowing about. Sweden Central is the default
+here, and if you also hit `ManagedEnvironmentNoAvailableCapacityInRegion` on the Container Apps
+deployment, that is not a coincidence. Foundry Agent Service runs agents on Azure
 Container Apps managed environments: the capability host has an `acaEnvironmentConnections` property
 and an `enablePublicHostingEnvironment` flag, and network-injected Foundry accounts require a subnet
 delegated to `Microsoft.App/environments`, which is the Container Apps managed-environment resource
