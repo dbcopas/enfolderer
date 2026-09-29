@@ -53,6 +53,20 @@ resource ownerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
+// The project half of the agent backend. The account-level capability host enables Agent Service
+// for the account; this one gives *this project* its own agent runtime and thread storage, which
+// is what keeps one team's agents and conversations out of the other's.
+//
+// It cannot be created before the account's capability host exists. main.bicep already orders the
+// account module ahead of this one, which is what guarantees that.
+resource projectCapabilityHost 'Microsoft.CognitiveServices/accounts/projects/capabilityHosts@2025-06-01' = {
+  parent: project
+  name: '${projectName}-caphost'
+  properties: {
+    capabilityHostKind: 'Agents'
+  }
+}
+
 output projectId string = project.id
 output projectName string = project.name
 // The host comes from the account's customSubDomainName, not its resource name. They are equal in
