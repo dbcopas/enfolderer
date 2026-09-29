@@ -993,12 +993,40 @@ seeing only that proves nothing. The map that matters is `properties.endpoints` 
 az cognitiveservices account show -n "$prefix-ai" -g "$prefix-platform" --query properties.endpoints -o json
 ```
 
-An account that can serve agents lists a Foundry entry here alongside the model APIs. If the map is
-missing entirely, or has no Foundry/agent key, the agent backend was never wired up — and every
-control-plane state will still read `Succeeded`, which is what makes this so hard to see. The
-diagnostic checks this for you and says so in section 1.
+The key to look for is literally **`AI Foundry API`**, and its value is the
+`https://<subdomain>.services.ai.azure.com/api/projects/<project>` host the scripts call. Seeing
+`properties.endpoint` report only `cognitiveservices.azure.com` is **normal and not a symptom** —
+the two are genuinely different values, and Microsoft's own templates emit them as separate outputs.
+What *would* be a symptom is `AI Foundry API` missing from the plural map. The diagnostic checks
+this for you and says so in section 1.
 
-**2. Does anything at all answer on that host?** The model-inference route shares the gateway, the
+**2. Is the agent backend provisioned?** This is the one mechanism by which every control-plane
+state reads `Succeeded` while the data plane is dead. A **capability host** is a sub-resource that
+tells Foundry Agent Service where to run and store agent data, and ARM provisions it *separately*
+from the account and the project, so neither of their `provisioningState` values reflects it. There
+is no `az` command for capability hosts, so this goes through `az rest`:
+
+```powershell
+$subId = az account show --query id -o tsv
+$accountId = "/subscriptions/$subId/resourceGroups/$prefix-platform/providers/Microsoft.CognitiveServices/accounts/$prefix-ai"
+
+az rest --method get --url "https://management.azure.com$accountId/capabilityHosts?api-version=2025-06-01"
+
+foreach ($p in 'cardgeo', 'cardid') {
+    az rest --method get --url "https://management.azure.com$accountId/projects/$p/capabilityHosts?api-version=2025-06-01"
+}
+```
+
+An agent-enabled account normally has an implicitly created one named
+`<account>@aml_aiagentservice`. An empty list is not automatically a fault — Microsoft's docs say an
+explicit capability host is optional and the service falls back to Microsoft-managed storage — but a
+capability host stuck in `Failed` or `Creating` **is**, and it is exactly the state that produces a
+green control plane over a dead data plane. Capability hosts cannot be updated in place; the
+sanctioned fix is to delete and recreate, which for a project capability host destroys its agents.
+Since our agents are re-provisioned from YAML, recreating the whole account (step 5 below) is the
+simpler path here. The diagnostic reports all of this in section 4.
+
+**3. Does anything at all answer on that host?** The model-inference route shares the gateway, the
 DNS name and the account with the agents API, but not the agent backend. It needs a token for a
 different audience:
 
@@ -1010,9 +1038,21 @@ Invoke-RestMethod "https://$prefix-ai.services.ai.azure.com/openai/deployments?a
 
 A 200 narrows the fault to the agent service. A failure here too means the account or the region is
 at fault, and no change to which agent URL the scripts call will help. The diagnostic runs this as
-the first probe in section 5.
+the first probe in section 6.
 
-**3. Is the classic-agents kill switch set?** It is a plain account tag, so it survives redeployment:
+For a second opinion that shares none of our code, the CLI has its own preview data-plane command
+that reaches the same surface through Microsoft's client stack:
+
+```powershell
+az cognitiveservices agent list -n "$prefix-ai" -g "$prefix-platform" --project-name cardgeo
+```
+
+If that fails the same way, the fault is definitively not in anything this repository does.
+
+**4. Is the classic-agents kill switch set?** This will not explain a failing *list* — the tag blocks
+creating and updating agents, threads and runs, and reads are explicitly unaffected — but it will
+stop `provision.ps1` writing once the reads recover, so it is worth clearing now if it is set. It is
+a plain account tag, so it survives redeployment:
 
 ```powershell
 az cognitiveservices account show -n "$prefix-ai" -g "$prefix-platform" --query tags -o json
@@ -1025,10 +1065,19 @@ $accountId = az cognitiveservices account show -n "$prefix-ai" -g "$prefix-platf
 az resource tag --ids $accountId --tags "MS-AOAI-Feature-Assistants=" --is-incremental
 ```
 
-**4. Is the region unwell?** Sweden Central is the default here, and a region under strain shows up
-in more than one service at a time — if you also hit
-`ManagedEnvironmentNoAvailableCapacityInRegion` on the Container Apps deployment, treat that as
-corroboration rather than a coincidence.
+**5. Is the region unwell?** Sweden Central is the default here, and if you also hit
+`ManagedEnvironmentNoAvailableCapacityInRegion` on the Container Apps deployment, that is more than
+a coincidence — **the two services share a dependency.** Foundry Agent Service runs agents on Azure
+Container Apps managed environments: the capability host has an `acaEnvironmentConnections` property
+and an `enablePublicHostingEnvironment` flag, and network-injected Foundry accounts require a subnet
+delegated to `Microsoft.App/environments`, which is the Container Apps managed-environment resource
+type. `ManagedEnvironmentNoAvailableCapacityInRegion` is a `Microsoft.App` capacity error. A region
+that cannot give you a managed environment plausibly cannot give the agent service one either, and
+the gateway would report that as exactly what you are seeing: a failure to resolve the project's
+backing resources.
+
+To be clear about what is established and what is not: the architectural dependency is documented,
+the causal link to your errors is inference.
 
 The portal is the readable way to check: **portal.azure.com** → search **Service Health** →
 **Service issues** in the left-hand menu, then set the **Region** filter to your region and the
@@ -1047,12 +1096,19 @@ $url = "https://management.azure.com/subscriptions/$subId/providers/Microsoft.Re
 az rest --method get --url $url --query "value[].properties.{title:title,status:status,type:eventType}" -o table
 ```
 
-Microsoft often resolves these without any customer-side change, and sometimes without publishing an
-advisory at all, so an empty list is weaker evidence than a populated one. If everything else on this
-page checks out, waiting an hour and re-running the diagnostic is a legitimate next step rather than
-a cop-out.
+**An empty result does not exonerate the region.** In previously reported Sweden Central Agent
+Service outages — agents vanishing, 500s on create, 408s on read — Azure Status and Service Health
+showed nothing at the time, and the incidents were confirmed only afterwards. So an empty list is
+much weaker evidence than a populated one. If everything else on this page checks out, waiting an
+hour and re-running the diagnostic is a legitimate next step rather than a cop-out.
 
-**5. Only if the account itself is the outlier, recreate it.** If step 2 fails while the rest of the
+If you need the demo working now rather than eventually, the mitigation Microsoft has given for
+these incidents is to **fail the Foundry account over to another region**, typically West Europe.
+That is not a small change here — see
+[The region is out of capacity](#the-region-is-out-of-capacity) for why `location` cannot be moved
+on its own.
+
+**6. Only if the account itself is the outlier, recreate it.** If step 3 fails while the rest of the
 subscription is healthy and Service Health is clear, the account is in a state the control plane
 will not report. Deleting and redeploying it is safe here because the account holds no data we care
 about — the agents are re-provisioned from YAML, and scans live in Storage and Cosmos, which are
