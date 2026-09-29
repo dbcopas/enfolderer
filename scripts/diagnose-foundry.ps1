@@ -344,6 +344,9 @@ function Invoke-Probe {
     }
 }
 
+$gatewayOk = $null
+$script:lastProbeBody = ''
+
 # Before blaming the agents API, establish whether anything at all answers on this host. The
 # model-inference route shares the gateway and the account but not the agent backend, so a 200
 # here narrows the fault to agents, while a failure means the account or the region is sick and
@@ -411,11 +414,9 @@ if ($token -and $endpointHost) {
             if ($bothBodies -match 'PermissionDenied|AuthorizationFailed|Forbidden') {
                 $findings += "You have no agent-authoring role on '$name'. Subscription Owner does not grant one: agent APIs are data actions."
             }
-            elseif ($gatewayOk -eq $false) {
-                # The gateway probe already reported this, and it is an account-wide fault rather
-                # than a per-project one, so repeating it once per project would only bury it.
-            }
-            else {
+            # When the gateway probe already failed, it has reported this as the account-wide fault
+            # it is, so repeating it once per project would only bury it.
+            elseif ($gatewayOk -ne $false) {
                 # Neither surface answered, so nothing about which API the code calls is at issue.
                 # The gateway resolved the host and replied, so this is the account's data plane
                 # rather than the project or the request.
