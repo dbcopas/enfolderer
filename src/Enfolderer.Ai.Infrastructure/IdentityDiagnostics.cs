@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
 using Azure.Core;
@@ -18,9 +19,15 @@ public static class IdentityDiagnostics
     /// <summary>
     /// Describes the principal behind a credential as <c>oid=… appid=… tid=…</c>, or explains why
     /// it could not be determined. Never returns or logs the token itself.
+    /// <para>
+    /// The return value is safe to put in an HTTP response, so a failure is summarised by exception
+    /// type only: <see cref="Azure.Identity.DefaultAzureCredential"/> reports failure by listing
+    /// every credential it attempted, which describes the host rather than the caller's problem.
+    /// Pass <paramref name="logger"/> to keep that detail where operators can still read it.
+    /// </para>
     /// </summary>
     public static async Task<string> DescribeAsync(
-        TokenCredential credential, string scope, CancellationToken ct = default)
+        TokenCredential credential, string scope, CancellationToken ct = default, ILogger? logger = null)
     {
         try
         {
@@ -33,7 +40,8 @@ public static class IdentityDiagnostics
         }
         catch (Exception ex)
         {
-            return $"could not be determined ({ex.GetType().Name}: {ex.Message})";
+            logger?.LogWarning(ex, "Could not determine the principal behind the credential for scope {Scope}.", scope);
+            return $"could not be determined ({ex.GetType().Name})";
         }
     }
 
