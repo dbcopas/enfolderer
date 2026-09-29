@@ -196,9 +196,11 @@ else {
         $killSwitch = Get-Prop $tags 'MS-AOAI-Feature-Assistants'
         if ($killSwitch -and $killSwitch -eq 'Disabled') {
             Write-Bad 'the account tag MS-AOAI-Feature-Assistants=Disabled is set'
-            $findings += ('The account carries the tag MS-AOAI-Feature-Assistants=Disabled, which turns off the ' +
-                          'classic agents surface. Remove it with: az resource tag --ids <account id> --tags ' +
-                          'MS-AOAI-Feature-Assistants= --is-incremental')
+            $findings += ('The account carries the tag MS-AOAI-Feature-Assistants=Disabled. It blocks creating ' +
+                          'and updating classic agents, threads and runs, but not reading them, so it cannot be ' +
+                          'why a list call fails - it will stop provision.ps1 writing, though. Clear it with: ' +
+                          'az resource tag --ids $(az cognitiveservices account show -n ' + $AccountName +
+                          ' -g ' + $ResourceGroup + ' --query id -o tsv) --tags MS-AOAI-Feature-Assistants= --is-incremental')
         }
     }
 }
@@ -269,10 +271,74 @@ foreach ($name in $Project) {
 }
 
 # ---------------------------------------------------------------------------------------------
-# 4. Model deployments
+# 4. The agent backend (capability hosts)
 # ---------------------------------------------------------------------------------------------
 
-Write-Step '4. Model deployments'
+# A capability host is the sub-resource that tells Foundry Agent Service where to run and store
+# agent data, and ARM provisions it separately from the account and the project. That is the one
+# way an account and a project can both read Succeeded while the agents data plane is dead, so it
+# is worth checking before concluding anything from the green states above. There is no az command
+# for these, hence az rest.
+Write-Step '4. Agent backend (capability hosts)'
+
+function Get-CapabilityHosts {
+    param([string] $ResourceId)
+
+    $url = "https://management.azure.com$ResourceId/capabilityHosts?api-version=2025-06-01"
+    $r = Invoke-AzJson @('rest', '--method', 'get', '--url', $url)
+    if (-not $r) { return $null }
+    # The comma keeps an empty result an empty array: PowerShell unrolls a bare @() on return and
+    # hands back $null, which here would report a readable-but-empty list as unreadable.
+    return ,@(Get-Prop $r 'value')
+}
+
+if (-not $subscriptionId) {
+    Write-Note 'skipped: no subscription context'
+}
+else {
+    $accountId = "/subscriptions/$subscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.CognitiveServices/accounts/$AccountName"
+    $scopes = @([pscustomobject]@{ Label = "account $AccountName"; Id = $accountId })
+    foreach ($name in $liveProjects) {
+        $scopes += [pscustomobject]@{ Label = "project $name"; Id = "$accountId/projects/$name" }
+    }
+
+    foreach ($scope in $scopes) {
+        $hosts = Get-CapabilityHosts $scope.Id
+
+        if ($null -eq $hosts) {
+            Write-Note "$($scope.Label) : could not be read"
+            continue
+        }
+
+        if ($hosts.Count -eq 0) {
+            # Microsoft's docs say an explicit capability host is optional and that the service
+            # falls back to Microsoft-managed storage, so an empty list on its own is not a fault.
+            # A fresh agent-enabled account normally still shows an implicit one.
+            Write-Note "$($scope.Label) : none (the service should fall back to Microsoft-managed resources)"
+            continue
+        }
+
+        foreach ($h in $hosts) {
+            $hstate = Get-Prop (Get-Prop $h 'properties') 'provisioningState'
+            if ($hstate -eq 'Succeeded') {
+                Write-Good "$($scope.Label) : $(Get-Prop $h 'name') $hstate"
+            }
+            else {
+                Write-Bad "$($scope.Label) : $(Get-Prop $h 'name') $hstate"
+                $findings += ("The capability host '$(Get-Prop $h 'name')' on $($scope.Label) is '$hstate', not Succeeded. " +
+                              'That is the agent backend, and it provisions separately from the account and the ' +
+                              'project, which is why both read Succeeded. Capability hosts cannot be updated in ' +
+                              'place; see "Neither agent surface answers" in docs/azure-setup.md.')
+            }
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------------------------
+# 5. Model deployments
+# ---------------------------------------------------------------------------------------------
+
+Write-Step '5. Model deployments'
 
 $models = @(Invoke-AzJson @('cognitiveservices', 'account', 'deployment', 'list',
     '-n', $AccountName, '-g', $ResourceGroup))
@@ -290,10 +356,10 @@ else {
 }
 
 # ---------------------------------------------------------------------------------------------
-# 5. The data-plane call provision.ps1 makes
+# 6. The data-plane call provision.ps1 makes
 # ---------------------------------------------------------------------------------------------
 
-Write-Step '5. The call provision.ps1 makes'
+Write-Step '6. The call provision.ps1 makes'
 
 $probeSucceeded = $false
 $probeAttempted = $false
@@ -435,10 +501,10 @@ elseif ($token) {
 }
 
 # ---------------------------------------------------------------------------------------------
-# 6. Verdict
+# 7. Verdict
 # ---------------------------------------------------------------------------------------------
 
-Write-Step '6. What to do'
+Write-Step '7. What to do'
 
 if ($findings.Count -eq 0) {
     if ($probeAttempted -and -not $probeSucceeded) {
