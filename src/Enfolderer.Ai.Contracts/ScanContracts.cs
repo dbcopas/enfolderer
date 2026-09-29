@@ -9,7 +9,7 @@ namespace Enfolderer.Ai.Contracts;
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ScanJobStatus
 {
-    /// <summary>Job record created; the client has a write-only SAS but has not uploaded yet.</summary>
+    /// <summary>Job record created; the client has an upload URL but has not uploaded yet.</summary>
     Pending,
     /// <summary>Client confirmed the upload and the job has been queued for the worker.</summary>
     Uploaded,

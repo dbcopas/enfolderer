@@ -102,7 +102,7 @@ jobs.MapPost("/", async (
         var log = loggerFactory.CreateLogger("Jobs");
 
         var principal = await IdentityDiagnostics.DescribeAsync(
-            credential, "https://storage.azure.com/.default", ct, log);
+            credential, "https://storage.azure.com/.default", log, ct);
 
         log.LogError(
             ex, "Azure refused job {JobId} for {Principal} (configured client id {ClientId}): {ErrorCode}",
@@ -111,8 +111,8 @@ jobs.MapPost("/", async (
         return Results.Problem(
             title: "Could not create the scan job.",
             detail: $"Azure Storage returned {ex.Status} {ex.ErrorCode} for the identity {principal}. "
-                  + "That principal needs Storage Blob Delegator on the account and write access to "
-                  + "the scans container. Compare the object id against `az role assignment list`: "
+                  + "That principal needs Storage Blob Data Contributor on the scans container. "
+                  + "Compare the object id against `az role assignment list`: "
                   + "if it does not match, the site is presenting a different identity than the one "
                   + "the roles were granted to. A newly granted role can take several minutes to "
                   + "take effect.",

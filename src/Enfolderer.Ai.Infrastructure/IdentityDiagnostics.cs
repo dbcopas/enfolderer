@@ -27,7 +27,7 @@ public static class IdentityDiagnostics
     /// </para>
     /// </summary>
     public static async Task<string> DescribeAsync(
-        TokenCredential credential, string scope, CancellationToken ct = default, ILogger? logger = null)
+        TokenCredential credential, string scope, ILogger? logger = null, CancellationToken ct = default)
     {
         try
         {
