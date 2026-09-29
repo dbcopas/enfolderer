@@ -878,16 +878,21 @@ It reads the account, its subdomain and settings, any soft-deleted account holdi
 each project, your role assignments and the model deployments, then repeats the same data-plane call
 and prints what came back. It changes nothing.
 
-- **`InternalServerError: Unable to get resource information.`** — read
-  [The Assistants API has retired](#the-assistants-api-has-retired) below first: as of 2026-08-26
-  that is the expected answer from a surface these scripts no longer have any right to call, and no
-  amount of redeploying will change it.
+- **`InternalServerError: Unable to get resource information.`, or `Timeout: The operation was
+  timeout.`** — what matters is not the message but **which surfaces fail**, and the diagnostic
+  prints both. The two messages are interchangeable: the same account can answer one call with a
+  500 and the next identical call with a 408.
 
-  If the diagnostic shows `/agents` failing too, then the service genuinely cannot resolve the
-  project, and the causes are a project not in a `Succeeded` state, an account missing
-  `customSubDomainName` or `allowProjectManagement`, or a **soft-deleted account of the same name**.
-  That last one is the nastiest, because everything looks correct: Cognitive Services accounts are
-  soft-deleted for 48 hours and keep their subdomain registered the whole time, so the DNS name
+  If `/assistants` fails but `/agents` answers, read
+  [The Assistants API has retired](#the-assistants-api-has-retired) below: the deployment is fine
+  and the code is calling a surface that no longer exists.
+
+  If **both** fail, see [Neither agent surface answers](#neither-agent-surface-answers). The
+  retirement is not the cause, and neither is anything in the agent YAML.
+
+  One account-level cause is worth knowing before you read further, because everything looks
+  correct when you hit it: a **soft-deleted account of the same name**. Cognitive Services accounts
+  are soft-deleted for 48 hours and keep their subdomain registered the whole time, so the DNS name
   resolves to the dead account rather than the new one. List and purge:
 
   ```powershell
@@ -928,9 +933,12 @@ Azure AI Foundry has had two agent data planes living on the same project endpoi
 | Foundry Agent Service | `/agents`, `/conversations`, `/responses` | versioned agents, Responses API | current GA |
 
 `agents/provision.ps1`, `scripts/cleanup.ps1` and the worker's `FoundryAgentClient` were all written
-against the classic surface. It worked when the demo was first built. It no longer exists, and the
-gateway's answer when you call it is exactly the error above — an unhelpful 500 rather than a clean
-404, which is why the message points nowhere useful.
+against the classic surface. It worked when the demo was first built, and it is on borrowed time
+now.
+
+What the gateway returns for a retired path is **not documented**, and it is not a clean 404. Do not
+read a 500 on `/assistants` as proof of the retirement on its own — a sick account returns the same
+500. The retirement is only demonstrated when `/assistants` fails **and `/agents` succeeds**.
 
 Confirm it in one call. Both surfaces take the same token and the same project endpoint, so the only
 variable is the path:
@@ -940,11 +948,11 @@ $token = az account get-access-token --resource https://ai.azure.com --query acc
 $headers = @{ Authorization = 'Bearer ' + $token }
 $project = 'https://enf-demo-ai.services.ai.azure.com/api/projects/cardgeo'
 
-# the retired surface — expect 500 "Unable to get resource information"
+# the retired surface
 try { Invoke-RestMethod "$project/assistants?api-version=v1" -Headers $headers } catch { $_.ErrorDetails.Message }
 
-# the current surface — expect 200
-Invoke-RestMethod "$project/agents?api-version=v1" -Headers $headers
+# the current surface
+try { Invoke-RestMethod "$project/agents?api-version=v1" -Headers $headers } catch { $_.ErrorDetails.Message }
 ```
 
 `./scripts/diagnose-foundry.ps1 -Prefix $prefix` does the same thing for both projects, alongside all
@@ -957,6 +965,112 @@ conversations, and runs become responses. That is a change to `provision.ps1`, `
 
 If **neither** answers, this is not the retirement — go back to
 [If `provision.ps1` fails](#if-provisionps1-fails) and work through the account-level causes.
+
+### Neither agent surface answers
+
+Both `/assistants` and `/agents` fail, with some mixture of:
+
+```text
+500 { "error": { "code": "InternalServerError", "message": "Unable to get resource information." } }
+408 { "error": { "code": "Timeout",             "message": "The operation was timeout." } }
+```
+
+The two alternate for the same URL between runs a minute apart. That alternation is itself the most
+useful signal in the whole failure: a deterministic client-side mistake — wrong path, wrong
+api-version, wrong token audience, missing role — gives you the **same** answer every time, and a
+different one. A wrong audience gives 401, a missing role gives 403, an unknown path gives 404.
+Timeouts and internal errors that come and go are the service failing *behind* the gateway, after it
+has already accepted your request as well-formed and authorised.
+
+So before changing any code, establish how wide the fault is. Work down this list in order; each
+step narrows it.
+
+**1. Does the account advertise an agents endpoint at all?** `properties.endpoint` (singular) is the
+legacy `*.cognitiveservices.azure.com` host and is present on every Cognitive Services account, so
+seeing only that proves nothing. The map that matters is `properties.endpoints` (plural):
+
+```powershell
+az cognitiveservices account show -n "$prefix-ai" -g "$prefix-platform" --query properties.endpoints -o json
+```
+
+An account that can serve agents lists a Foundry entry here alongside the model APIs. If the map is
+missing entirely, or has no Foundry/agent key, the agent backend was never wired up — and every
+control-plane state will still read `Succeeded`, which is what makes this so hard to see. The
+diagnostic checks this for you and says so in section 1.
+
+**2. Does anything at all answer on that host?** The model-inference route shares the gateway, the
+DNS name and the account with the agents API, but not the agent backend. It needs a token for a
+different audience:
+
+```powershell
+$csToken = az account get-access-token --resource https://cognitiveservices.azure.com --query accessToken -o tsv
+$headers = @{ Authorization = 'Bearer ' + $csToken }
+Invoke-RestMethod "https://$prefix-ai.services.ai.azure.com/openai/deployments?api-version=2024-10-21" -Headers $headers
+```
+
+A 200 narrows the fault to the agent service. A failure here too means the account or the region is
+at fault, and no change to which agent URL the scripts call will help. The diagnostic runs this as
+the first probe in section 5.
+
+**3. Is the classic-agents kill switch set?** It is a plain account tag, so it survives redeployment:
+
+```powershell
+az cognitiveservices account show -n "$prefix-ai" -g "$prefix-platform" --query tags -o json
+```
+
+If that shows `"MS-AOAI-Feature-Assistants": "Disabled"`, clear it:
+
+```powershell
+$accountId = az cognitiveservices account show -n "$prefix-ai" -g "$prefix-platform" --query id -o tsv
+az resource tag --ids $accountId --tags "MS-AOAI-Feature-Assistants=" --is-incremental
+```
+
+**4. Is the region unwell?** Sweden Central is the default here, and a region under strain shows up
+in more than one service at a time — if you also hit
+`ManagedEnvironmentNoAvailableCapacityInRegion` on the Container Apps deployment, treat that as
+corroboration rather than a coincidence.
+
+The portal is the readable way to check: **portal.azure.com** → search **Service Health** →
+**Service issues** in the left-hand menu, then set the **Region** filter to your region and the
+**Service** filter to **Azure AI services** and **Azure OpenAI**. Widen **Time range** to the last
+week, because an issue that has just been resolved drops off the default view.
+
+The same list from the CLI, in two steps so the URL stays readable — note the backtick in
+`` `$filter ``, which stops PowerShell expanding it as a variable:
+
+```powershell
+$subId = az account show --query id -o tsv
+$since = (Get-Date).AddDays(-3).ToString('yyyy-MM-dd')
+$url = "https://management.azure.com/subscriptions/$subId/providers/Microsoft.ResourceHealth/events" +
+       "?api-version=2022-10-01&`$filter=properties/impactStartTime ge '$since'"
+
+az rest --method get --url $url --query "value[].properties.{title:title,status:status,type:eventType}" -o table
+```
+
+Microsoft often resolves these without any customer-side change, and sometimes without publishing an
+advisory at all, so an empty list is weaker evidence than a populated one. If everything else on this
+page checks out, waiting an hour and re-running the diagnostic is a legitimate next step rather than
+a cop-out.
+
+**5. Only if the account itself is the outlier, recreate it.** If step 2 fails while the rest of the
+subscription is healthy and Service Health is clear, the account is in a state the control plane
+will not report. Deleting and redeploying it is safe here because the account holds no data we care
+about — the agents are re-provisioned from YAML, and scans live in Storage and Cosmos, which are
+separate resources. **Purging is what makes the subdomain reusable**; without it the new account
+cannot take the same name for 48 hours:
+
+```powershell
+$location = az cognitiveservices account show -n "$prefix-ai" -g "$prefix-platform" --query location -o tsv
+az cognitiveservices account delete -n "$prefix-ai" -g "$prefix-platform"
+az cognitiveservices account purge -n "$prefix-ai" -g "$prefix-platform" -l $location
+```
+
+Then redeploy [step 3](#3-deploy-the-infrastructure) and re-provision the agents as described in
+[Re-provisioning the agents after a redeploy](#re-provisioning-the-agents-after-a-redeploy).
+
+If you would rather not wait on the region, deploying the whole demo elsewhere is a larger change
+than it looks — see [The region is out of capacity](#the-region-is-out-of-capacity) for why the
+`location` parameter cannot be changed on its own.
 
 ### Option B: the portal
 
