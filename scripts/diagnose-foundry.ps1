@@ -106,6 +106,45 @@ function Get-Prop {
     return $member.Value
 }
 
+# Pulls the agent names out of a list response. The two surfaces disagree about the envelope --
+# the Assistants one returns "data", the current one "value" -- so accept either rather than
+# reporting a populated project as empty because the key was not the expected one.
+function Get-AgentNames {
+    param([object] $Response)
+
+    $items = Get-Prop $Response 'data'
+    if ($null -eq $items) { $items = Get-Prop $Response 'value' }
+
+    $names = @()
+    foreach ($item in @($items)) {
+        if ($null -eq $item) { continue }
+        $agentName = Get-Prop $item 'name'
+        if ([string]::IsNullOrWhiteSpace($agentName)) { $agentName = Get-Prop $item 'id' }
+        if (-not [string]::IsNullOrWhiteSpace($agentName)) { $names += [string] $agentName }
+    }
+    # A bare @() unrolls to $null on return, which a caller cannot tell apart from "could not
+    # read", so the comma keeps an empty list an empty list.
+    return ,@($names | Sort-Object)
+}
+
+# Reads the agent names this repository expects a project to have. provision.ps1 creates one agent
+# per YAML file, skipping the mcp-* files, which describe tool servers rather than agents.
+function Get-ExpectedAgentNames {
+    param([string] $Project)
+
+    $dir = Join-Path (Split-Path -Parent $PSScriptRoot) "agents/$Project"
+    if (-not (Test-Path $dir)) { return ,@() }
+
+    $names = @()
+    foreach ($file in Get-ChildItem -Path $dir -Filter '*.yaml' | Where-Object { $_.Name -notlike 'mcp-*' }) {
+        # The name is a top-level scalar, so a line match avoids taking a YAML parser dependency
+        # for one field. Nested "name:" keys are indented and therefore do not match.
+        $match = Select-String -Path $file.FullName -Pattern '^name:\s*(\S+)' | Select-Object -First 1
+        if ($match) { $names += $match.Matches[0].Groups[1].Value }
+    }
+    return ,@($names | Sort-Object)
+}
+
 $findings = @()
 
 # ---------------------------------------------------------------------------------------------
@@ -491,19 +530,62 @@ if ($token -and $endpointHost) {
             "$endpointHost/api/projects/$name/assistants?api-version=$ApiVersion" $token
         $classicBody = $script:lastProbeBody
 
+        $classicNames = @()
         if ($classic) {
-            Write-Good "  assistants (retired surface) : 200, $(@(Get-Prop $classic 'data').Count) agent(s)"
+            $classicNames = Get-AgentNames $classic
+            Write-Good "  assistants (retired surface) : 200, $($classicNames.Count) agent(s)$(if ($classicNames.Count) { ' : ' + ($classicNames -join ', ') })"
         }
 
         $script:lastProbeBody = ''
         $current = Invoke-Probe 'agents (current surface)' `
             "$endpointHost/api/projects/$name/agents?api-version=$ApiVersion" $token
 
+        $currentNames = @()
         if ($current) {
-            Write-Good "  agents (current surface) : 200, $(@(Get-Prop $current 'value').Count) agent(s)"
+            $currentNames = Get-AgentNames $current
+            Write-Good "  agents (current surface) : 200, $($currentNames.Count) agent(s)$(if ($currentNames.Count) { ' : ' + ($currentNames -join ', ') })"
         }
 
         if ($classic -or $current) { $probeSucceeded = $true }
+
+        # A reachable project is not the same as a provisioned one. Counting what came back against
+        # the YAML files in this repository is what separates "the service is fine" from "the
+        # service is fine and provision.ps1 stopped part way through", which otherwise reads as
+        # success in every section above.
+        if ($classic -or $current) {
+            $expected = Get-ExpectedAgentNames $name
+            $live = @($classicNames + $currentNames | Sort-Object -Unique)
+
+            if ($expected.Count) {
+                $missing = @($expected | Where-Object { $_ -notin $live })
+                if ($missing.Count) {
+                    Write-Bad "  missing $($missing.Count) of $($expected.Count) agent(s) : $($missing -join ', ')"
+                    $findings += ("Project '$name' is reachable but under-provisioned: " +
+                                  "$($missing -join ', ') " +
+                                  "$(if ($missing.Count -eq 1) { 'is' } else { 'are' }) defined in agents/$name " +
+                                  'but not deployed. Re-run agents/provision.ps1 for this project; it is ' +
+                                  'idempotent, so the agents that already exist are updated rather than duplicated.')
+                }
+                else {
+                    Write-Note "  all $($expected.Count) agent(s) defined in agents/$name are deployed"
+                }
+            }
+
+            # The two surfaces are meant to be two views of one set of agents. When they disagree,
+            # one of them is not seeing everything, and provisioning through the retired surface
+            # would leave agents the current one cannot serve.
+            if ($classic -and $current) {
+                $onlyClassic = @($classicNames | Where-Object { $_ -notin $currentNames })
+                if ($onlyClassic.Count) {
+                    Write-Bad "  visible only on the retired surface : $($onlyClassic -join ', ')"
+                    $findings += ("In project '$name', $($onlyClassic -join ', ') " +
+                                  "$(if ($onlyClassic.Count -eq 1) { 'is' } else { 'are' }) returned by /assistants " +
+                                  'but not by /agents. The two surfaces should be one set of agents, so an agent ' +
+                                  'only the retired surface can see will stop working when that surface goes. ' +
+                                  'Delete it and re-create it with agents/provision.ps1.')
+                }
+            }
+        }
 
         # Classify on both replies together. The service alternates between 408 and 500 for the
         # same underlying fault, so keying off whichever arrived first would describe one project
