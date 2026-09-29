@@ -862,6 +862,102 @@ If the script fails on the tool wiring, create that one agent in the portal inst
 agents and MCP tools depend on connections existing in the project first, and the portal creates
 those for you as part of the same dialogue.
 
+### If `provision.ps1` fails
+
+The script's first call is a `GET` for the agents already in the project. It proves three things at
+once — that the endpoint resolves, that your token is accepted, and that the service can find the
+project — so a failure there is about the deployment, never about the agent YAML.
+
+Run the diagnostic before changing anything:
+
+```powershell
+./scripts/diagnose-foundry.ps1 -Prefix $prefix
+```
+
+It reads the account, its subdomain and settings, any soft-deleted account holding the same name,
+each project, your role assignments and the model deployments, then repeats the same data-plane call
+and prints what came back. It changes nothing.
+
+- **`InternalServerError: Unable to get resource information.`** — read
+  [The Assistants API has retired](#the-assistants-api-has-retired) below first: as of 2026-08-26
+  that is the expected answer from a surface these scripts no longer have any right to call, and no
+  amount of redeploying will change it.
+
+  If the diagnostic shows `/agents` failing too, then the service genuinely cannot resolve the
+  project, and the causes are a project not in a `Succeeded` state, an account missing
+  `customSubDomainName` or `allowProjectManagement`, or a **soft-deleted account of the same name**.
+  That last one is the nastiest, because everything looks correct: Cognitive Services accounts are
+  soft-deleted for 48 hours and keep their subdomain registered the whole time, so the DNS name
+  resolves to the dead account rather than the new one. List and purge:
+
+  ```powershell
+  az cognitiveservices account list-deleted -o table
+  az cognitiveservices account purge -n "$prefix-ai" -g "$prefix-platform" -l $location
+  ```
+
+  Purging is immediate and final, so be certain the deleted account is not one you still want. After
+  purging, redeploy [step 3](#3-deploy-the-infrastructure) so the subdomain binds to the new account.
+
+  If nothing is flagged and both surfaces fail, check **Azure Service Health** for your region. This
+  exact message has been reported before as a regional AI Services incident with no customer-side
+  cause.
+- **`PermissionDenied`, or a 401/403** — you have no agent-authoring role on the project. Agent APIs
+  are **data actions**, so subscription Owner grants nothing here; you need Foundry Project Manager
+  on that specific project, which [step 1](#1-create-the-owner-groups) grants through the team's
+  group. Group membership is carried in the token, so a token issued before you were added will not
+  have it. Force a fresh one:
+
+  ```powershell
+  az account get-access-token --resource https://ai.azure.com --query expiresOn -o tsv
+  az logout
+  az login
+  ```
+
+- **A tool or connected agent is rejected** — that is the agent content rather than the project, and
+  it is covered by [Attaching the MCP tools](#attaching-the-mcp-tools) above.
+
+### The Assistants API has retired
+
+**This affects this repository directly and is not something you can fix by redeploying.**
+
+Azure AI Foundry has had two agent data planes living on the same project endpoint:
+
+| | Path | Shape | Status |
+| --- | --- | --- | --- |
+| Classic ("Assistants") | `/assistants`, `/threads`, `/runs` | OpenAI Assistants-compatible | **retired 2026-08-26** |
+| Foundry Agent Service | `/agents`, `/conversations`, `/responses` | versioned agents, Responses API | current GA |
+
+`agents/provision.ps1`, `scripts/cleanup.ps1` and the worker's `FoundryAgentClient` were all written
+against the classic surface. It worked when the demo was first built. It no longer exists, and the
+gateway's answer when you call it is exactly the error above — an unhelpful 500 rather than a clean
+404, which is why the message points nowhere useful.
+
+Confirm it in one call. Both surfaces take the same token and the same project endpoint, so the only
+variable is the path:
+
+```powershell
+$token = az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv
+$headers = @{ Authorization = 'Bearer ' + $token }
+$project = 'https://enf-demo-ai.services.ai.azure.com/api/projects/cardgeo'
+
+# the retired surface — expect 500 "Unable to get resource information"
+try { Invoke-RestMethod "$project/assistants?api-version=v1" -Headers $headers } catch { $_.ErrorDetails.Message }
+
+# the current surface — expect 200
+Invoke-RestMethod "$project/agents?api-version=v1" -Headers $headers
+```
+
+`./scripts/diagnose-foundry.ps1 -Prefix $prefix` does the same thing for both projects, alongside all
+the control-plane checks, and tells you which of the two cases you are in.
+
+If `/agents` answers and `/assistants` does not, the deployment is healthy and the **code** needs
+migrating: agents become versioned resources created with a `definition` object, threads become
+conversations, and runs become responses. That is a change to `provision.ps1`, `cleanup.ps1` and
+`FoundryAgentClient`, not to any Bicep.
+
+If **neither** answers, this is not the retirement — go back to
+[If `provision.ps1` fails](#if-provisionps1-fails) and work through the account-level causes.
+
 ### Option B: the portal
 
 **Foundry portal → your project → Agents → New agent**, then copy from the YAML:

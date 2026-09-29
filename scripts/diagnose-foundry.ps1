@@ -270,46 +270,84 @@ else {
     Write-Note 'token acquired for https://ai.azure.com'
 }
 
+# Reads one data-plane URL and reports what came back. Returns the response on success and $null
+# on failure, printing the service's own message either way.
+function Invoke-Probe {
+    param([string] $Label, [string] $Url, [string] $Token)
+
+    try {
+        $r = Invoke-RestMethod -Method GET -Uri $Url -Headers @{ Authorization = ("Bearer " + $Token) }
+        return $r
+    }
+    catch {
+        # The body carries the service's own message; the exception text alone is just the status
+        # line, which is what made this error opaque in the first place. Which property holds the
+        # body differs between PowerShell 5.1 and 7, and under Set-StrictMode reading an absent one
+        # throws, so probe for each rather than dotting through.
+        $body = ''
+        $ex = $_.Exception
+        $respProp = $ex.PSObject.Properties['Response']
+        if ($respProp -and $respProp.Value) {
+            $resp = $respProp.Value
+            $contentProp = $resp.PSObject.Properties['Content']
+            if ($contentProp -and $contentProp.Value) {
+                try { $body = $contentProp.Value.ReadAsStringAsync().Result } catch { $body = '' }
+            }
+        }
+        if (-not $body) {
+            $detail = $_.PSObject.Properties['ErrorDetails']
+            if ($detail -and $detail.Value) { $body = [string] $detail.Value.Message }
+        }
+        Write-Bad "  $Label : $($ex.Message)"
+        if ($body) { Write-Note "    $($body -replace '\s+', ' ')" }
+        $script:lastProbeBody = $body
+        return $null
+    }
+}
+
 if ($token -and $endpointHost) {
     foreach ($name in $liveProjects) {
-        $url = "$endpointHost/api/projects/$name/assistants?api-version=$ApiVersion"
+        Write-Host "  $name" -ForegroundColor White
         $probeAttempted = $true
-        try {
-            $r = Invoke-RestMethod -Method GET -Uri $url -Headers @{ Authorization = ("Bearer " + $token) }
-            $count = @(Get-Prop $r 'data').Count
-            Write-Good "$name : 200, $count agent(s)"
-            $probeSucceeded = $true
-        }
-        catch {
-            # The body carries the service's own message; the exception text alone is just the
-            # status line, which is what made this error opaque in the first place. Which property
-            # holds the body differs between PowerShell 5.1 and 7, and under Set-StrictMode reading
-            # an absent one throws, so probe for each rather than dotting through.
-            $body = ''
-            $ex = $_.Exception
-            $respProp = $ex.PSObject.Properties['Response']
-            if ($respProp -and $respProp.Value) {
-                $resp = $respProp.Value
-                $contentProp = $resp.PSObject.Properties['Content']
-                if ($contentProp -and $contentProp.Value) {
-                    try { $body = $contentProp.Value.ReadAsStringAsync().Result } catch { $body = '' }
-                }
-            }
-            if (-not $body) {
-                $detail = $_.PSObject.Properties['ErrorDetails']
-                if ($detail -and $detail.Value) { $body = [string] $detail.Value.Message }
-            }
-            Write-Bad "$name : $($ex.Message)"
-            if ($body) { Write-Note "  $($body -replace '\s+', ' ')" }
 
-            if ($body -match 'Unable to get resource information') {
-                $findings += ("The data plane returned 'Unable to get resource information' for '$name' even though the " +
-                              'control plane says the account and project are healthy. If nothing above is flagged, this ' +
-                              'is the service failing to resolve a resource it owns: wait a few minutes and retry, and ' +
-                              'see "Unable to get resource information" in docs/azure-setup.md.')
+        # Both surfaces live on the same host and take the same token, so calling each in turn
+        # separates "this project is unreachable" from "this project is fine but the API the
+        # scripts use is gone". The Assistants surface retired on 2026-08-26; /agents replaced it.
+        $script:lastProbeBody = ''
+        $classic = Invoke-Probe 'assistants (retired surface)' `
+            "$endpointHost/api/projects/$name/assistants?api-version=$ApiVersion" $token
+        $classicBody = $script:lastProbeBody
+
+        if ($classic) {
+            Write-Good "  assistants (retired surface) : 200, $(@(Get-Prop $classic 'data').Count) agent(s)"
+        }
+
+        $script:lastProbeBody = ''
+        $current = Invoke-Probe 'agents (current surface)' `
+            "$endpointHost/api/projects/$name/agents?api-version=$ApiVersion" $token
+
+        if ($current) {
+            Write-Good "  agents (current surface) : 200, $(@(Get-Prop $current 'value').Count) agent(s)"
+        }
+
+        if ($classic -or $current) { $probeSucceeded = $true }
+
+        if (-not $classic -and $current) {
+            $findings += ("Project '$name' is healthy, but the Assistants surface the scripts call is gone. " +
+                          'It retired on 2026-08-26 and /agents answered in its place. This needs a code ' +
+                          'change, not a redeployment: see "The Assistants API has retired" in docs/azure-setup.md.')
+        }
+        elseif (-not $classic -and -not $current) {
+            if ($classicBody -match 'Unable to get resource information') {
+                $findings += ("Neither surface answered for '$name', and the control plane above looks healthy. " +
+                              'That points at the account rather than the project: check Azure Service Health ' +
+                              'for this region, then see "If provision.ps1 fails" in docs/azure-setup.md.')
             }
-            elseif ($body -match 'PermissionDenied|AuthorizationFailed|Forbidden') {
+            elseif ($classicBody -match 'PermissionDenied|AuthorizationFailed|Forbidden') {
                 $findings += "You have no agent-authoring role on '$name'. Subscription Owner does not grant one: agent APIs are data actions."
+            }
+            else {
+                $findings += "Neither data-plane surface answered for '$name'. The errors above are the service's own."
             }
         }
     }
