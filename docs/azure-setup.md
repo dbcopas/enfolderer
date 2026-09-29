@@ -615,6 +615,60 @@ in it as a preflight check.
   endpoints — and this storage account has no public endpoint. The older Consumption-only
   environment type does not help either: it creates public IPs in your subscription too, in an
   `MC_` group.
+- **`ManagedEnvironmentNoAvailableCapacityInRegion: Managed Cluster '<name>' provision failed`** —
+  nothing is wrong with your template, your subscription or your permissions. Every Container Apps
+  environment is backed by a managed cluster, and Azure could not allocate one in that region at
+  that moment. Capacity is shared across all customers in a region and fluctuates hour to hour, so
+  this is transient: wait a few hours and re-run.
+
+  Re-run the **script**, not the deployment on its own:
+
+  ```powershell
+  ./scripts/migrate-to-containerapps.ps1 -Prefix $prefix -Confirm:$false
+  ```
+
+  The reason is the same one as everywhere else in this section: the failed attempt leaves an
+  environment behind in a `Failed` state, ARM will not replace it, and only step 3b deletes it. Run
+  `az deployment sub create` again and it will fail on the leftover rather than on capacity, which
+  looks like the same problem but is not.
+
+  You can see whether a region is likely to work before committing twenty minutes to finding out —
+  a region that will not offer you the Consumption workload profile has no capacity to give you:
+
+  ```powershell
+  az containerapp env workload-profile list-supported --location swedencentral -o table
+  ```
+
+  <a id="the-region-is-out-of-capacity"></a>
+  **Moving to a different region is not a one-parameter change.** A Container Apps environment must
+  sit in the same region as the subnet it is injected into, and that subnet belongs to a VNet that
+  also carries the private endpoints for storage. So moving the environments means moving the VNet,
+  the storage account, Cosmos, the Foundry account and the registry as well — in effect, deploying
+  the whole thing again from scratch. If you decide to do that, deploy alongside the existing one
+  rather than trying to convert it:
+
+  ```powershell
+  $prefix   = 'enf-demo2'          # must be globally unique: storage and Foundry names derive from it
+  $location = 'westeurope'
+  ```
+
+  Rewrite `infra/main.parameters.json` with the block in [step 3](#3-deploy-the-infrastructure),
+  then deploy under a **new** deployment name, because Azure pins a subscription-scope deployment's
+  location to its name and would reject the new region otherwise:
+
+  ```powershell
+  az deployment sub create `
+    --name enfolderer-scan-westeurope `
+    --location $location `
+    --template-file infra/main.bicep `
+    --parameters infra/main.parameters.json
+  ```
+
+  That gives you three new resource groups and leaves the old ones untouched, so you can tear down
+  whichever one you do not keep with `az group delete`. The app registrations from
+  [step 2](#2-register-the-api-and-the-desktop-client) and the owner groups from
+  [step 1](#1-create-the-owner-groups) are subscription-independent and are reused as they are; the
+  agents have to be created again in the new projects, because agents live inside a Foundry project.
 - **`ContainerAppOperationError: Failed to provision revision for container app '<name>'. Error
   details: .`** — note the empty details, and note that it usually hits *every* app at once. ARM has
   nothing useful to say, and neither does `az deployment operation group list`: it returns the same
@@ -846,6 +900,38 @@ az containerapp update `
   ScanPipeline__IdentificationAgentIds__mtg="<mtg agent id>" `
   ScanPipeline__IdentificationAgentIds__pokemon="<pokemon agent id>"
 ```
+
+<a id="re-provisioning-the-agents"></a>
+### Re-provisioning the agents after a redeploy
+
+Anything that changes an MCP server's URL — redeploying the environments, or recreating them after
+a failure — leaves the agents pointing at hostnames that no longer resolve. The fix is to run the
+same `provision.ps1` commands again. It is an update, not a recreate: the script matches existing
+agents **by name** and patches them in place, so the `asst_…` ids you recorded above stay valid and
+nothing downstream needs changing.
+
+Read the current URLs out of the deployment, then re-run both projects:
+
+```powershell
+$mcp = @{}
+foreach ($o in 'geometryMcpServerUrls', 'identificationMcpServerUrls') {
+  (az deployment sub show --name enfolderer-scan --query "properties.outputs.$o.value" -o json |
+     ConvertFrom-Json) | ForEach-Object { $mcp[$_.name] = $_.url }
+}
+$mcp   # sanity check: five entries, each an https://...azurecontainerapps.io URL
+
+./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo -McpServerUrl $mcp
+
+./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid -McpServerUrl $mcp `
+  -ConnectedAgentId @{ 'cardgeo/CardBoundaryAgent' = $boundaryId }
+```
+
+`$geo`, `$id` and `$boundaryId` come from [Resuming in a new shell](#resuming-in-a-new-shell) and
+from the `cardgeo` run above. Team A's project first, for the same reason as the first time: Team B's
+orchestrator needs the boundary agent's id and cannot look it up itself.
+
+Re-provisioning is safe to repeat. If you are unsure whether it is needed, run it — an agent that is
+already correct is patched with identical content.
 
 ## 5. Host the MCP servers
 

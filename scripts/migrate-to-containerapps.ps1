@@ -136,6 +136,67 @@ function Test-AzResource {
     return ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($id))
 }
 
+# Runs a deployment and returns what Azure said if it failed. az writes the error JSON to stderr,
+# and redirecting it into the success stream is not safe under $ErrorActionPreference = 'Stop' —
+# Windows PowerShell turns native stderr into ErrorRecords and would throw before we could read it.
+# A temporary file keeps the text out of the pipeline entirely.
+function Invoke-Deployment {
+    param([string[]] $ExtraParameters = @())
+
+    $errFile = [System.IO.Path]::GetTempFileName()
+    try {
+        az deployment sub create --name $DeploymentName --location $Location `
+            --template-file infra/main.bicep --parameters $ParametersFile @ExtraParameters -o none `
+            2>$errFile
+        $exit = $LASTEXITCODE
+        $text = ''
+        if (Test-Path $errFile) { $text = (Get-Content $errFile -Raw) }
+        if ($null -eq $text) { $text = '' }
+        return [pscustomobject]@{ Succeeded = ($exit -eq 0); Output = $text }
+    }
+    finally {
+        Remove-Item $errFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Turns the one error code that is not our fault into advice. Everything else the deployment can
+# say is already covered by docs/azure-setup.md, so point there rather than guessing.
+function Show-DeploymentFailureHelp {
+    param([string] $Output)
+
+    Write-Host ''
+    if ($Output -match 'NoAvailableCapacityInRegion') {
+        Write-Host "$Location has no spare Container Apps capacity right now." -ForegroundColor Red
+        Write-Host ''
+        Write-Host 'This is not a fault in the template or in your subscription. Each environment'
+        Write-Host 'is backed by a managed cluster, and Azure could not allocate one in this region'
+        Write-Host 'at this moment. It is transient and usually clears within a few hours.'
+        Write-Host ''
+        Write-Host 'Wait, then re-run this same script:' -ForegroundColor DarkYellow
+        Write-Host ''
+        Write-Host "  ./scripts/migrate-to-containerapps.ps1 -Prefix $Prefix -Confirm:`$false"
+        Write-Host ''
+        Write-Host 'Re-run the script rather than the deployment on its own. A capacity failure'
+        Write-Host 'leaves the environment behind in a Failed state, and ARM will not replace it;'
+        Write-Host 'step 3b above is what deletes it so the retry has somewhere to build.'
+        Write-Host ''
+        Write-Host 'Moving to a region with capacity is a bigger job than changing one parameter:'
+        Write-Host 'an environment must sit in the same region as its subnet, so storage, Cosmos,'
+        Write-Host 'Foundry and the registry would all have to move too. See "The region is out of'
+        Write-Host 'capacity" in docs/azure-setup.md before going that way.'
+    }
+    else {
+        Write-Host 'The deployment failed. The error Azure returned is above.' -ForegroundColor Red
+        Write-Host ''
+        Write-Host 'To see which resource failed and why:' -ForegroundColor DarkYellow
+        Write-Host ''
+        Write-Host "  ./scripts/diagnose-containerapps.ps1 -Prefix $Prefix"
+        Write-Host ''
+        Write-Host '"If the deployment fails" in docs/azure-setup.md lists every cause seen so far.'
+    }
+    Write-Host ''
+}
+
 function Get-DeploymentOutput {
     param([string] $Name)
 
@@ -502,9 +563,12 @@ Write-Step '4. Deploy the infrastructure'
 # The first deployment deliberately passes no imageTag: the registry it creates has no images yet,
 # so every container app starts on a placeholder and is pointed at the real images in step 6.
 if ($PSCmdlet.ShouldProcess($DeploymentName, 'Deploy infra/main.bicep')) {
-    az deployment sub create --name $DeploymentName --location $Location `
-        --template-file infra/main.bicep --parameters $ParametersFile -o none
-    if ($LASTEXITCODE -ne 0) { throw 'Deployment failed.' }
+    $result = Invoke-Deployment
+    if (-not $result.Succeeded) {
+        if ($result.Output) { Write-Host $result.Output }
+        Show-DeploymentFailureHelp $result.Output
+        throw 'Deployment failed.'
+    }
     Write-Did 'deployed (apps on the placeholder image)'
 }
 else {
@@ -565,10 +629,12 @@ Write-Step '6. Point the apps at the images'
 # Not replaceable by `az containerapp update --image`: as well as the image, this deployment adds
 # the registry configuration that lets each app pull as its own managed identity.
 if ($PSCmdlet.ShouldProcess($DeploymentName, "Redeploy with imageTag=$ImageTag")) {
-    az deployment sub create --name $DeploymentName --location $Location `
-        --template-file infra/main.bicep --parameters $ParametersFile `
-        --parameters imageTag=$ImageTag -o none
-    if ($LASTEXITCODE -ne 0) { throw 'Redeployment with the image tag failed.' }
+    $result = Invoke-Deployment -ExtraParameters @('--parameters', "imageTag=$ImageTag")
+    if (-not $result.Succeeded) {
+        if ($result.Output) { Write-Host $result.Output }
+        Show-DeploymentFailureHelp $result.Output
+        throw 'Redeployment with the image tag failed.'
+    }
     Write-Did "redeployed with imageTag=$ImageTag"
 }
 
