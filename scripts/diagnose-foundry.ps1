@@ -1,0 +1,344 @@
+<#
+.SYNOPSIS
+    Explains why the Foundry agents data plane is refusing a project.
+
+.DESCRIPTION
+    agents/provision.ps1 talks to the Foundry Agent Service over HTTP. When that service cannot
+    resolve the project behind the endpoint it answers
+
+        HTTP 500
+        { "error": { "code": "InternalServerError", "message": "Unable to get resource information." } }
+
+    which says nothing about which of the several things it needed was missing. The control plane
+    does know, so this script reads it: the account, its subdomain and settings, any soft-deleted
+    account squatting on the same name, the project, the model deployments and your own role
+    assignments. Then it repeats the data-plane call and reports what came back.
+
+    It changes nothing. Every call is a read.
+
+    Causes it can tell apart:
+
+    * The account or the project does not exist, or is not in a Succeeded state. The endpoint is
+      built from names, so a typo or a half-finished deployment gives a perfectly well-formed URL
+      that points at nothing.
+
+    * A soft-deleted account of the same name still holds the subdomain. Cognitive Services accounts
+      are soft-deleted for 48 hours, and the DNS name resolves to the dead one until it is purged.
+
+    * The account is missing customSubDomainName or allowProjectManagement, so projects cannot be
+      addressed through it.
+
+    * You have no data-plane role on the project. Subscription Owner does not grant one, because
+      agent authoring is a data action.
+
+    * The token is fine and the resources are fine, in which case the fault is the service's and the
+      script says so rather than inventing a cause.
+
+.PARAMETER Prefix
+    Resource name prefix used by the deployment, e.g. enf-demo.
+
+.PARAMETER AccountName
+    Foundry account name. Defaults to <Prefix>-ai, which is what infra/main.bicep creates under the
+    default single-account layout. Pass it explicitly if you deployed with singleAccount=false.
+
+.PARAMETER ResourceGroup
+    Resource group holding the account. Defaults to <Prefix>-platform.
+
+.PARAMETER Project
+    Project names to check. Defaults to cardgeo and cardid.
+
+.PARAMETER ApiVersion
+    Data-plane api-version to probe with. Matches provision.ps1's default.
+
+.EXAMPLE
+    ./scripts/diagnose-foundry.ps1 -Prefix enf-demo
+
+.NOTES
+    Requires an az login with read access to the resource group.
+#>
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)] [string] $Prefix,
+    [string] $AccountName,
+    [string] $ResourceGroup,
+    [string[]] $Project = @('cardgeo', 'cardid'),
+    [string] $ApiVersion = 'v1'
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+if (-not $AccountName)   { $AccountName = "$Prefix-ai" }
+if (-not $ResourceGroup) { $ResourceGroup = "$Prefix-platform" }
+
+function Write-Step {
+    param([string] $Text)
+    Write-Host ''
+    Write-Host $Text -ForegroundColor Cyan
+}
+
+function Write-Note { param([string] $T) Write-Host "  $T" -ForegroundColor DarkGray }
+function Write-Bad  { param([string] $T) Write-Host "  $T" -ForegroundColor Red }
+function Write-Good { param([string] $T) Write-Host "  $T" -ForegroundColor Green }
+
+# az answers "not found" with a non-zero exit code and a message on stderr. Absence is one of the
+# answers this script is looking for, so ask quietly and decide here.
+function Invoke-AzJson {
+    param([string[]] $Arguments)
+
+    $json = az @Arguments -o json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) { return $null }
+    # A native command's output arrives as an array of lines, and Windows PowerShell's
+    # ConvertFrom-Json parses each pipeline item separately and throws on the first line of a
+    # multi-line document. Join before converting.
+    try { return ($json -join "`n") | ConvertFrom-Json } catch { return $null }
+}
+
+# The CLI omits a property entirely when its value is null, so on a healthy resource most optional
+# fields are absent rather than empty. Under Set-StrictMode reading one directly throws, which would
+# end the run at the moment it had something to report.
+function Get-Prop {
+    param([object] $Object, [string] $Name)
+
+    if ($null -eq $Object) { return $null }
+    $member = $Object.PSObject.Properties[$Name]
+    if ($null -eq $member) { return $null }
+    return $member.Value
+}
+
+$findings = @()
+
+# ---------------------------------------------------------------------------------------------
+# 1. The account
+# ---------------------------------------------------------------------------------------------
+
+Write-Step '1. Foundry account'
+
+$account = Invoke-AzJson @('cognitiveservices', 'account', 'show',
+    '-n', $AccountName, '-g', $ResourceGroup)
+
+$endpointHost = $null
+
+if (-not $account) {
+    Write-Bad "$AccountName not found in $ResourceGroup"
+    $findings += "The account $AccountName does not exist in $ResourceGroup. Everything below follows from that."
+}
+else {
+    $props = Get-Prop $account 'properties'
+    $state = Get-Prop $props 'provisioningState'
+    $kind  = Get-Prop $account 'kind'
+    $sub   = Get-Prop $props 'customSubDomainName'
+    $mgmt  = Get-Prop $props 'allowProjectManagement'
+    $pna   = Get-Prop $props 'publicNetworkAccess'
+    $local = Get-Prop $props 'disableLocalAuth'
+
+    Write-Note "state $state, kind $kind, location $(Get-Prop $account 'location')"
+    Write-Note "customSubDomainName $(if ($sub) { $sub } else { '(none)' })"
+    Write-Note "allowProjectManagement $(if ($null -ne $mgmt) { $mgmt } else { '(not set)' }), publicNetworkAccess $(if ($pna) { $pna } else { '(not set)' }), disableLocalAuth $(if ($null -ne $local) { $local } else { '(not set)' })"
+
+    if ($state -ne 'Succeeded') {
+        Write-Bad "the account is $state, not Succeeded"
+        $findings += "The account $AccountName is in state '$state'. The data plane will not serve a project until the account itself is Succeeded."
+    }
+    if ($kind -ne 'AIServices') {
+        Write-Bad "kind is '$kind'; the agents data plane needs an AIServices account"
+        $findings += "The account is kind '$kind'. Agents require kind 'AIServices'; this cannot be changed in place, the account has to be recreated."
+    }
+    if (-not $sub) {
+        Write-Bad 'no customSubDomainName, so there is no *.services.ai.azure.com host to call'
+        $findings += 'The account has no customSubDomainName, so the project endpoint has no DNS name behind it.'
+    }
+    else {
+        $endpointHost = "https://$sub.services.ai.azure.com"
+        if ($sub -ne $AccountName) {
+            Write-Note "note: the subdomain differs from the account name, so the endpoint host is $endpointHost"
+        }
+    }
+    if ($mgmt -ne $true) {
+        Write-Bad 'allowProjectManagement is not true, so this account cannot serve projects'
+        $findings += ('The account does not have allowProjectManagement=true. infra/modules/foundry-account.bicep ' +
+                      'sets it, so redeploy rather than patching the account by hand.')
+    }
+
+    $reported = Get-Prop $props 'endpoint'
+    if ($reported) { Write-Note "endpoint reported by the account: $reported" }
+}
+
+# ---------------------------------------------------------------------------------------------
+# 2. A soft-deleted account holding the name
+# ---------------------------------------------------------------------------------------------
+
+Write-Step '2. Soft-deleted accounts'
+
+# Cognitive Services accounts are soft-deleted for 48 hours. While one exists the subdomain stays
+# registered to it, so a freshly recreated account of the same name can be addressed by a URL that
+# still resolves to the dead resource.
+$deleted = @(Invoke-AzJson @('cognitiveservices', 'account', 'list-deleted'))
+$matching = @($deleted | Where-Object { (Get-Prop $_ 'name') -eq $AccountName })
+
+if ($matching.Count -eq 0) {
+    Write-Good "no soft-deleted account named $AccountName"
+}
+else {
+    foreach ($d in $matching) {
+        Write-Bad "a soft-deleted $AccountName still exists in $(Get-Prop $d 'location')"
+    }
+    $findings += ("A soft-deleted account named $AccountName still holds the subdomain. Purge it, then recreate: " +
+                  "az cognitiveservices account purge -n $AccountName -g $ResourceGroup -l <location>")
+}
+
+# ---------------------------------------------------------------------------------------------
+# 3. The projects
+# ---------------------------------------------------------------------------------------------
+
+Write-Step '3. Projects'
+
+$subscriptionId = az account show --query id -o tsv 2>$null
+if ($LASTEXITCODE -ne 0) { $subscriptionId = $null }
+
+$liveProjects = @()
+
+foreach ($name in $Project) {
+    if (-not $subscriptionId) { break }
+
+    $id = "/subscriptions/$subscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.CognitiveServices/accounts/$AccountName/projects/$name"
+    $p = Invoke-AzJson @('resource', 'show', '--ids', $id)
+
+    if (-not $p) {
+        Write-Bad "$name : not found"
+        $findings += "Project '$name' does not exist under $AccountName."
+        continue
+    }
+
+    $pstate = Get-Prop (Get-Prop $p 'properties') 'provisioningState'
+    if ($pstate -eq 'Succeeded') {
+        Write-Good "$name : $pstate"
+        $liveProjects += $name
+    }
+    else {
+        Write-Bad "$name : $pstate"
+        $findings += "Project '$name' is in state '$pstate'."
+    }
+
+    # Agent authoring is a data action, so a subscription-level Owner assignment does not grant it.
+    # Anything scoped at or above the project counts, which is why the scope is printed rather than
+    # matched exactly.
+    $roles = @(Invoke-AzJson @('role', 'assignment', 'list', '--scope', $id, '--include-inherited'))
+    $mine = @($roles | ForEach-Object { Get-Prop $_ 'roleDefinitionName' } | Sort-Object -Unique)
+    if ($mine.Count) { Write-Note "  roles at this scope: $($mine -join ', ')" }
+    else { Write-Note '  no role assignments visible at this scope' }
+}
+
+# ---------------------------------------------------------------------------------------------
+# 4. Model deployments
+# ---------------------------------------------------------------------------------------------
+
+Write-Step '4. Model deployments'
+
+$models = @(Invoke-AzJson @('cognitiveservices', 'account', 'deployment', 'list',
+    '-n', $AccountName, '-g', $ResourceGroup))
+
+if ($models.Count -eq 0) {
+    Write-Bad 'none — an agent names a deployment, so every run would fail even once authoring works'
+    $findings += "The account has no model deployments. The agent YAML names one under model.deployment; create it before provisioning."
+}
+else {
+    foreach ($m in $models) {
+        $mp = Get-Prop $m 'properties'
+        $model = Get-Prop $mp 'model'
+        Write-Note "$(Get-Prop $m 'name') : $(Get-Prop $model 'name') $(Get-Prop $model 'version'), state $(Get-Prop $mp 'provisioningState')"
+    }
+}
+
+# ---------------------------------------------------------------------------------------------
+# 5. The data-plane call provision.ps1 makes
+# ---------------------------------------------------------------------------------------------
+
+Write-Step '5. The call provision.ps1 makes'
+
+$probeSucceeded = $false
+$probeAttempted = $false
+
+$token = az account get-access-token --resource 'https://ai.azure.com' --query accessToken -o tsv 2>$null
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($token)) {
+    Write-Bad 'could not get a token for https://ai.azure.com — run az login'
+    $findings += 'No token could be obtained for https://ai.azure.com.'
+    $token = $null
+}
+else {
+    $token = $token.Trim()
+    Write-Note 'token acquired for https://ai.azure.com'
+}
+
+if ($token -and $endpointHost) {
+    foreach ($name in $liveProjects) {
+        $url = "$endpointHost/api/projects/$name/assistants?api-version=$ApiVersion"
+        $probeAttempted = $true
+        try {
+            $r = Invoke-RestMethod -Method GET -Uri $url -Headers @{ Authorization = ("Bearer " + $token) }
+            $count = @(Get-Prop $r 'data').Count
+            Write-Good "$name : 200, $count agent(s)"
+            $probeSucceeded = $true
+        }
+        catch {
+            # The body carries the service's own message; the exception text alone is just the
+            # status line, which is what made this error opaque in the first place. Which property
+            # holds the body differs between PowerShell 5.1 and 7, and under Set-StrictMode reading
+            # an absent one throws, so probe for each rather than dotting through.
+            $body = ''
+            $ex = $_.Exception
+            $respProp = $ex.PSObject.Properties['Response']
+            if ($respProp -and $respProp.Value) {
+                $resp = $respProp.Value
+                $contentProp = $resp.PSObject.Properties['Content']
+                if ($contentProp -and $contentProp.Value) {
+                    try { $body = $contentProp.Value.ReadAsStringAsync().Result } catch { $body = '' }
+                }
+            }
+            if (-not $body) {
+                $detail = $_.PSObject.Properties['ErrorDetails']
+                if ($detail -and $detail.Value) { $body = [string] $detail.Value.Message }
+            }
+            Write-Bad "$name : $($ex.Message)"
+            if ($body) { Write-Note "  $($body -replace '\s+', ' ')" }
+
+            if ($body -match 'Unable to get resource information') {
+                $findings += ("The data plane returned 'Unable to get resource information' for '$name' even though the " +
+                              'control plane says the account and project are healthy. If nothing above is flagged, this ' +
+                              'is the service failing to resolve a resource it owns: wait a few minutes and retry, and ' +
+                              'see "Unable to get resource information" in docs/azure-setup.md.')
+            }
+            elseif ($body -match 'PermissionDenied|AuthorizationFailed|Forbidden') {
+                $findings += "You have no agent-authoring role on '$name'. Subscription Owner does not grant one: agent APIs are data actions."
+            }
+        }
+    }
+}
+elseif ($token) {
+    Write-Note 'skipped: the account has no subdomain to call'
+}
+
+# ---------------------------------------------------------------------------------------------
+# 6. Verdict
+# ---------------------------------------------------------------------------------------------
+
+Write-Step '6. What to do'
+
+if ($findings.Count -eq 0) {
+    if ($probeAttempted -and -not $probeSucceeded) {
+        # The control plane was clean and the call still did not come back, so the script has no
+        # cause to offer. Saying so is more useful than implying everything is well.
+        Write-Bad 'The control plane looks healthy, but the data-plane call above did not succeed.'
+        Write-Note 'Nothing in the account, the projects, the roles or the model deployments explains it.'
+        Write-Note 'Re-read the error printed in section 5 and see docs/azure-setup.md, "If provision.ps1 fails".'
+    }
+    else {
+        Write-Good 'Nothing wrong found. The account, the projects, the roles and the data plane all answered.'
+        Write-Note 'If provision.ps1 still fails, re-run it: the error it reported may have been transient.'
+    }
+}
+else {
+    foreach ($f in $findings) { Write-Bad $f; Write-Host '' }
+}
+
+Write-Host ''
