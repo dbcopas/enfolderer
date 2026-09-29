@@ -32,7 +32,10 @@ public sealed class ScanPlatformOptions
     /// </summary>
     public string? ManagedIdentityClientId { get; set; }
 
-    /// <summary>Lifetime of the write-only upload SAS handed to the desktop client.</summary>
+    /// <summary>
+    /// How long the client has to complete an upload before the target it was handed expires. The
+    /// upload goes to the API rather than to a blob SAS, because the storage account is private.
+    /// </summary>
     public TimeSpan UploadUrlLifetime { get; set; } = TimeSpan.FromMinutes(15);
 
     /// <summary>
