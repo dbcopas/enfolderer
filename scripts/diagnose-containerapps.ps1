@@ -193,16 +193,17 @@ foreach ($app in $apps) {
     $containers = @(Get-Prop (Get-Prop $props 'template') 'containers')
     $image = if ($containers.Count) { Get-Prop $containers[0] 'image' } else { '(none)' }
     $ingress = Get-Prop (Get-Prop $props 'configuration') 'ingress'
-    $port = if ($ingress) { Get-Prop $ingress 'targetPort' } else { '(no ingress)' }
+    $port = if ($ingress) { Get-Prop $ingress 'targetPort' } else { $null }
     $provisioningError = Get-Prop $props 'provisioningError'
     Write-Host "  $($app.Name)" -ForegroundColor White
-    Write-Note "state $(Get-Prop $props 'provisioningState'), image $image, targetPort $port"
+    $shownPort = if ($null -ne $port) { $port } else { '(no ingress)' }
+    Write-Note "state $(Get-Prop $props 'provisioningState'), image $image, targetPort $shownPort"
     if ($provisioningError) { Write-Bad "provisioningError: $provisioningError" }
 
     # The placeholder listens on 80 and our own images on 8080, so a mismatch here means the default
     # TCP startup probe can never connect and the revision is failed by the platform after roughly
-    # four minutes of trying.
-    if ($port -ne '(no ingress)') {
+    # four minutes of trying. The worker has no ingress, so no probe and no port to check.
+    if ($null -ne $port) {
         $isPlaceholder = $image -like 'mcr.microsoft.com/k8se/*'
         if ($isPlaceholder -and $port -ne 80) {
             Write-Bad "port mismatch: the placeholder image listens on 80 but targetPort is $port"
