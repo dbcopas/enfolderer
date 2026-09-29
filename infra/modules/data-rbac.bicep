@@ -81,7 +81,8 @@ resource apiCosmos 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@202
 }
 
 // --- Worker ----------------------------------------------------------------------------------
-// The worker does the cropping, so it is the only identity with write access to both containers.
+// The worker does the cropping, so it is the only identity that can write to crops. It reads the
+// original scans it crops from, but cannot write there.
 resource workerScans 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: scans
   name: guid(scans.id, workerPrincipalId, storageBlobDataReader)

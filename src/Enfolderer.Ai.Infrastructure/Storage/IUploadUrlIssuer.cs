@@ -4,9 +4,9 @@ namespace Enfolderer.Ai.Infrastructure.Storage;
 public sealed record UploadTarget(string UploadUrl, string BlobPath, DateTimeOffset ExpiresAt);
 
 /// <summary>
-/// Issues a short-lived, write-only upload grant for a single blob. The desktop client never sees
-/// a storage account key: the API holds only <c>Storage Blob Delegator</c> plus write access and
-/// mints a user-delegation SAS scoped to one blob path.
+/// Decides where the client should send the image for a single job, and for how long that offer
+/// stands. The desktop client never sees a storage account key or a blob URL: storage is private,
+/// so the only implementation points the client back at the API, which relays the bytes.
 /// </summary>
 public interface IUploadUrlIssuer
 {
