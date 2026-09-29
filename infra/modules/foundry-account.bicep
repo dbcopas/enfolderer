@@ -67,6 +67,29 @@ resource deployments 'Microsoft.CognitiveServices/accounts/deployments@2025-06-0
   }
 }]
 
+// The capability host is the agent backend: it tells Foundry Agent Service where to run agents and
+// store their threads. ARM provisions it as a separate sub-resource, so an account and a project
+// can both report Succeeded while the agents data plane has nothing behind it and answers every
+// call with 500 "Unable to get resource information."
+//
+// Declaring no storage, vector-store or thread-store connections is what selects the
+// Microsoft-managed resources behind it, which is what this demo wants: the isolation being
+// demonstrated is between the two projects, not between our own storage accounts.
+//
+// Capability hosts cannot be updated in place. If this ever needs changing, delete it and let the
+// next deployment recreate it; see "Neither agent surface answers" in docs/azure-setup.md.
+resource accountCapabilityHost 'Microsoft.CognitiveServices/accounts/capabilityHosts@2025-06-01' = {
+  parent: account
+  name: '${accountName}-caphost'
+  properties: {
+    capabilityHostKind: 'Agents'
+  }
+  // The account's own deployments must settle first: both contend for the same account, and ARM
+  // will reject a capability host created while a deployment is still in flight.
+  dependsOn: [ deployments ]
+}
+
 output accountId string = account.id
+output capabilityHostId string = accountCapabilityHost.id
 output accountName string = account.name
 output accountPrincipalId string = account.identity.principalId

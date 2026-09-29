@@ -295,6 +295,11 @@ function Get-CapabilityHosts {
     return ,@(Get-Prop $r 'value')
 }
 
+# Whether any capability host exists at all. On its own an empty list is not conclusive, because
+# the docs say the service falls back to Microsoft-managed resources without one. Combined with a
+# failing data plane it is the whole story, so it is recorded here and judged in section 7.
+$anyCapabilityHost = $false
+
 if (-not $subscriptionId) {
     Write-Note 'skipped: no subscription context'
 }
@@ -315,15 +320,16 @@ else {
 
         if ($hosts.Count -eq 0) {
             # Microsoft's docs say an explicit capability host is optional and that the service
-            # falls back to Microsoft-managed storage, so an empty list on its own is not a fault.
-            # A fresh agent-enabled account normally still shows an implicit one.
-            Write-Note "$($scope.Label) : none (the service should fall back to Microsoft-managed resources)"
+            # falls back to Microsoft-managed storage, so an empty list is not a fault by itself.
+            # Section 7 decides, once it knows whether the data plane actually answers.
+            Write-Note "$($scope.Label) : none"
             continue
         }
 
         foreach ($h in $hosts) {
             $hstate = Get-Prop (Get-Prop $h 'properties') 'provisioningState'
             if ($hstate -eq 'Succeeded') {
+                $anyCapabilityHost = $true
                 Write-Good "$($scope.Label) : $(Get-Prop $h 'name') $hstate"
             }
             else {
@@ -406,6 +412,16 @@ function Invoke-Probe {
             $detail = $_.PSObject.Properties['ErrorDetails']
             if ($detail -and $detail.Value) { $body = [string] $detail.Value.Message }
         }
+        # The status code is the part that separates "the service refused this request" from "the
+        # service broke trying to serve it", so capture it rather than leaving only the message.
+        $script:lastProbeStatus = 0
+        if ($respProp -and $respProp.Value) {
+            $codeProp = $respProp.Value.PSObject.Properties['StatusCode']
+            if ($codeProp -and $null -ne $codeProp.Value) {
+                $script:lastProbeStatus = [int] $codeProp.Value
+            }
+        }
+
         Write-Bad "  $Label : $($ex.Message)"
         if ($body) { Write-Note "    $($body -replace '\s+', ' ')" }
         $script:lastProbeBody = $body
@@ -414,27 +430,48 @@ function Invoke-Probe {
 }
 
 $gatewayOk = $null
+$reportedMissingCapHost = $false
 $script:lastProbeBody = ''
+$script:lastProbeStatus = 0
 
-# Before blaming the agents API, establish whether anything at all answers on this host. The
-# model-inference route shares the gateway and the account but not the agent backend, so a 200
-# here narrows the fault to agents, while a failure means the account or the region is sick and
-# no amount of changing which agent URL we call will help.
+# Before blaming the agents API, establish whether anything at all answers on this host. This route
+# shares the gateway, the DNS name and the account with the agents API but not the agent backend.
+#
+# What matters is not whether it returns 200 but *how* it fails. A 401, 403 or 404 is the gateway
+# making a decision: it resolved the host, read the token and answered deliberately, so the front
+# door is healthy and only the agent backend can be at fault. A 408 or 5xx is the gateway failing
+# to serve a request it accepted, which is an account-wide or regional problem. Treating all three
+# as "broken" would blame the region for what is really a missing agent backend.
 if ($endpointHost) {
     $csToken = az account get-access-token --resource 'https://cognitiveservices.azure.com' --query accessToken -o tsv 2>$null
     if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($csToken)) {
         $script:lastProbeBody = ''
+        $script:lastProbeStatus = 0
         $gateway = Invoke-Probe 'gateway (openai/deployments, not agents)' `
             "$endpointHost/openai/deployments?api-version=2024-10-21" $csToken.Trim()
+        $gatewayStatus = $script:lastProbeStatus
+
         if ($gateway) {
             Write-Good '  the account answers on this host, so the gateway and DNS are fine'
             $gatewayOk = $true
         }
+        elseif ($gatewayStatus -ge 400 -and $gatewayStatus -lt 500 -and $gatewayStatus -ne 408) {
+            # Not every account serves this particular route, so a 404 here is unremarkable. The
+            # useful part is that something answered it properly.
+            Write-Good "  the gateway answered deliberately ($gatewayStatus), so the host and DNS are fine"
+            $gatewayOk = $true
+        }
+        elseif ($gatewayStatus -eq 0) {
+            # Nothing came back at all: DNS, TLS or the network, rather than the service.
+            $gatewayOk = $false
+            $findings += ('Nothing answered on the account host at all, so this is a name-resolution or network ' +
+                          'problem rather than anything to do with agents.')
+        }
         else {
             $gatewayOk = $false
-            $findings += ('The account fails on a non-agent route too, so this is not about which agent API ' +
-                          'the scripts call. The account data plane or the region is at fault: see ' +
-                          '"Neither agent surface answers" in docs/azure-setup.md.')
+            $findings += ("The account broke serving a non-agent route too ($gatewayStatus), so this is not about " +
+                          'which agent API the scripts call. The account data plane or the region is at fault: ' +
+                          'see "Neither agent surface answers" in docs/azure-setup.md.')
         }
     }
     else { $gatewayOk = $null }
@@ -485,6 +522,22 @@ if ($token -and $endpointHost) {
             }
             # When the gateway probe already failed, it has reported this as the account-wide fault
             # it is, so repeating it once per project would only bury it.
+            elseif ($gatewayOk -ne $false -and -not $anyCapabilityHost -and -not $reportedMissingCapHost) {
+                $reportedMissingCapHost = $true
+                # The gateway answers, so the host is fine; the agents API fails for every project;
+                # and there is no capability host anywhere. "Unable to get resource information" is
+                # the gateway failing to resolve the project's agent backend, which is exactly what
+                # is missing. This is the most specific explanation the script can offer.
+                $findings += ("Neither agent surface answers for '$name', and there is no capability host on the " +
+                              'account or on any project (section 4). The capability host is the agent backend, ' +
+                              'so the service has nothing to resolve the project to, which is what "Unable to ' +
+                              'get resource information" means. infra/modules/foundry-account.bicep and ' +
+                              'foundry-project.bicep now create one each: redeploy, then re-provision the agents. ' +
+                              'See "Neither agent surface answers" in docs/azure-setup.md.')
+            }
+            elseif ($gatewayOk -ne $false -and -not $anyCapabilityHost) {
+                # Already reported above: it is one account-wide fault, not one per project.
+            }
             elseif ($gatewayOk -ne $false) {
                 # Neither surface answered, so nothing about which API the code calls is at issue.
                 # The gateway resolved the host and replied, so this is the account's data plane
