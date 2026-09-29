@@ -498,6 +498,11 @@ three Container Apps environments and the five container apps, and all the role 
 On the first run the registry has no images, so every container app starts on a placeholder — see
 [step 5](#5-host-the-mcp-servers).
 
+If that deployment fails, **do not simply run it again.** Go to
+[If the deployment fails](#if-the-deployment-fails) below and run the diagnostic first: several of
+the failures here cannot be repaired by redeploying, because the fix involves deleting something and
+`az deployment sub create` never deletes anything.
+
 Confirm the project-scoped role assignments landed, because this is the boundary the whole demo
 rests on and ARM will tell you plainly if it did not:
 
@@ -531,11 +536,31 @@ propagate; if the first scan fails with a 403, wait and retry before assuming a 
 
 ### If the deployment fails
 
+**Run this first.** It changes nothing, and it tells you which of the known causes you have hit
+instead of leaving you to infer it from an ARM error that is frequently empty:
+
+```powershell
+./scripts/diagnose-containerapps.ps1 -Prefix $prefix
+```
+
 Re-running the deployment is usually safe. ARM templates are declarative, so a second `az
 deployment sub create` reconciles whatever already exists rather than duplicating it; there is no
-need to delete the resource groups after a partial failure. **The one exception is a failed
-Container Apps environment** — see the first entry below, which is also the failure you are most
-likely to hit.
+need to delete the resource groups after a partial failure.
+
+**But re-running is not a repair.** `az deployment sub create` only creates and updates. It cannot
+delete anything, so any failure whose fix is "delete this and start again" will survive every retry
+and fail in exactly the same way. A failed Container Apps environment is precisely that failure, and
+it is the one you are most likely to hit — see the first entry below. When the diagnostic tells you
+an environment is unusable, the recovery is:
+
+```powershell
+./scripts/migrate-to-containerapps.ps1 -Prefix $prefix -Confirm:$false
+```
+
+That script is the deployment path for anything other than a clean first run: it deletes what has to
+be deleted, in the order it has to happen, and then runs the same deployment as above. The name says
+"migrate" because that is what it was written for, but every failure mode in this section is encoded
+in it as a preflight check.
 
 - **`SubscriptionNotRegisteredForFeature ... Microsoft.Network/AllowBringYourOwnPublicIpAddress`**,
   reported by `ConfigureAllocatedClusterHandler` after a long wait, for every environment at once.
