@@ -533,39 +533,40 @@ if ($token -and $endpointHost) {
         Write-Host "  $name" -ForegroundColor White
         $probeAttempted = $true
 
-        # Both routes live on the same host and take the same token, so calling each in turn
-        # separates "this project is unreachable" from "this project is fine but the route the
-        # scripts use does not answer".
+        # /assistants and /agents are two different resource models on one host, not an old and a
+        # new spelling of one list:
+        #   /assistants  classic Foundry Agent Service (spec ai/data-plane/AIAgents). Objects have
+        #                asst_ ids. This is what provision.ps1 creates and the worker runs.
+        #   /agents      Foundry "agents v2" (spec ai-foundry/data-plane/Foundry). Objects are
+        #                name-keyed and versioned, and are created by POST /agents.
+        # A classic assistant is never projected into the v2 registry, so /agents being empty is
+        # the expected reading of a healthy project, not a sign that anything is missing. It is
+        # probed only to show that the host serves both, and the two lists are never compared.
         $script:lastProbeBody = ''
-        $classic = Invoke-Probe 'assistants (the route provision.ps1 uses)' `
+        $classic = Invoke-Probe 'assistants (classic: the agents this repo creates)' `
             "$endpointHost/api/projects/$name/assistants?api-version=$ApiVersion" $token
         $classicBody = $script:lastProbeBody
 
         $classicNames = if ($classic) { Get-AgentNames $classic } else { $null }
         if ($classic) {
             if ($null -eq $classicNames) {
-                Write-Warn "  assistants (the route provision.ps1 uses) : 200, but the reply carries no agent list"
+                Write-Warn "  assistants (classic) : 200, but the reply carries no agent list"
             }
             else {
-                Write-Good "  assistants (the route provision.ps1 uses) : 200, $($classicNames.Count) agent(s)$(if ($classicNames.Count) { ' : ' + ($classicNames -join ', ') })"
+                Write-Good "  assistants (classic) : 200, $($classicNames.Count) agent(s)$(if ($classicNames.Count) { ' : ' + ($classicNames -join ', ') })"
             }
         }
 
         $script:lastProbeBody = ''
-        $current = Invoke-Probe 'agents (the other documented route)' `
+        $current = Invoke-Probe 'agents (v2 registry: separate resource model)' `
             "$endpointHost/api/projects/$name/agents?api-version=$ApiVersion" $token
 
-        # $null here means the reply held no list at all, which is not the same as a list of none.
         $currentNames = if ($current) { Get-AgentNames $current } else { $null }
         if ($current) {
-            if ($null -eq $currentNames) {
-                # Answering 200 with no list at all means this route is not the question we think
-                # we are asking, so it says nothing about whether the agents exist.
-                Write-Note "  agents (the other documented route) : 200, but the reply carries no agent list"
-                Write-Note "  so this route is not a second view of the same agents; it is not evidence they are missing"
-            }
-            else {
-                Write-Good "  agents (the other documented route) : 200, $($currentNames.Count) agent(s)$(if ($currentNames.Count) { ' : ' + ($currentNames -join ', ') })"
+            $count = if ($null -eq $currentNames) { 0 } else { $currentNames.Count }
+            Write-Note "  agents (v2 registry, separate from the above) : 200, $count agent(s)$(if ($count) { ' : ' + ($currentNames -join ', ') })"
+            if (-not $count) {
+                Write-Note '  empty is expected: this repo creates classic agents, which do not appear here'
             }
         }
 
@@ -594,23 +595,6 @@ if ($token -and $endpointHost) {
                 }
             }
 
-            # Only compare the two routes when both actually returned a list. When /agents answers
-            # 200 without one, it is not listing these agents at all, and reading that as "the
-            # agents are missing from it" would condemn every healthy agent in the project.
-            #
-            # Deleting a working agent is not recoverable from a diagnostic's mistake, so this
-            # never advises deletion: it reports the disagreement and leaves the decision out.
-            if ($null -ne $classicNames -and $null -ne $currentNames -and $currentNames.Count) {
-                $onlyClassic = @($classicNames | Where-Object { $_ -notin $currentNames })
-                if ($onlyClassic.Count) {
-                    Write-Warn "  listed by /assistants but not by /agents : $($onlyClassic -join ', ')"
-                    $findings += ("In project '$name', $($onlyClassic -join ', ') " +
-                                  "$(if ($onlyClassic.Count -eq 1) { 'is' } else { 'are' }) returned by /assistants " +
-                                  'but not by /agents, even though /agents did return a list of others. That is a ' +
-                                  'genuine disagreement worth understanding before the demo. Do not delete anything ' +
-                                  'on the strength of it alone: check the agent in the Foundry portal first.')
-                }
-            }
         }
 
         # Classify on both replies together. The service alternates between 408 and 500 for the
@@ -619,9 +603,10 @@ if ($token -and $endpointHost) {
         $bothBodies = @($classicBody, $script:lastProbeBody) -join ' '
 
         if (-not $classic -and $current) {
-            $findings += ("Project '$name' is reachable, but the Assistants surface the scripts call is not. " +
-                          'It retired on 2026-08-26 and /agents answered in its place, so this is a code ' +
-                          'change rather than a redeployment: see "The Assistants API has retired" in ' +
+            $findings += ("Project '$name' is reachable, but the classic /assistants route this repo uses is " +
+                          'not, while the v2 /agents route is. The classic route is deprecated with an ' +
+                          'announced sunset of 2026-08-26, so this is the migration finally biting: it needs a ' +
+                          'code change, not a redeployment. See "The Assistants API is deprecated" in ' +
                           'docs/azure-setup.md.')
         }
         elseif (-not $classic -and -not $current) {
