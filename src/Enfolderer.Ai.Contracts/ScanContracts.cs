@@ -194,16 +194,10 @@ public sealed record CreateJobRequest
     [JsonPropertyName("gameHint")] public string? GameHint { get; init; }
 }
 
-/// <summary>Response for <c>POST /jobs</c>: where and how to upload the image.</summary>
+/// <summary>Response for <c>POST /jobs</c>: the job id and the window for sending the image.</summary>
 public sealed record CreateJobResponse
 {
     [JsonPropertyName("jobId")] public string JobId { get; init; } = string.Empty;
-
-    /// <summary>
-    /// Where the client must PUT the image, relative to its configured API base address. Storage is
-    /// private, so the upload goes through the API rather than straight to a blob.
-    /// </summary>
-    [JsonPropertyName("uploadUrl")] public string UploadUrl { get; init; } = string.Empty;
 
     [JsonPropertyName("blobPath")] public string BlobPath { get; init; } = string.Empty;
 

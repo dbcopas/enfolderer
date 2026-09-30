@@ -14,10 +14,10 @@ using Enfolderer.Ai.Contracts;
 namespace Enfolderer.App.Utilities;
 
 /// <summary>
-/// Talks to the Azure-hosted scan API: create a job, upload the image with the returned write-only
-/// SAS, submit it, then poll until the multi-agent pipeline produces a result document.
-/// The desktop app holds no storage key and no client secret; it presents a user token obtained by
-/// interactive Entra ID sign-in.
+/// Talks to the Azure-hosted scan API: create a job, PUT the image to the API, submit it, then poll
+/// until the multi-agent pipeline produces a result document. The storage account has no public
+/// endpoint, so every byte goes through the API; the desktop app holds no storage key and no client
+/// secret, and presents a user token obtained by interactive Entra ID sign-in.
 /// </summary>
 public sealed class AiScanClient
 {
@@ -66,7 +66,7 @@ public sealed class AiScanClient
             ct);
 
         statusCallback?.Invoke($"Uploading {fileName}...");
-        await UploadAsync(job.UploadUrl, imagePath, ct);
+        await UploadAsync(job.JobId, imagePath, ct);
 
         statusCallback?.Invoke("Submitting job...");
         await PostAsync<object?, JobStatusResponse>($"jobs/{job.JobId}/submit", null, ct);
@@ -133,21 +133,17 @@ public sealed class AiScanClient
         _ => status.Status.ToString()
     };
 
-    private async Task UploadAsync(string uploadUrl, string imagePath, CancellationToken ct)
+    private async Task UploadAsync(string jobId, string imagePath, CancellationToken ct)
     {
         await using var file = File.OpenRead(imagePath);
         using var content = new StreamContent(file);
         content.Headers.ContentType = new MediaTypeHeaderValue(GuessContentType(imagePath));
 
-        // The API issues a relative URL, so it resolves against whatever base address this client
-        // was configured with and the API never has to know its own public hostname.
-        var target = new Uri(_apiBaseUrl, uploadUrl);
+        // The route is fixed and built here rather than taken from the response, so there is no
+        // server-supplied URL that could send the image, and the bearer token with it, anywhere
+        // other than the API this client was configured to trust.
+        var target = new Uri(_apiBaseUrl, $"jobs/{jobId}/content");
         using var request = new HttpRequestMessage(HttpMethod.Put, target) { Content = content };
-
-        // Storage is private, so the upload always goes to the API and always needs a bearer token.
-        // An absolute URL pointing anywhere else is refused rather than sent unauthenticated.
-        if (!IsApiUrl(target))
-            throw new InvalidOperationException($"The scan API asked for an upload to an unexpected host: {target}.");
         await AuthorizeAsync(request, ct);
 
         using var response = await _http.SendAsync(request, ct);
@@ -195,9 +191,6 @@ public sealed class AiScanClient
         var body = await response.Content.ReadAsStringAsync(ct);
         throw new InvalidOperationException($"Failed to {what}: HTTP {(int)response.StatusCode}. {body}");
     }
-
-    internal bool IsApiUrl(Uri url) =>
-        Uri.Compare(url, _apiBaseUrl, UriComponents.SchemeAndServer, UriFormat.SafeUnescaped, StringComparison.OrdinalIgnoreCase) == 0;
 
     private static string GuessContentType(string path) => Path.GetExtension(path).ToLowerInvariant() switch
     {

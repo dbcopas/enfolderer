@@ -54,8 +54,8 @@ public sealed class FoundryAgentClient
     /// <paramref name="prompt"/> and, optionally, an image, then returns the agent's reply text.
     /// <para>
     /// The image is uploaded to the project and referenced by file id rather than passed as a URL.
-    /// The storage account is private, so a blob URL — SAS or not — is not something the Foundry
-    /// service can fetch: it runs outside our VNet. Uploading also means each project receives only
+    /// The storage account has no public endpoint, so no blob URL is fetchable by the Foundry
+    /// service, which runs outside our VNet. Uploading also means each project receives only
     /// the bytes the orchestrator chose to send it, which is a tighter boundary than a
     /// container-scoped read grant.
     /// </para>

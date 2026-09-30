@@ -13,7 +13,7 @@ using Enfolderer.Ai.Worker.Queueing;
 // exec`, and because dropping the listener buys nothing.
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddScanPlatform(builder.Configuration, registerUploadUrlIssuer: false);
+builder.Services.AddScanPlatform(builder.Configuration);
 
 var pipeline = new ScanPipelineOptions();
 builder.Configuration.GetSection(ScanPipelineOptions.SectionName).Bind(pipeline);

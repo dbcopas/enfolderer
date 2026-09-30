@@ -25,7 +25,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     // the more honest posture for a store of customer photographs. Everything that reads or writes
     // blobs reaches the account through the private endpoints in modules/network.bicep; nothing
     // touches it from the public internet, including the desktop app, which uploads through the
-    // API instead of with a SAS.
+    // API. This is permanent: no client is ever given a blob URL to write to.
     publicNetworkAccess: 'Disabled'
     // The API and worker present an Entra identity, so shared keys are switched off: there is no
     // account key to leak, and a private endpoint on its own would not have prevented that.

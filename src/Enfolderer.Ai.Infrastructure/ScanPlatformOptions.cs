@@ -33,10 +33,11 @@ public sealed class ScanPlatformOptions
     public string? ManagedIdentityClientId { get; set; }
 
     /// <summary>
-    /// How long the client has to complete an upload before the target it was handed expires. The
-    /// upload goes to the API rather than to a blob SAS, because the storage account is private.
+    /// How long the client has to send the image after creating a job. The storage account has no
+    /// public endpoint, so the image is always PUT to the API, which relays it; this window only
+    /// bounds how long a job may sit waiting for those bytes.
     /// </summary>
-    public TimeSpan UploadUrlLifetime { get; set; } = TimeSpan.FromMinutes(15);
+    public TimeSpan UploadWindow { get; set; } = TimeSpan.FromMinutes(15);
 
     /// <summary>
     /// Root directory used by every local development fallback (image store and file queue).
