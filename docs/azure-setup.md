@@ -1741,11 +1741,29 @@ $gateway = az apim show -g $rg -n "$prefix-apim" --query gatewayUrl -o tsv
 Invoke-RestMethod -Uri "$gateway/scan/healthz"
 ```
 
-`status : ok` means the gateway, the wildcard operations and the backend URL are all correct. A
-`404` with `"Resource not found"` in a JSON body is APIM itself saying no operation matched — go
-back and add the operations above. Note that the backend has no `/scan` prefix of its own: APIM
-strips it before forwarding, so testing the container app directly means
-`https://<app-fqdn>/healthz`, not `/scan/healthz`.
+`status : ok` means the gateway, the wildcard operations and the backend URL are all correct.
+
+Read a 404 by its body, because two different things return one:
+
+| Response | Who answered | Cause |
+| --- | --- | --- |
+| JSON, `{"statusCode": 404, "message": "Resource not found"}` | APIM | No operation matched — add the wildcard operations above |
+| Plain text, `404 page not found` | the backend | APIM forwarded correctly; the container app has no such route |
+
+The second one is the more confusing, because it means the gateway is working. Check what the app
+is actually running before looking anywhere else:
+
+```powershell
+az containerapp show -g $rg -n "$prefix-api" `
+  --query "properties.template.containers[0].image" -o tsv
+```
+
+If that prints `mcr.microsoft.com/k8se/quickstart:latest`, the app never left the placeholder from
+step 3 and is not this project's code at all. That image is a Go sample whose 404 body is exactly
+`404 page not found`. Go back and run step 5.
+
+Note also that the backend has no `/scan` prefix of its own: APIM strips it before forwarding, so
+testing the container app directly means `https://<app-fqdn>/healthz`, not `/scan/healthz`.
 
 Repoint the desktop app at the gateway. The `--path scan` above means the gateway prefixes every
 route, so the base URL ends in `/scan`:
