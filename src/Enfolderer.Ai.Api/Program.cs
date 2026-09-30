@@ -27,7 +27,7 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
 });
 
-builder.Services.AddScanPlatform(builder.Configuration, registerUploadUrlIssuer: true);
+builder.Services.AddScanPlatform(builder.Configuration);
 
 // Entra ID protection. The desktop client signs in interactively and presents a user token; it
 // never holds a client secret or a storage key.
@@ -63,7 +63,6 @@ if (entraConfigured) jobs.RequireAuthorization();
 jobs.MapPost("/", async (
     CreateJobRequest request,
     IJobStore store,
-    IUploadUrlIssuer issuer,
     ILoggerFactory loggerFactory,
     TokenCredential credential,
     ScanPlatformOptions platform,
@@ -71,52 +70,25 @@ jobs.MapPost("/", async (
 {
     var jobId = Guid.NewGuid().ToString("n");
 
-    UploadTarget target;
+    // The storage account has no public endpoint, so there is no URL that would let the client
+    // write the blob itself. The path is derived here only so that the job document and the worker
+    // agree on where the image will land once PUT /jobs/{id}/content relays it.
+    var blobPath = $"{ScanBlobPaths.ScansContainer}/{ScanBlobPaths.BuildScanBlobName(jobId, request.FileName)}";
+    var uploadExpiresAt = DateTimeOffset.UtcNow.Add(platform.UploadWindow);
+
     try
     {
-        target = await issuer.IssueAsync(jobId, request.FileName, ct);
-
         var job = new ScanJobDocument
         {
             Id = jobId,
             JobId = jobId,
             Status = ScanJobStatus.Pending,
-            BlobPath = target.BlobPath,
-            UploadExpiresAt = target.ExpiresAt,
+            BlobPath = blobPath,
+            UploadExpiresAt = uploadExpiresAt,
             GameHint = string.IsNullOrWhiteSpace(request.GameHint) ? null : CardGames.Normalize(request.GameHint)
         };
 
-        // Recording the job authenticates with the same identity, so it can fail the same two ways
-        // and belongs under the same handling.
         await store.CreateAsync(job, ct);
-    }
-    catch (RequestFailedException ex)
-    {
-        // Creating a job is the first thing that touches Azure, so a misconfigured or
-        // not-yet-propagated role assignment surfaces here. Report the storage error code rather
-        // than an unhandled 500, which says only that something went wrong somewhere.
-        //
-        // Name the principal too. "The managed identity needs role X" is unhelpful when the real
-        // fault is that a different identity was presented than the one the role was granted to,
-        // which is the failure a host carrying several identities actually produces.
-        var log = loggerFactory.CreateLogger("Jobs");
-
-        var principal = await IdentityDiagnostics.DescribeAsync(
-            credential, "https://storage.azure.com/.default", log, ct);
-
-        log.LogError(
-            ex, "Azure refused job {JobId} for {Principal} (configured client id {ClientId}): {ErrorCode}",
-            jobId, principal, platform.ManagedIdentityClientId ?? "(unset)", ex.ErrorCode);
-
-        return Results.Problem(
-            title: "Could not create the scan job.",
-            detail: $"Azure Storage returned {ex.Status} {ex.ErrorCode} for the identity {principal}. "
-                  + "That principal needs Storage Blob Data Contributor on the scans container. "
-                  + "Compare the object id against `az role assignment list`: "
-                  + "if it does not match, the site is presenting a different identity than the one "
-                  + "the roles were granted to. A newly granted role can take several minutes to "
-                  + "take effect.",
-            statusCode: StatusCodes.Status502BadGateway);
     }
     catch (CosmosException ex) when (ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
     {
@@ -170,9 +142,8 @@ jobs.MapPost("/", async (
     return Results.Ok(new CreateJobResponse
     {
         JobId = jobId,
-        UploadUrl = target.UploadUrl,
-        BlobPath = target.BlobPath,
-        UploadExpiresAt = target.ExpiresAt
+        BlobPath = blobPath,
+        UploadExpiresAt = uploadExpiresAt
     });
 });
 
@@ -183,6 +154,9 @@ jobs.MapPut("/{jobId}/content", async (
     HttpRequest request,
     IJobStore store,
     IScanImageStore images,
+    ILoggerFactory loggerFactory,
+    TokenCredential credential,
+    ScanPlatformOptions platform,
     CancellationToken ct) =>
 {
     // Photographs of a full binder page are larger than Kestrel's 30 MB default, and the failure
@@ -205,7 +179,54 @@ jobs.MapPut("/{jobId}/content", async (
             detail: $"The upload window closed at {job.UploadExpiresAt:O}. Create a new job with POST /jobs.",
             statusCode: StatusCodes.Status410Gone);
 
-    await images.WriteAsync(job.BlobPath, request.Body, request.ContentType ?? "application/octet-stream", ct);
+    try
+    {
+        await images.WriteAsync(job.BlobPath, request.Body, request.ContentType ?? "application/octet-stream", ct);
+    }
+    catch (RequestFailedException ex)
+    {
+        // This is the only place the API writes a blob, so a misconfigured or not-yet-propagated
+        // role assignment surfaces here. Report the storage error code rather than an unhandled
+        // 500, which says only that something went wrong somewhere.
+        //
+        // Name the principal too. "The managed identity needs role X" is unhelpful when the real
+        // fault is that a different identity was presented than the one the role was granted to,
+        // which is the failure a host carrying several identities actually produces.
+        var log = loggerFactory.CreateLogger("Jobs");
+
+        var principal = await IdentityDiagnostics.DescribeAsync(
+            credential, "https://storage.azure.com/.default", log, ct);
+
+        log.LogError(
+            ex, "Azure refused the image for job {JobId} from {Principal} (configured client id {ClientId}): {ErrorCode}",
+            jobId, principal, platform.ManagedIdentityClientId ?? "(unset)", ex.ErrorCode);
+
+        return Results.Problem(
+            title: "Could not store the scan image.",
+            detail: $"Azure Storage returned {ex.Status} {ex.ErrorCode} for the identity {principal}. "
+                  + "That principal needs Storage Blob Data Contributor on the scans container. "
+                  + "Compare the object id against `az role assignment list`: "
+                  + "if it does not match, the site is presenting a different identity than the one "
+                  + "the roles were granted to. A newly granted role can take several minutes to "
+                  + "take effect.",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+    catch (AuthenticationFailedException ex)
+    {
+        // Azure never saw the request: the identity could not get a token at all. The message is
+        // logged but deliberately not returned, because DefaultAzureCredential enumerates every
+        // credential it tried, which describes the inside of the host to its callers.
+        loggerFactory.CreateLogger("Jobs").LogError(
+            ex, "Could not acquire a token to store the image for job {JobId}", jobId);
+
+        return Results.Problem(
+            title: "Could not store the scan image.",
+            detail: "The API could not acquire a managed identity token, so Azure was never called. "
+                  + "Check that the app has the expected user-assigned identity and that "
+                  + "ScanPlatform__ManagedIdentityClientId names it. See the API log for details.",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+
     return Results.Accepted();
 });
 

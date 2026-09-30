@@ -20,8 +20,7 @@ public static class ScanPlatformServiceCollectionExtensions
 {
     public static IServiceCollection AddScanPlatform(
         this IServiceCollection services,
-        IConfiguration configuration,
-        bool registerUploadUrlIssuer)
+        IConfiguration configuration)
     {
         var options = new ScanPlatformOptions();
         configuration.GetSection(ScanPlatformOptions.SectionName).Bind(options);
@@ -81,13 +80,6 @@ public static class ScanPlatformServiceCollectionExtensions
             var queueService = new QueueServiceClient(new Uri(options.QueueAccountUrl!), sp.GetRequiredService<TokenCredential>());
             return new StorageQueueJobQueue(queueService.GetQueueClient(options.QueueName));
         });
-
-        if (registerUploadUrlIssuer)
-        {
-            // One issuer for both the local and the Azure case: the client always uploads to the
-            // API. Against Azure storage a SAS is not an option, because the account is private.
-            services.AddSingleton<IUploadUrlIssuer>(new ApiUploadUrlIssuer(options.UploadUrlLifetime));
-        }
 
         return services;
     }
