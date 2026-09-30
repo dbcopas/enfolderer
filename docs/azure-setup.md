@@ -884,7 +884,7 @@ and prints what came back. It changes nothing.
   500 and the next identical call with a 408.
 
   If `/assistants` fails but `/agents` answers, read
-  [The Assistants API has retired](#the-assistants-api-has-retired) below: the deployment is fine
+  [The Assistants API is deprecated](#the-assistants-api-is-deprecated) below: the deployment is fine
   and the code is calling a surface that no longer exists.
 
   If **both** fail, see [Neither agent surface answers](#neither-agent-surface-answers). The
@@ -921,24 +921,41 @@ and prints what came back. It changes nothing.
 - **A tool or connected agent is rejected** — that is the agent content rather than the project, and
   it is covered by [Attaching the MCP tools](#attaching-the-mcp-tools) above.
 
-### The Assistants API has retired
+### The Assistants API is deprecated
 
 **This affects this repository directly and is not something you can fix by redeploying.**
 
-Azure AI Foundry has had two agent data planes living on the same project endpoint:
+Azure AI Foundry has two agent data planes living on the same project endpoint. They are **two
+different resource models, not an old and a new spelling of one thing**:
 
-| | Path | Shape | Status |
+| | Path | Objects | Status |
 | --- | --- | --- | --- |
-| Classic ("Assistants") | `/assistants`, `/threads`, `/runs` | OpenAI Assistants-compatible | **retired 2026-08-26** |
-| Foundry Agent Service | `/agents`, `/conversations`, `/responses` | versioned agents, Responses API | current GA |
+| Classic ("Assistants") | `/assistants`, `/threads`, `/runs` | `asst_…` ids | deprecated, announced sunset **2026-08-26**, still served |
+| Foundry agents v2 | `/agents`, `/conversations`, `/responses` | name-keyed, versioned | current GA |
 
 `agents/provision.ps1`, `scripts/cleanup.ps1` and the worker's `FoundryAgentClient` were all written
 against the classic surface. It worked when the demo was first built, and it is on borrowed time
 now.
 
-What the gateway returns for a retired path is **not documented**, and it is not a clean 404. Do not
-read a 500 on `/assistants` as proof of the retirement on its own — a sick account returns the same
-500. The retirement is only demonstrated when `/assistants` fails **and `/agents` succeeds**.
+**An agent created through `/assistants` is never projected into `/agents`.** The v2 registry is a
+separate store, populated only by `POST /agents`. So `GET /agents` returning an empty `data` array
+is the *expected* reading of a perfectly healthy project that was provisioned by this repository —
+it is not evidence that anything is missing, and it is never a reason to delete or re-create an
+agent that `/assistants` lists. `diagnose-foundry.ps1` reports the two independently and does not
+compare them.
+
+Because they are separate stores, the sunset is a **migration, not a route rename**: the successor
+to `/assistants` is `POST /agents` for definitions, and `/conversations` plus `/responses` for
+execution. Nothing redirects.
+
+What the gateway returns for a sunset path is **not documented**, and it is not a clean 404. Do not
+read a 500 on `/assistants` as proof of the sunset on its own — a sick account returns the same
+500. Enforcement is only demonstrated when `/assistants` fails **and `/agents` succeeds**.
+
+> Microsoft's docs describe the classic surface as deprecated with an announced sunset date, and the
+> route is still present, un-removed, in the current `azure-rest-api-specs` TypeSpec for
+> api-versions `2025-05-01`, `v1` and `2025-05-15-preview`. Treat "retired" as *announced but not
+> yet enforced*, and let your own `200` be the evidence.
 
 Confirm it in one call. Both surfaces take the same token and the same project endpoint, so the only
 variable is the path:
@@ -948,10 +965,10 @@ $token = az account get-access-token --resource https://ai.azure.com --query acc
 $headers = @{ Authorization = 'Bearer ' + $token }
 $project = 'https://enf-demo-ai.services.ai.azure.com/api/projects/cardgeo'
 
-# the retired surface
+# the classic surface: this is where this repository's agents live
 try { Invoke-RestMethod "$project/assistants?api-version=v1" -Headers $headers } catch { $_.ErrorDetails.Message }
 
-# the current surface
+# the v2 registry: expected to be empty unless you created agents with POST /agents
 try { Invoke-RestMethod "$project/agents?api-version=v1" -Headers $headers } catch { $_.ErrorDetails.Message }
 ```
 
