@@ -25,6 +25,15 @@
     },
     "mcpAudience": {
       "value": ""
+    },
+    "boundaryAgentId": {
+      "value": "CardBoundaryAgent"
+    },
+    "mtgAgentId": {
+      "value": "MtgCardIdAgent"
+    },
+    "pokemonAgentId": {
+      "value": "PokemonCardIdAgent"
     }
   }
 }

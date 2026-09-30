@@ -53,6 +53,22 @@ and `az containerapp update --image`, not a redeployment of this template.
 ''')
 param imageTag string = ''
 
+// Set these once the agents exist and you have read their ids back; `agents/provision.ps1` prints
+// them. The defaults are the agent names, which the data plane only accepts if it keys agents by
+// name — usually it does not, and the worker fails every run until the real `asst_…` ids are here.
+//
+// They are template parameters rather than something you set afterwards with
+// `az containerapp update` because every deployment rewrites the container app's environment: a
+// value set by hand survives only until the next redeploy.
+@description('Agent id of Team A\'s boundary agent, e.g. asst_….')
+param boundaryAgentId string = 'CardBoundaryAgent'
+
+@description('Agent id of Team B\'s Magic: The Gathering identification agent, e.g. asst_….')
+param mtgAgentId string = 'MtgCardIdAgent'
+
+@description('Agent id of Team B\'s Pokemon identification agent, e.g. asst_….')
+param pokemonAgentId string = 'PokemonCardIdAgent'
+
 resource platformRg 'Microsoft.Resources/resourceGroups@2023-07-01' = {
   name: '${namePrefix}-platform'
   location: location
@@ -275,6 +291,9 @@ module hosting 'modules/hosting.bicep' = {
     workerIdentityClientId: workerIdentity.outputs.clientId
     geometryProjectEndpoint: geometryProject.outputs.projectEndpoint
     identificationProjectEndpoint: identificationProject.outputs.projectEndpoint
+    boundaryAgentId: boundaryAgentId
+    mtgAgentId: mtgAgentId
+    pokemonAgentId: pokemonAgentId
   }
 }
 
