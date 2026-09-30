@@ -1428,7 +1428,29 @@ Check each one is alive before wiring it to an agent. `/healthz` is deliberately
 can do this without a token:
 
 ```powershell
-Invoke-RestMethod "$($mcp['mcp-imaging'] -replace '/mcp$', '/healthz')"
+foreach ($entry in $mcp.GetEnumerator()) {
+  $url = $entry.Value -replace '/mcp$', '/healthz'
+  try {
+    "{0,-26} {1}" -f $entry.Key, (Invoke-RestMethod $url -TimeoutSec 20).status
+  }
+  catch {
+    "{0,-26} FAILED: {1}" -f $entry.Key, $_.Exception.Message
+  }
+}
+```
+
+All three should report `ok`. The `try` has to be a statement in its own right: PowerShell has no
+try *expression*, so folding it into the output string as `"..." + (try { ... })` fails to parse
+with `The term 'try' is not recognized as a name of a cmdlet`.
+
+If a server reports `FAILED`, it is not serving yet, and attaching its tool to an agent will appear
+to succeed and then fail at run time. Check whether it is still on the placeholder image:
+
+```powershell
+foreach ($rg in $geometryRg, $identificationRg) {
+  az containerapp list -g $rg `
+    --query "[].{Name:name, Image:properties.template.containers[0].image}" -o table
+}
 ```
 
 Container Apps FQDNs contain a generated suffix, so there is no hostname you can write out by
