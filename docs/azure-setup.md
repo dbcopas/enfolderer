@@ -1309,6 +1309,37 @@ Every service is built from the single `src/Dockerfile`; `PROJECT` selects which
 happens in Azure — `az acr build` uploads the source and ACR Tasks compiles it — so you need
 neither Docker nor the .NET SDK locally.
 
+One script does the build and the redeploy that follows it, and then checks the result. Run it from
+the repository root:
+
+```powershell
+./scripts/deploy-images.ps1
+```
+
+It picks a fresh tag from the current UTC time, builds all five images, redeploys the template with
+that tag, and finishes by printing the image each app is running and calling the API's `/healthz`.
+Expect it to take ten to fifteen minutes, nearly all of it in the builds.
+
+Use it every time you change code, not just the first time. It is the answer to "how do I deploy
+what I just wrote".
+
+Two things it does that are easy to get wrong by hand. It always picks a **new** tag, because ARM
+and `az containerapp update` both diff the template — re-pushing the same tag produces no new
+revision and your change silently does not go live. And it **replays the parameters of the previous
+deployment** rather than reading `infra/main.parameters.json`, which is checked in holding
+placeholder object ids; deploying from that file when you supplied the real ids on the command line
+would revoke the role assignments the demo is about. Pass `-UseParametersFile` if your copy of that
+file does hold your real values and you would rather use it.
+
+To roll back, point the apps at a tag already in the registry without rebuilding:
+
+```powershell
+./scripts/deploy-images.ps1 -SkipBuild -Tag v1
+```
+
+The rest of this section is what the script does, if you would rather run it yourself or need to
+adapt it.
+
 ```powershell
 $acr = az deployment sub show --name enfolderer-scan `
   --query properties.outputs.registryName.value -o tsv
@@ -1337,6 +1368,8 @@ The backtick in ``"enfolderer/$image`:$tag"`` escapes the colon. PowerShell woul
 `$image:` as a scoped variable and expand the whole thing to nothing.
 
 ### Point the apps at the images
+
+`deploy-images.ps1` above already did this. Read on only if you ran the build by hand.
 
 The first deployment in step 3 had no images to run, so every app started on a Microsoft sample
 container. Redeploy with the tag to switch them over:
