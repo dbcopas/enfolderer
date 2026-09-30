@@ -1247,16 +1247,42 @@ Create them in this order:
 
 ### Record the agent ids
 
-The worker defaults to using the agent *names* as ids. If the ids differ — the data plane usually
-returns `asst_…` values — set them explicitly:
+The worker passes these straight to the agent data plane as `assistant_id`, and that plane keys
+agents by an `asst_…` value rather than by the name in the YAML. The template defaults to the
+names, which fails every run, so record the real ids now.
+
+Put them in `infra/main.parameters.json`, alongside the values already there:
+
+```json
+"boundaryAgentId": { "value": "asst_..." },
+"mtgAgentId":      { "value": "asst_..." },
+"pokemonAgentId":  { "value": "asst_..." }
+```
+
+Then apply them with a deployment:
 
 ```powershell
-az containerapp update `
-  --resource-group $platformRg --name "$prefix-worker" --set-env-vars `
-  ScanPipeline__BoundaryAgentId="<boundary agent id>" `
-  ScanPipeline__IdentificationAgentIds__mtg="<mtg agent id>" `
-  ScanPipeline__IdentificationAgentIds__pokemon="<pokemon agent id>"
+az deployment sub create --name enfolderer-scan --location $location `
+  --template-file infra/main.bicep --parameters infra/main.parameters.json `
+  --parameters boundaryAgentId=$boundaryId mtgAgentId=$mtgId pokemonAgentId=$pokemonId
 ```
+
+**Do not set these with `az containerapp update --set-env-vars`.** It works, and it lasts until the
+next deployment: every `az deployment sub create` rewrites the container app's environment from the
+template, so hand-set variables are silently reverted and the worker goes back to calling the agents
+by name. Passing them as parameters makes them stick, because
+[`deploy-images.ps1`](#build-and-push-the-images) replays the previous deployment's parameters on
+every later run.
+
+Check what the worker is actually using at any time:
+
+```powershell
+az containerapp show -g $platformRg -n "$prefix-worker" `
+  --query "properties.template.containers[0].env[?starts_with(name,'ScanPipeline__')].{name:name,value:value}" -o table
+```
+
+If that prints `CardBoundaryAgent` rather than an `asst_…` value, the ids have been reverted — or
+were never applied.
 
 <a id="re-provisioning-the-agents"></a>
 ### Re-provisioning the agents after a redeploy

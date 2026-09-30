@@ -53,6 +53,19 @@ param workerIdentityId string
 @description('Client id of the worker\'s user-assigned managed identity.')
 param workerIdentityClientId string
 
+// The worker passes these straight to the agent data plane as assistant_id, so they must be
+// whatever that plane calls the agent — usually an `asst_…` value, not the name in the YAML. They
+// are parameters rather than literals because every redeploy rewrites the container app's
+// environment, so a value set with `az containerapp update` survives only until the next one.
+@description('Agent id of Team A\'s boundary agent, e.g. asst_…. Defaults to its name, which only works if the agent data plane keys agents by name.')
+param boundaryAgentId string = 'CardBoundaryAgent'
+
+@description('Agent id of Team B\'s Magic: The Gathering identification agent, e.g. asst_….')
+param mtgAgentId string = 'MtgCardIdAgent'
+
+@description('Agent id of Team B\'s Pokemon identification agent, e.g. asst_….')
+param pokemonAgentId string = 'PokemonCardIdAgent'
+
 // Until the first `az acr build`, there is nothing to pull. The placeholder is Microsoft's own
 // sample image; it does nothing useful, and the app is meant to be pointed at a real tag straight
 // afterwards. Registry credentials are omitted in that state too, so a deployment cannot fail on
@@ -213,15 +226,15 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               name: 'ScanPipeline__BoundaryAgentId'
-              value: 'CardBoundaryAgent'
+              value: boundaryAgentId
             }
             {
               name: 'ScanPipeline__IdentificationAgentIds__mtg'
-              value: 'MtgCardIdAgent'
+              value: mtgAgentId
             }
             {
               name: 'ScanPipeline__IdentificationAgentIds__pokemon'
-              value: 'PokemonCardIdAgent'
+              value: pokemonAgentId
             }
           ])
         }
