@@ -18,7 +18,8 @@ merely discouraged, it is impossible.
 
 The only thing the outside world can reach is the **API**. The desktop client calls it over HTTPS
 with an Entra token and never talks to any other Azure resource — so it runs from anywhere, with no
-VPN, no private resolver and no jump host.
+VPN, no private resolver and no jump host. Step 8 optionally puts API Management in front of it,
+which moves the public hostname but not the shape of this picture.
 
 Everything behind the API is private:
 
@@ -39,10 +40,10 @@ desktop client ──HTTPS──▶  <prefix>-api  ─┐
 
 Two consequences are worth knowing before you read the rest of this guide:
 
-- **The client uploads the image to the API, not to a blob.** Earlier versions handed out a
-  write-only blob SAS. A SAS is no use against an account with no public endpoint, so `POST /jobs`
-  now returns a relative URL, `jobs/{jobId}/content`, that the client PUTs to with its bearer token.
-  The API holds the write permission on the `scans` container and relays the bytes.
+- **The client uploads the image to the API, not to a blob.** There is no URL that would let a
+  client write to the account, and there never will be. `POST /jobs` returns the job id; the client
+  PUTs the image to `jobs/{jobId}/content` with its bearer token, and the API — which holds the
+  write permission on the `scans` container — relays the bytes.
 - **Storage is private unconditionally.** There is no parameter to turn it back on. In a
   policy-governed subscription `publicNetworkAccess: Enabled` is reverted anyway, and the demo is
   more honest without it.
@@ -1641,6 +1642,89 @@ security boundaries, prompting is the better failure. If you need the cache on s
 is a deliberate change to `TokenCachePersistenceOptions.UnsafeAllowUnencryptedStorage` in
 `BinderScanService`, not a setting.
 
+## 8. Put API Management in front — *optional*
+
+The API works without this. APIM is here for architectural completeness: it is the gateway tier a
+real deployment would have, and it gives the demo somewhere to point at when someone asks where
+rate limiting, quotas or a developer portal would live.
+
+Be clear about what it is and is not. APIM sits **in front of** the API container app; it does not
+replace it. The four endpoints hold a state machine and relay up to 64 MB of image bytes into a
+storage account with no public endpoint, which is application code, not gateway policy.
+
+Use the **Consumption** tier. It bills per call — roughly $3.50 per million with the first million
+each month free — so for a demo it is effectively free, and it provisions in a few minutes rather
+than the 30 to 45 a dedicated tier takes. It cannot join a VNet, which does not matter here: the
+container app's ingress is already public, so APIM reaches it the same way the desktop client does.
+
+> A tier that *could* reach private storage directly — Standard v2, around $700 a month — is only
+> needed if you try to make APIM replace the API rather than front it. Don't.
+
+Create the instance, using the same region as everything else so the gateway is not calling across
+regions:
+
+```powershell
+$prefix   = 'enfolderer'
+$rg       = "$prefix-platform"
+$location = az group show -n $rg --query location -o tsv
+
+az apim create `
+  --name "$prefix-apim" `
+  --resource-group $rg `
+  --publisher-name 'Enfolderer Demo' `
+  --publisher-email 'you@example.com' `
+  --sku-name Consumption `
+  --location $location
+```
+
+Then import the API, pointing it at the container app's ingress:
+
+```powershell
+$apiFqdn = az containerapp show -g $rg -n "$prefix-api" `
+  --query properties.configuration.ingress.fqdn -o tsv
+
+az apim api create `
+  --resource-group $rg --service-name "$prefix-apim" `
+  --api-id scan --path scan --display-name 'Scan API' `
+  --service-url "https://$apiFqdn" --protocols https
+```
+
+By default APIM requires a subscription key, which the desktop app does not send. The app already
+presents an Entra token that the API itself validates, so turn the key off rather than adding a
+second credential:
+
+```powershell
+az apim api update `
+  --resource-group $rg --service-name "$prefix-apim" `
+  --api-id scan --subscription-required false
+```
+
+Repoint the desktop app at the gateway. The `--path scan` above means the gateway prefixes every
+route, so the base URL ends in `/scan`:
+
+```powershell
+$gateway = az apim show -g $rg -n "$prefix-apim" --query gatewayUrl -o tsv
+# Set api_base_url in aiconfig.txt to this value:
+"$gateway/scan/"
+```
+
+The trailing slash matters. The client resolves `jobs` against this base address, so without it
+`.../scan` would resolve to `.../jobs` and drop the prefix.
+
+Two things to check once it is in place. APIM's default forwarding preserves the `Authorization`
+header, so the API still sees the caller's token — if every call starts returning 401, that is the
+first thing to confirm. And the default HTTP timeout is well under the time a full scan takes; the
+desktop app polls `GET /jobs/{id}` rather than holding a connection open, so this does not bite,
+but it would if you ever made the submit call synchronous.
+
+To remove it again, which costs nothing to do:
+
+```powershell
+az apim delete --name "$prefix-apim" --resource-group $rg --yes
+```
+
+Then set `api_base_url` in `aiconfig.txt` back to the container app URL from step 7.
+
 ## Verifying the boundaries
 
 Once a scan succeeds end to end, confirm the demo assets are real:
@@ -1725,8 +1809,9 @@ filled in: re-provisioning the agents, telling the worker their ids, and repoint
 at the API's new hostname.
 
 Two of those are easy to skip and shouldn't be. **The agents must be re-provisioned**, because
-`CardBoundaryAgent` no longer has any tools — it used to call `get_image_sas`, which no longer
-exists — and because every MCP URL changed when the servers moved off `azurewebsites.net`. And
+`CardBoundaryAgent` no longer has any tools — it used to call a tool that handed back a blob URL,
+which no longer exists — and because every MCP URL changed when the servers moved off
+`azurewebsites.net`. And
 **the desktop app's `api_base_url` must change**, for the same reason.
 
 If `az acr build` is refused by policy in your tenant — the same class of block that closed the
@@ -1749,7 +1834,7 @@ where it is, invisible in the templates and live in the tenant. Anything you cre
 debugging is in the same position.
 
 `scripts/cleanup.ps1` deletes the ones this project has stopped using: the `Storage Blob
-Delegator` grants (nothing mints a SAS any more), any account-wide `Storage Blob Data Contributor`
+Delegator` grants (nothing signs a blob URL any more), any account-wide `Storage Blob Data Contributor`
 added by hand while chasing a 403, and Team B's old read on `crops`. Run it with `-WhatIf` first —
 it prints what it would delete and touches nothing:
 
@@ -1780,7 +1865,8 @@ The provisioned-throughput Cosmos container and the `gpt-4o` deployment bill whi
 container apps bill per vCPU-second and GiB-second: five apps at one replica each, mostly idle, is
 roughly the same order as the App Service plans this replaced, and the three Container Apps
 environments themselves are free. The registry is Basic and the Log Analytics workspaces bill per
-GB ingested, which at demo volume is pennies.
+GB ingested, which at demo volume is pennies. If you added APIM in step 8, the Consumption tier
+bills per call and a demo will not approach the free million, so it adds nothing measurable.
 
 If a demo is weeks away, set the apps to scale to zero rather than tearing the whole thing down —
 the identities, role assignments and agents all survive:
