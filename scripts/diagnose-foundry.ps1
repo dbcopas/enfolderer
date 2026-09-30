@@ -80,6 +80,10 @@ function Write-Step {
 function Write-Note { param([string] $T) Write-Host "  $T" -ForegroundColor DarkGray }
 function Write-Bad  { param([string] $T) Write-Host "  $T" -ForegroundColor Red }
 function Write-Good { param([string] $T) Write-Host "  $T" -ForegroundColor Green }
+# Amber, for something that deserves attention but is not established as broken. Keeping it apart
+# from Write-Bad matters: red next to "delete this" is how a diagnostic talks someone into
+# destroying working resources.
+function Write-Warn { param([string] $T) Write-Host "  $T" -ForegroundColor Yellow }
 
 # az answers "not found" with a non-zero exit code and a message on stderr. Absence is one of the
 # answers this script is looking for, so ask quietly and decide here.
@@ -106,24 +110,31 @@ function Get-Prop {
     return $member.Value
 }
 
-# Pulls the agent names out of a list response. The two surfaces disagree about the envelope --
-# the Assistants one returns "data", the current one "value" -- so accept either rather than
-# reporting a populated project as empty because the key was not the expected one.
+# Pulls the agent names out of a list response. Different routes use different envelopes, so both
+# documented keys are accepted.
+#
+# Returns $null when the reply carries no recognisable list at all, and an empty array when it
+# carries a list that is genuinely empty. Those two mean opposite things -- "this route does not
+# answer the question I asked" versus "this project has no agents" -- and collapsing them into a
+# count of zero is what previously made every healthy agent look like it had gone missing.
 function Get-AgentNames {
     param([object] $Response)
 
-    $items = Get-Prop $Response 'data'
-    if ($null -eq $items) { $items = Get-Prop $Response 'value' }
+    $key = $null
+    foreach ($candidate in 'data', 'value') {
+        if ($Response -and $Response.PSObject.Properties[$candidate]) { $key = $candidate; break }
+    }
+    if ($null -eq $key) { return $null }
 
     $names = @()
-    foreach ($item in @($items)) {
+    foreach ($item in @(Get-Prop $Response $key)) {
         if ($null -eq $item) { continue }
         $agentName = Get-Prop $item 'name'
         if ([string]::IsNullOrWhiteSpace($agentName)) { $agentName = Get-Prop $item 'id' }
         if (-not [string]::IsNullOrWhiteSpace($agentName)) { $names += [string] $agentName }
     }
-    # A bare @() unrolls to $null on return, which a caller cannot tell apart from "could not
-    # read", so the comma keeps an empty list an empty list.
+    # A bare @() unrolls to $null on return, which the caller would read as "no list", so the
+    # comma keeps an empty list an empty list.
     return ,@($names | Sort-Object)
 }
 
@@ -522,28 +533,40 @@ if ($token -and $endpointHost) {
         Write-Host "  $name" -ForegroundColor White
         $probeAttempted = $true
 
-        # Both surfaces live on the same host and take the same token, so calling each in turn
-        # separates "this project is unreachable" from "this project is fine but the API the
-        # scripts use is gone". The Assistants surface retired on 2026-08-26; /agents replaced it.
+        # Both routes live on the same host and take the same token, so calling each in turn
+        # separates "this project is unreachable" from "this project is fine but the route the
+        # scripts use does not answer".
         $script:lastProbeBody = ''
-        $classic = Invoke-Probe 'assistants (retired surface)' `
+        $classic = Invoke-Probe 'assistants (the route provision.ps1 uses)' `
             "$endpointHost/api/projects/$name/assistants?api-version=$ApiVersion" $token
         $classicBody = $script:lastProbeBody
 
-        $classicNames = @()
+        $classicNames = if ($classic) { Get-AgentNames $classic } else { $null }
         if ($classic) {
-            $classicNames = Get-AgentNames $classic
-            Write-Good "  assistants (retired surface) : 200, $($classicNames.Count) agent(s)$(if ($classicNames.Count) { ' : ' + ($classicNames -join ', ') })"
+            if ($null -eq $classicNames) {
+                Write-Warn "  assistants (the route provision.ps1 uses) : 200, but the reply carries no agent list"
+            }
+            else {
+                Write-Good "  assistants (the route provision.ps1 uses) : 200, $($classicNames.Count) agent(s)$(if ($classicNames.Count) { ' : ' + ($classicNames -join ', ') })"
+            }
         }
 
         $script:lastProbeBody = ''
-        $current = Invoke-Probe 'agents (current surface)' `
+        $current = Invoke-Probe 'agents (the other documented route)' `
             "$endpointHost/api/projects/$name/agents?api-version=$ApiVersion" $token
 
-        $currentNames = @()
+        # $null here means the reply held no list at all, which is not the same as a list of none.
+        $currentNames = if ($current) { Get-AgentNames $current } else { $null }
         if ($current) {
-            $currentNames = Get-AgentNames $current
-            Write-Good "  agents (current surface) : 200, $($currentNames.Count) agent(s)$(if ($currentNames.Count) { ' : ' + ($currentNames -join ', ') })"
+            if ($null -eq $currentNames) {
+                # Answering 200 with no list at all means this route is not the question we think
+                # we are asking, so it says nothing about whether the agents exist.
+                Write-Note "  agents (the other documented route) : 200, but the reply carries no agent list"
+                Write-Note "  so this route is not a second view of the same agents; it is not evidence they are missing"
+            }
+            else {
+                Write-Good "  agents (the other documented route) : 200, $($currentNames.Count) agent(s)$(if ($currentNames.Count) { ' : ' + ($currentNames -join ', ') })"
+            }
         }
 
         if ($classic -or $current) { $probeSucceeded = $true }
@@ -554,7 +577,7 @@ if ($token -and $endpointHost) {
         # success in every section above.
         if ($classic -or $current) {
             $expected = Get-ExpectedAgentNames $name
-            $live = @($classicNames + $currentNames | Sort-Object -Unique)
+            $live = @(@($classicNames) + @($currentNames) | Where-Object { $_ } | Sort-Object -Unique)
 
             if ($expected.Count) {
                 $missing = @($expected | Where-Object { $_ -notin $live })
@@ -571,18 +594,21 @@ if ($token -and $endpointHost) {
                 }
             }
 
-            # The two surfaces are meant to be two views of one set of agents. When they disagree,
-            # one of them is not seeing everything, and provisioning through the retired surface
-            # would leave agents the current one cannot serve.
-            if ($classic -and $current) {
+            # Only compare the two routes when both actually returned a list. When /agents answers
+            # 200 without one, it is not listing these agents at all, and reading that as "the
+            # agents are missing from it" would condemn every healthy agent in the project.
+            #
+            # Deleting a working agent is not recoverable from a diagnostic's mistake, so this
+            # never advises deletion: it reports the disagreement and leaves the decision out.
+            if ($null -ne $classicNames -and $null -ne $currentNames -and $currentNames.Count) {
                 $onlyClassic = @($classicNames | Where-Object { $_ -notin $currentNames })
                 if ($onlyClassic.Count) {
-                    Write-Bad "  visible only on the retired surface : $($onlyClassic -join ', ')"
+                    Write-Warn "  listed by /assistants but not by /agents : $($onlyClassic -join ', ')"
                     $findings += ("In project '$name', $($onlyClassic -join ', ') " +
                                   "$(if ($onlyClassic.Count -eq 1) { 'is' } else { 'are' }) returned by /assistants " +
-                                  'but not by /agents. The two surfaces should be one set of agents, so an agent ' +
-                                  'only the retired surface can see will stop working when that surface goes. ' +
-                                  'Delete it and re-create it with agents/provision.ps1.')
+                                  'but not by /agents, even though /agents did return a list of others. That is a ' +
+                                  'genuine disagreement worth understanding before the demo. Do not delete anything ' +
+                                  'on the strength of it alone: check the agent in the Foundry portal first.')
                 }
             }
         }
