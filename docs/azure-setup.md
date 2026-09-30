@@ -1689,6 +1689,17 @@ az apim api create `
   --service-url "https://$apiFqdn" --protocols https
 ```
 
+This prints `api_id is not a known attribute of class ... and will be ignored`. **That is a
+cosmetic CLI bug, not a failure** ([azure-cli#27978](https://github.com/Azure/azure-cli/issues/27978)):
+the CLI passes `api_id` to an SDK model that has no such field, the SDK warns, and the API is
+created anyway — `--api-id` is still required, so there is nothing to change. Confirm rather than
+trust it:
+
+```powershell
+az apim api show --resource-group $rg --service-name "$prefix-apim" `
+  --api-id scan --query "{name:displayName, path:path, backend:serviceUrl}" -o table
+```
+
 By default APIM requires a subscription key, which the desktop app does not send. The app already
 presents an Entra token that the API itself validates, so turn the key off rather than adding a
 second credential:
@@ -1711,11 +1722,18 @@ $gateway = az apim show -g $rg -n "$prefix-apim" --query gatewayUrl -o tsv
 The trailing slash matters. The client resolves `jobs` against this base address, so without it
 `.../scan` would resolve to `.../jobs` and drop the prefix.
 
-Two things to check once it is in place. APIM's default forwarding preserves the `Authorization`
+Three things to check once it is in place. APIM's default forwarding preserves the `Authorization`
 header, so the API still sees the caller's token — if every call starts returning 401, that is the
-first thing to confirm. And the default HTTP timeout is well under the time a full scan takes; the
+first thing to confirm. The default HTTP timeout is well under the time a full scan takes; the
 desktop app polls `GET /jobs/{id}` rather than holding a connection open, so this does not bite,
 but it would if you ever made the submit call synchronous.
+
+The third is the one that would actually stop a scan. **Do not add a policy that reads the request
+body on the upload route.** Consumption tier buffers at 2 MB once a policy inspects the body, and
+`PUT /jobs/{id}/content` carries up to 64 MB. With no body-reading policy the gateway streams the
+request through and the size is not a problem, which is why the import above adds no policies at
+all. `validate-content`, `set-body` and anything calling `context.Request.Body` would each break
+the upload while leaving the other three routes working — a confusing failure worth avoiding.
 
 To remove it again, which costs nothing to do:
 
