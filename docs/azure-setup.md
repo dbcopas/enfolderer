@@ -1700,6 +1700,29 @@ az apim api show --resource-group $rg --service-name "$prefix-apim" `
   --api-id scan --query "{name:displayName, path:path, backend:serviceUrl}" -o table
 ```
 
+**An API with no operations returns 404 for everything.** `az apim api create` registers the API
+and its backend but defines no routes, and APIM only forwards a request that matches an operation —
+it is not a transparent proxy. This API has no OpenAPI document to import from, so the operations
+have to be declared. Three wildcard operations, one per verb the client uses, cover all four routes:
+
+```powershell
+$ops = @(
+  @{ id = 'wildcard-get';  method = 'GET';  name = 'Any GET'  }
+  @{ id = 'wildcard-post'; method = 'POST'; name = 'Any POST' }
+  @{ id = 'wildcard-put';  method = 'PUT';  name = 'Any PUT'  }
+)
+foreach ($op in $ops) {
+  az apim api operation create `
+    --resource-group $rg --service-name "$prefix-apim" --api-id scan `
+    --operation-id $op.id --display-name $op.name `
+    --method $op.method --url-template '/*'
+}
+```
+
+A single operation cannot cover every verb: APIM has no wildcard *method*, only a wildcard path, so
+one operation per verb is the minimum. `/*` matches the whole remaining path including slashes, so
+`jobs/{id}/content` is covered without declaring it.
+
 By default APIM requires a subscription key, which the desktop app does not send. The app already
 presents an Entra token that the API itself validates, so turn the key off rather than adding a
 second credential:
@@ -1710,11 +1733,24 @@ az apim api update `
   --api-id scan --subscription-required false
 ```
 
+Smoke-test the gateway before changing the client. `/healthz` is the only route that does not
+require a token, which makes it a clean test of routing alone:
+
+```powershell
+$gateway = az apim show -g $rg -n "$prefix-apim" --query gatewayUrl -o tsv
+Invoke-RestMethod -Uri "$gateway/scan/healthz"
+```
+
+`status : ok` means the gateway, the wildcard operations and the backend URL are all correct. A
+`404` with `"Resource not found"` in a JSON body is APIM itself saying no operation matched — go
+back and add the operations above. Note that the backend has no `/scan` prefix of its own: APIM
+strips it before forwarding, so testing the container app directly means
+`https://<app-fqdn>/healthz`, not `/scan/healthz`.
+
 Repoint the desktop app at the gateway. The `--path scan` above means the gateway prefixes every
 route, so the base URL ends in `/scan`:
 
 ```powershell
-$gateway = az apim show -g $rg -n "$prefix-apim" --query gatewayUrl -o tsv
 # Set api_base_url in aiconfig.txt to this value:
 "$gateway/scan/"
 ```
