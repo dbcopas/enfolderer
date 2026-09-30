@@ -5,10 +5,10 @@
 .DESCRIPTION
     Two changes left debris behind that a redeploy cannot clear up on its own:
 
-    * Storage went private and the client now uploads through the API, so nothing mints a
-      user-delegation SAS any more. The Storage Blob Delegator grants that existed only for that
-      are dead. An incremental ARM deployment never deletes a role assignment that was merely
-      removed from the template, so they survive every redeploy until something removes them.
+    * Storage went private and the client now uploads through the API, so nothing signs a blob
+      URL any more. The Storage Blob Delegator grants that existed only to allow that are dead.
+      An incremental ARM deployment never deletes a role assignment that was merely removed from
+      the template, so they survive every redeploy until something removes them.
 
     * The agents now receive image bytes through the Foundry Files API instead of a blob URL, so
       Team B's identity no longer reads the crops container, and a run that dies before its own
@@ -163,12 +163,12 @@ if ($RoleAssignments) {
     $workerPrincipal = Get-PrincipalId "$Prefix-worker-id"
     $cardidPrincipal = Get-PrincipalId "$Prefix-cardid-id"
 
-    # Nothing mints a user-delegation SAS any more, so Delegator has no purpose. The
-    # subscription-scoped one was never in the template to begin with.
+    # Nothing signs a blob URL any more, so Delegator has no purpose. The subscription-scoped
+    # one was never in the template to begin with.
     Remove-Grant $apiPrincipal 'Storage Blob Delegator' "/subscriptions/$SubscriptionId" `
-        'the API no longer mints a SAS'
+        'the client uploads through the API, so the API signs nothing'
     Remove-Grant $workerPrincipal 'Storage Blob Delegator' "/subscriptions/$SubscriptionId" `
-        'the worker sends bytes to Foundry instead of a read SAS'
+        'the worker sends bytes to Foundry instead of a blob URL'
 
     # Account-scoped Contributor covers both containers. The template grants the API write on the
     # scans container alone, which is the claim the demo actually makes.
