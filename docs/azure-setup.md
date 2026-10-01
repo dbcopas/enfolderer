@@ -2033,11 +2033,51 @@ az storage blob download-batch --account-name $storage --auth-mode login `
   -s crops --pattern "33f447cb3c494595917c60c6003035fd/*" -d ./crops
 ```
 
-Each file should be one card, upright and filling the frame. A crop that is skewed, rotated, or
-holds two cards is the boundary agent mis-ordering its four points: the prompt in
-`src/Enfolderer.Ai.Worker/Agents/FoundryCardBoundaryAgent.cs` asks for top-left, top-right,
-bottom-right, bottom-left in the **card's own** orientation, and a model that returns them in image
-order instead produces exactly this.
+The storage account is `publicNetworkAccess: 'Disabled'`, so this only works from inside the VNet
+— over a VPN, from a jump box, or through a private resolver. It also needs **Storage Blob Data
+Reader** on the container: no human is granted one by the template, and subscription Owner does not
+help, because blob reads need `dataActions`. Grant yourself read on `crops` alone, so the original
+photographs stay as unreachable to you as they are to Team B:
+
+```powershell
+$me   = az ad signed-in-user show --query id -o tsv
+$acct = az storage account show -g "$prefix-platform" -n $storage --query id -o tsv
+az role assignment create `
+  --assignee-object-id $me --assignee-principal-type User `
+  --role "Storage Blob Data Reader" `
+  --scope "$acct/blobServices/default/containers/crops"
+```
+
+Each file should be one card, upright and filling the frame. Three failures look different:
+
+- **A crop that is skewed or rotated, or holds two cards**, is the four points being mis-ordered.
+  The prompt asks for top-left, top-right, bottom-right, bottom-left in the **card's own**
+  orientation; a model that answers in image order produces exactly this.
+- **Crops of the table, of nothing, or of the wrong part of the photo** mean the model mislocated
+  the cards entirely. The usual cause is a coordinate space the model had to guess at: it never
+  sees the photo at full resolution, so asking it for pixel coordinates asks it to guess the
+  resolution and the position at once. The agent is asked for **fractions of the image** instead,
+  with the pixel size stated in the prompt, and the worker scales them. If you are running an older
+  build or a hand-edited agent, this is the first thing to check.
+- **Fewer crops than there are cards** is the quad filter doing its job. Quads that are degenerate,
+  off the image, nearly the whole frame, or nowhere near a card's aspect ratio are discarded, and
+  the worker logs how many it threw away along with the agent's raw reply.
+
+To see what the agent actually said, the whole reply is logged at `Debug`:
+
+```powershell
+az containerapp update -g "$prefix-cardgeo" -n "$prefix-worker" `
+  --set-env-vars Logging__LogLevel__Enfolderer.Ai.Worker.Agents=Debug
+```
+
+Remember that a deployment rewrites container app environment variables, so this lasts only until
+the next `./scripts/deploy-images.ps1`.
+
+> **Why geometry is the weak link.** A chat model has no detection head: localising a card is the
+> hardest thing this pipeline asks of one, and it is the step most likely to need a better model
+> deployment, a few-shot example, or a real computer-vision tool behind Team A's imaging MCP
+> server. Identification is comparatively easy — reading text off a crop is what these models are
+> good at — which is why a bad crop shows up as an identification failure and misdirects you.
 
 **The agent answered but not in the shape asked for.** The reply is quoted in the message, so prose,
 a markdown fence or different key names are visible on sight. Fix the prompt in the agent YAML and
