@@ -12,6 +12,12 @@ namespace Enfolderer.Ai.Mcp.Imaging;
 /// the RBAC of whatever identity runs this server — in the demo that identity can read
 /// <c>scans</c>, and has no Cosmos access at all.
 /// <para>
+/// <c>detect_cards</c> is the capability the boundary agent exists to sell: locating cards is
+/// measurement, which a chat model cannot do, so the agent calls out to this code and spends its
+/// own judgement on which results are really cards. Team B consumes it through the agent and never
+/// sees this server, its identity, or its resource group.
+/// </para>
+/// <para>
 /// There is deliberately no tool for minting a read URL. The storage account is private, so a URL
 /// is not something a Foundry-hosted model can fetch; images reach an agent as uploaded file
 /// content instead.
@@ -23,6 +29,40 @@ public sealed class ImagingTools
     private readonly IScanImageStore _images;
 
     public ImagingTools(IScanImageStore images) => _images = images;
+
+    [McpServerTool(Name = "detect_cards")]
+    [Description("Locates every trading card in a stored photograph and returns their corners. Measured by edge detection, not estimated, so it is reliable for cards at an oblique angle or rotated out of alignment.")]
+    public async Task<string> DetectCardsAsync(
+        [Description("Source blob path as 'container/name', e.g. 'scans/<jobId>/page1.jpg'.")] string sourceBlobPath,
+        CancellationToken ct = default)
+    {
+        await using var source = await _images.OpenReadAsync(sourceBlobPath, ct);
+        using var buffered = new MemoryStream();
+        await source.CopyToAsync(buffered, ct);
+        buffered.Position = 0;
+
+        var size = PerspectiveCropper.ReadDimensions(buffered);
+        buffered.Position = 0;
+
+        var detected = CardDetector.Detect(buffered);
+
+        return JsonSerializer.Serialize(new
+        {
+            imageWidth = size.Width,
+            imageHeight = size.Height,
+            // Fractions of the image, matching what the agent is asked to return, so a corner can
+            // be passed straight through without the model doing arithmetic on it.
+            cards = detected.Select(card => new
+            {
+                confidence = card.Confidence,
+                points = card.Quad.Points.Select(p => new
+                {
+                    x = Math.Round(p.X / Math.Max(1, size.Width), 4),
+                    y = Math.Round(p.Y / Math.Max(1, size.Height), 4)
+                })
+            })
+        });
+    }
 
     [McpServerTool(Name = "crop_quad")]
     [Description("Perspective-correct crop of a quadrilateral out of a stored image, written as a PNG blob. Use for cards photographed at an angle.")]
