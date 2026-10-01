@@ -244,40 +244,34 @@ each value back out of your deployment.
         }
     }
 
-    if ($parameters -and $parameters.PSObject.Properties['namePrefix'] -and $registry) {
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $cache) | Out-Null
-        [ordered] @{
-            deployment   = $DeploymentName
-            savedUtc     = (Get-Date).ToUniversalTime().ToString('o')
-            location     = $location
-            registryName = $registry
-            parameters   = $parameters
-        } | ConvertTo-Json -Depth 20 | Set-Content -Path $cache -Encoding utf8
-    }
-    elseif ((Test-Path $cache) -and -not $UseParametersFile) {
-        $saved = Get-Content -Raw -Path $cache | ConvertFrom-Json
-        $location = $saved.location
-        $parameters = $saved.parameters
-        $registry = $saved.registryName
-        Write-Bad "deployment '$DeploymentName' records no usable parameters"
-        Write-Note "using the copy this script saved at $($saved.savedUtc) in .deploy-images/"
-    }
-    elseif ($UseParametersFile) {
-        # -UseParametersFile is the way out of exactly this situation, so it must not depend on the
-        # deployed parameters it exists to replace. The file uses ARM's own { "value": … } shape, so
-        # it drops straight into the same variable.
-        if (-not $onFile.PSObject.Properties['namePrefix']) {
-            throw "infra/main.parameters.json records no namePrefix. Is it this template's file?"
+    # The registry is recoverable from the resource group further down, so good parameters alone are
+    # enough to carry on; only their absence sends us to the cache or the file.
+    $live = $parameters -and $parameters.PSObject.Properties['namePrefix']
+    if (-not $live) {
+        if ((Test-Path $cache) -and -not $UseParametersFile) {
+            $saved = Get-Content -Raw -Path $cache | ConvertFrom-Json
+            $location = $saved.location
+            $parameters = $saved.parameters
+            if (-not $registry) { $registry = $saved.registryName }
+            Write-Bad "could not read complete parameters from deployment '$DeploymentName'"
+            Write-Note "using the copy this script saved at $($saved.savedUtc) in .deploy-images/"
         }
-        $parameters = $onFile
-        if ($onFile.PSObject.Properties['location']) {
-            $location = $onFile.location.value
+        elseif ($UseParametersFile) {
+            # -UseParametersFile is the way out of exactly this situation, so it must not depend on
+            # the deployed parameters it exists to replace. The file uses ARM's own
+            # { "value": … } shape, so it drops straight into the same variable.
+            if (-not $onFile.PSObject.Properties['namePrefix']) {
+                throw "infra/main.parameters.json records no namePrefix. Is it this template's file?"
+            }
+            $parameters = $onFile
+            if ($onFile.PSObject.Properties['location']) {
+                $location = $onFile.location.value
+            }
+            Write-Bad "could not read complete parameters from deployment '$DeploymentName'"
+            Write-Note "reading infra/main.parameters.json instead, as -UseParametersFile asks"
         }
-        Write-Bad "deployment '$DeploymentName' records no usable parameters"
-        Write-Note "reading infra/main.parameters.json instead, as -UseParametersFile asks"
-    }
-    else {
-        throw @"
+        else {
+            throw @"
 Deployment '$DeploymentName' records no parameters, so there is nothing to replay.
 
 That is what ARM leaves behind when a deployment fails: the failed run replaces the successful one
@@ -295,6 +289,7 @@ registry:
 That run succeeds, ARM records the parameters again, and every later run can go back to replaying
 them. Do not commit the filled-in parameters file.
 "@
+        }
     }
 
     $prefix = $parameters.namePrefix.value
@@ -309,6 +304,20 @@ them. Do not commit the filled-in parameters file.
     }
     else {
         Write-Note "registry $registry"
+    }
+
+    # Save ARM's own parameters once the registry is known, so a later failed run has something to
+    # fall back on. Only what the deployment recorded is worth saving: the cache and the parameters
+    # file are already on disk.
+    if ($live) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $cache) | Out-Null
+        [ordered] @{
+            deployment   = $DeploymentName
+            savedUtc     = (Get-Date).ToUniversalTime().ToString('o')
+            location     = $location
+            registryName = $registry
+            parameters   = $parameters
+        } | ConvertTo-Json -Depth 20 | Set-Content -Path $cache -Encoding utf8
     }
 
     # The whole reason this script replays parameters: imageTag defaults to empty, and an empty
