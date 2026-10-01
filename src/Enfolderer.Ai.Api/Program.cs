@@ -199,10 +199,12 @@ jobs.MapPut("/{jobId}/content", async (
     {
         await images.WriteAsync(job.BlobPath, request.Body, request.ContentType ?? "application/octet-stream", ct);
     }
-    catch (RequestFailedException ex)
+    catch (RequestFailedException ex) when (ex.Status is 401 or 403)
     {
         // This is the only place the API writes a blob, so a misconfigured or not-yet-propagated
-        // role assignment surfaces here. Report the storage error code rather than an unhandled
+        // role assignment surfaces here. Only a refusal is read as a permissions problem: a missing
+        // container, a conflict or an outage arrive as the same exception type and must not send
+        // the reader off to check role assignments. Report the storage error code rather than an unhandled
         // 500, which says only that something went wrong somewhere.
         //
         // Name the principal too. "The managed identity needs role X" is unhelpful when the real
@@ -225,6 +227,17 @@ jobs.MapPut("/{jobId}/content", async (
                   + "if it does not match, the site is presenting a different identity than the one "
                   + "the roles were granted to. A newly granted role can take several minutes to "
                   + "take effect.",
+            statusCode: StatusCodes.Status502BadGateway);
+    }
+    catch (RequestFailedException ex)
+    {
+        // Anything else Storage reports is relayed as-is rather than guessed at.
+        loggerFactory.CreateLogger("Jobs").LogError(
+            ex, "Could not store the image for job {JobId}: {Status} {ErrorCode}", jobId, ex.Status, ex.ErrorCode);
+
+        return Results.Problem(
+            title: "Could not store the scan image.",
+            detail: $"Azure Storage returned {ex.Status} {ex.ErrorCode}. See the API log for details.",
             statusCode: StatusCodes.Status502BadGateway);
     }
     catch (AuthenticationFailedException ex)
