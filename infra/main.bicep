@@ -10,7 +10,7 @@
 //   Project  isolates agents, connections and authoring. Each team's group holds Azure AI Project
 //            Manager over its own project only, so Team B cannot edit Team A's boundary agent even
 //            when both projects sit in the same account. The only path from cardid to cardgeo is
-//            the invoke-only assignment in modules/cross-project-access.bicep.
+//            the invoke-only assignment in modules/foundry-invoke-access.bicep.
 //   Account  isolates model deployments and their quota, local-auth and networking settings, and
 //            the blast radius of a mistake. Projects share all of it.
 //
@@ -380,15 +380,32 @@ module dataRbac 'modules/data-rbac.bicep' = {
   }
 }
 
-// Scoped to Team A's project, wherever that project lives. Flip grantIdentificationAccessToGeometry
-// to false and redeploy to break the pipeline at DetectingBoundaries — see docs/foundry-demo.md.
-module crossProjectAccess 'modules/cross-project-access.bicep' = if (grantIdentificationAccessToGeometry) {
+// The orchestrator's access to Team B's own project. The worker creates a thread, uploads the card
+// image and runs an identification agent there on every job, so without this the pipeline cannot
+// start — and because the role is Foundry User rather than Project Manager, the orchestrator still
+// cannot author or alter a single agent.
+module identificationAccess 'modules/foundry-invoke-access.bicep' = {
+  name: 'cardid-invoke-access'
+  scope: resourceGroup(identificationProjectRg)
+  params: {
+    accountName: identificationAccountName
+    projectName: identificationProject.outputs.projectName
+    principalId: workerIdentity.outputs.principalId
+  }
+}
+
+// The same grant on Team A's project, wherever that project lives. This one is the cross-project
+// hop: it is the only route from Team B's pipeline into Team A's, and it is granted to the worker
+// because the worker is the identity that actually presents itself to the cardgeo endpoint. Flip
+// grantIdentificationAccessToGeometry to false and redeploy to break the pipeline at
+// DetectingBoundaries — see docs/foundry-demo.md.
+module crossProjectAccess 'modules/foundry-invoke-access.bicep' = if (grantIdentificationAccessToGeometry) {
   name: 'cross-project-access'
   scope: resourceGroup(geometryProjectRg)
   params: {
-    geometryAccountName: geometryAccountName
-    geometryProjectName: geometryProject.outputs.projectName
-    identificationPrincipalId: identificationIdentity.outputs.principalId
+    accountName: geometryAccountName
+    projectName: geometryProject.outputs.projectName
+    principalId: workerIdentity.outputs.principalId
   }
 }
 

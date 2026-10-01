@@ -61,10 +61,12 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
   project only* — see the `ownerAssignment` in `infra/modules/foundry-project.bicep`, whose scope
   is the project resource. Team B cannot edit, redeploy or read the instructions of Team A's
   boundary agent even though both projects sit in the same account and the same resource group.
-* **Invoke-only cross-project access.** `infra/modules/cross-project-access.bicep` grants Team B's
-  identity `Foundry User` on the `cardgeo` **project** — enough to run the agent, not enough to
-  change it. Scoping it to the project rather than the account matters: an account-scoped grant
-  would hand Team B access to every project in the account, which is the opposite of the claim.
+* **Invoke-only cross-project access.** `infra/modules/foundry-invoke-access.bicep` grants the
+  orchestrator `Foundry User` on the `cardgeo` **project** — enough to run Team A's agent, not
+  enough to change it. Scoping it to the project rather than the account matters: an account-scoped
+  grant would hand Team B access to every project in the account, which is the opposite of the
+  claim. The same module grants the orchestrator the same role on `cardid`, so the two halves of
+  the pipeline are two separate, separately revocable assignments.
 * **Entra-only data plane.** The storage account has `allowSharedKeyAccess: false` and Cosmos has
   `disableLocalAuth: true`. There are no keys or connection strings to copy into a config file.
 * **No secrets in the desktop app.** `aiconfig.txt` carries only an API URL, tenant id, public
@@ -130,15 +132,15 @@ and those endpoints keep their shape either way.
 
 These are the point of the demo. Run a scan first so the audience sees the happy path.
 
-### 1. Revoke Team B's access to Team A's agent
+### 1. Revoke the orchestrator's access to Team A's agent
 
 ```powershell
-az deployment sub create `
-  --location eastus2 `
-  --template-file infra/main.bicep `
-  --parameters infra/main.parameters.json `
-  --parameters grantIdentificationAccessToGeometry=false
+./scripts/deploy-images.ps1 -SkipBuild -GrantGeometryAccess $false
 ```
+
+Use the script rather than a bare `az deployment sub create`: that would deploy `imageTag`'s empty
+default and send all five container apps back to the placeholder image, which breaks the demo in a
+far less interesting way.
 
 Bicep deletes the `Foundry User` assignment on the `cardgeo` project. (RBAC changes can take a
 minute or two to propagate; re-run the scan until it fails.)
@@ -147,8 +149,9 @@ Then scan an image again. Expected result:
 
 * The job stops in **`DetectingBoundaries`** and moves to `Failed`.
 * `GET /jobs/{id}` reports an error beginning
-  `Foundry authorization failure (403).` followed by the failing request and the `cardgeo`
-  project endpoint, so the revoked boundary is named explicitly.
+  `Foundry authorization failure (401).` followed by the failing request and the `cardgeo`
+  project endpoint, so the revoked boundary is named explicitly. Foundry answers a missing project
+  role with 401 and `PermissionDenied` rather than the 403 the shape of the problem suggests.
 * The desktop app shows that message and offers to retry — grant the role back, click **Yes**,
   and the same job flow succeeds without restarting the app.
 
@@ -157,7 +160,7 @@ rather than silently returning wrong answers or leaking through some other path.
 raises this from a single client instance bound to the `cardgeo` endpoint, so there is no
 ambiguity about which boundary was crossed.
 
-To restore access, redeploy with `grantIdentificationAccessToGeometry=true`.
+To restore access, run the same script with `-GrantGeometryAccess $true`.
 
 ### 2. Call Team B's MTG catalogue from Team A's project
 

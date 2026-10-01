@@ -60,6 +60,12 @@
 .PARAMETER PokemonAgentId
     Agent id of Team B's Pokemon identification agent.
 
+.PARAMETER GrantGeometryAccess
+    Whether the orchestrator may invoke Team A's boundary agent. Pass $false to run demo scenario
+    1 and $true to restore it. Omit to keep whatever the last deployment used. Use this rather than
+    a bare `az deployment sub create`, which would deploy imageTag's empty default and send every
+    app back to the placeholder image.
+
 .EXAMPLE
     ./scripts/deploy-images.ps1
 
@@ -77,6 +83,11 @@
     `az deployment sub create`: that would deploy imageTag's empty default and send every app back
     to the placeholder.
 
+.EXAMPLE
+    ./scripts/deploy-images.ps1 -SkipBuild -GrantGeometryAccess $false
+
+    Revoke the orchestrator's access to Team A's project, which is demo scenario 1.
+
 .NOTES
     Run from the repository root: the build context is '.', and every service project has
     ProjectReferences reaching up into src/.
@@ -92,7 +103,8 @@ param(
     [switch] $SkipBuild,
     [string] $BoundaryAgentId,
     [string] $MtgAgentId,
-    [string] $PokemonAgentId
+    [string] $PokemonAgentId,
+    [bool] $GrantGeometryAccess
 )
 
 Set-StrictMode -Version Latest
@@ -238,11 +250,14 @@ List what the registry holds with:
 
     # Agent ids are deployment parameters, so they are set here rather than with
     # `az containerapp update --set-env-vars`, which the next deployment would overwrite.
-    $agentOverrides = [ordered] @{}
-    if ($BoundaryAgentId) { $agentOverrides['boundaryAgentId'] = $BoundaryAgentId }
-    if ($MtgAgentId)      { $agentOverrides['mtgAgentId']      = $MtgAgentId }
-    if ($PokemonAgentId)  { $agentOverrides['pokemonAgentId']  = $PokemonAgentId }
-    foreach ($o in $agentOverrides.GetEnumerator()) {
+    $overrides = [ordered] @{}
+    if ($BoundaryAgentId) { $overrides['boundaryAgentId'] = $BoundaryAgentId }
+    if ($MtgAgentId)      { $overrides['mtgAgentId']      = $MtgAgentId }
+    if ($PokemonAgentId)  { $overrides['pokemonAgentId']  = $PokemonAgentId }
+    if ($PSBoundParameters.ContainsKey('GrantGeometryAccess')) {
+        $overrides['grantIdentificationAccessToGeometry'] = $GrantGeometryAccess
+    }
+    foreach ($o in $overrides.GetEnumerator()) {
         Write-Note "$($o.Key) = $($o.Value)"
     }
 
@@ -257,8 +272,10 @@ List what the registry holds with:
     if ($UseParametersFile) {
         Write-Note "parameters from infra/main.parameters.json, as requested"
         $deployArgs += @('--parameters', 'infra/main.parameters.json', '--parameters', "imageTag=$Tag")
-        foreach ($o in $agentOverrides.GetEnumerator()) {
-            $deployArgs += @('--parameters', "$($o.Key)=$($o.Value)")
+        foreach ($o in $overrides.GetEnumerator()) {
+            # A [bool] interpolates as True/False, which the CLI does not accept for a Bicep bool.
+            $value = if ($o.Value -is [bool]) { $o.Value.ToString().ToLowerInvariant() } else { $o.Value }
+            $deployArgs += @('--parameters', "$($o.Key)=$value")
         }
     }
     else {
@@ -269,7 +286,7 @@ List what the registry holds with:
             $replay[$p.Name] = @{ value = $p.Value.value }
         }
         $replay['imageTag'] = @{ value = $Tag }
-        foreach ($o in $agentOverrides.GetEnumerator()) {
+        foreach ($o in $overrides.GetEnumerator()) {
             $replay[$o.Key] = @{ value = $o.Value }
         }
 
