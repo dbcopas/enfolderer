@@ -1968,7 +1968,8 @@ wrapper that mangles a JMESPath expression containing `?`:
 ```powershell
 $name = "04d6663e9d994c1db26146747a9a64c2"   # from the message
 $all = az role assignment list --all -o json | ConvertFrom-Json
-$doomed = $all | Where-Object name -eq $name
+$doomed = @($all | Where-Object name -eq $name)
+if (-not $doomed) { throw "No assignment named $name; check the id in the message." }
 
 # Confirm it is one of the template's before deleting it.
 $doomed | Select-Object roleDefinitionName, principalId, scope

@@ -138,9 +138,10 @@ function Show-RoleAssignmentCollisionHelp {
     Write-Host 'role and scope are the ones you expect, then delete it and re-run this script:' -ForegroundColor DarkYellow
     Write-Host '  $name = "<the id from the message>"'
     Write-Host '  $all = az role assignment list --all -o json | ConvertFrom-Json'
-    Write-Host '  $doomed = $all | Where-Object name -eq $name'
+    Write-Host '  $doomed = @($all | Where-Object name -eq $name)'
+    Write-Host '  if (-not $doomed) { throw "No assignment named $name; check the id." }'
     Write-Host '  $doomed | Select-Object roleDefinitionName, principalId, scope'
-    Write-Host '  az role assignment delete --ids $doomed.id --yes'
+    Write-Host '  az role assignment delete --ids $doomed.id --yes   # --ids takes several'
     Write-Host ''
 }
 
@@ -344,7 +345,8 @@ List what the registry holds with:
         if ($deployError) { Write-Host $deployError }
 
         if ($deployExit -ne 0) {
-            if ($deployError -match 'RoleAssignmentExists') {
+            # -like, not -match: this is a literal substring test, not a pattern.
+            if ($deployError -like '*RoleAssignmentExists*') {
                 Show-RoleAssignmentCollisionHelp
             }
             throw "Deployment failed. See the error above."
