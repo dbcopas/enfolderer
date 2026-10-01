@@ -2003,6 +2003,76 @@ $prefix` reports which.
 > the list when the YAML has a `tools` key, and warns when a tool it could not resolve is about to
 > be removed.
 
+### If a job completes with nothing identified
+
+```text
+Job 33f447cb3c494595917c60c6003035fd completed: 5 card(s) detected, 0 identified.
+```
+
+This is the pipeline working. Every stage ran, both projects were called, no exception was
+raised — Team A found five cards and Team B declined to name any of them. Identification failing
+for one card is not an error: the run succeeded and the JSON parsed, so the card is recorded with
+an `error` field and the job still completes.
+
+The worker logs the reason per card, next to the count:
+
+```text
+warn: Card 0 of job 33f4… was not identified by cardid/MtgCardIdAgent: Agent reply was missing
+      set, collector number or name: {"error":"the image is too blurry to read the collector number"}
+```
+
+Read that message before changing anything, because the three causes need opposite fixes.
+
+**The agent could not read the crop.** Messages about blur, crops containing more than one card, or
+a card that is upside down mean the geometry is wrong, not the identification. Look at what was
+actually sent — the rectified faces are kept for exactly this:
+
+```powershell
+$storage = az storage account list -g "$prefix-platform" --query "[0].name" -o tsv
+az storage blob download-batch --account-name $storage --auth-mode login `
+  -s crops --pattern "33f447cb3c494595917c60c6003035fd/*" -d ./crops
+```
+
+Each file should be one card, upright and filling the frame. A crop that is skewed, rotated, or
+holds two cards is the boundary agent mis-ordering its four points: the prompt in
+`src/Enfolderer.Ai.Worker/Agents/FoundryCardBoundaryAgent.cs` asks for top-left, top-right,
+bottom-right, bottom-left in the **card's own** orientation, and a model that returns them in image
+order instead produces exactly this.
+
+**The agent answered but not in the shape asked for.** The reply is quoted in the message, so prose,
+a markdown fence or different key names are visible on sight. Fix the prompt in the agent YAML and
+re-provision:
+
+```powershell
+$id = az deployment sub show --name enfolderer-scan --query properties.outputs.identificationProjectEndpoint.value -o tsv
+./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid -Only MtgCardIdAgent -McpServerUrl $mcp
+```
+
+**The catalogue lookup found nothing.** The agent is told to confirm each printing with its
+catalogue MCP server, so an empty catalogue produces a confident refusal rather than a failure. Ask
+the server directly:
+
+```powershell
+$fqdn = az containerapp show -g "$prefix-cardid" -n "$prefix-mcp-cardcatalog-mtg" `
+  --query properties.configuration.ingress.fqdn -o tsv
+Invoke-RestMethod -Uri "https://$fqdn/healthz"
+```
+
+To see every card's reason at once rather than one at a time, read the job back from the API — the
+same document the desktop app renders:
+
+```powershell
+$apiFqdn = az containerapp show -g "$prefix-platform" -n "$prefix-api" `
+  --query properties.configuration.ingress.fqdn -o tsv
+$apiClientId = az deployment sub show --name enfolderer-scan `
+  --query properties.parameters.apiClientId.value -o tsv
+
+$token = az account get-access-token --resource "api://$apiClientId" --query accessToken -o tsv
+$job = Invoke-RestMethod -Uri "https://$apiFqdn/jobs/33f447cb3c494595917c60c6003035fd" `
+  -Headers @{ Authorization = 'Bearer ' + $token }
+$job.result.cards | Select-Object index, name, set, collectorNumber, confidence, error | Format-Table
+```
+
 ### If the deployment fails with RoleAssignmentExists
 
 ```text

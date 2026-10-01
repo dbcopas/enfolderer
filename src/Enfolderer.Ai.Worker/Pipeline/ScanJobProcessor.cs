@@ -99,6 +99,17 @@ public sealed class ScanJobProcessor
             _log.LogInformation(
                 "Job {JobId} completed: {Detected} card(s) detected, {Identified} identified.",
                 job.JobId, boundaries.Count, identified);
+
+            // Detecting cards and identifying none usually means the crops are wrong rather than
+            // the agents: the rectified faces are in storage, so point at them by name.
+            if (identified == 0 && boundaries.Count > 0)
+            {
+                _log.LogWarning(
+                    "Job {JobId} identified none of its {Detected} card(s). The crops handed to the "
+                    + "identification agents are in the '{Container}' container under '{Prefix}/'; "
+                    + "open them to tell a bad crop from a refused identification.",
+                    job.JobId, boundaries.Count, ScanBlobPaths.CropsContainer, job.JobId);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -188,6 +199,16 @@ public sealed class ScanJobProcessor
                 var image = new AgentImage(cropBytes, Path.GetFileName(cropPath), "image/png");
                 var crop = new CardCrop(index, image, boundary.Quad, boundary.GameHint);
                 var card = await agent.IdentifyAsync(crop, ct);
+
+                // A card the agent declines to identify is not an exception: the run succeeded and
+                // the JSON parsed. Logged here because otherwise the only trace is the final count,
+                // and "0 identified" is indistinguishable from a pipeline that never called anyone.
+                if (!card.IsIdentified)
+                {
+                    _log.LogWarning(
+                        "Card {Index} of job {JobId} was not identified by {Agent}: {Error}",
+                        index, job.JobId, agent.AgentId, card.Error ?? "(no reason given)");
+                }
 
                 // Geometry always comes from Team A, whatever the identification agent echoed back.
                 cards.Add(card with { Index = index, Quad = boundary.Quad, Game = game });
