@@ -13,19 +13,51 @@ namespace Enfolderer.Ai.Worker.Agents;
 public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
 {
     /// <summary>
-    /// The prompt, with the image's pixel size substituted in.
+    /// The prompt, with the image's pixel size and storage path substituted in.
     /// <para>
-    /// Corners are requested as <em>fractions of the image</em> rather than pixels. A vision model
-    /// never sees the photograph at its original resolution — it is resized and tiled before the
-    /// model looks at it — so a model asked for pixel coordinates is guessing the resolution and
-    /// the position, and multiplying the two errors. Fractions remove the first guess entirely,
-    /// and the caller, which decoded the image, scales them back.
+    /// The agent is told to measure the corners with Team A's <c>detect_cards</c> tool rather than
+    /// estimate them. Locating an object is the one thing a chat model genuinely cannot do: it has
+    /// no detection head, and it never sees the photograph at its original resolution, so asked for
+    /// coordinates it invents plausible ones. Edge detection measures them. What the model is good
+    /// at — deciding which blobs are really cards, which way up they are, and which game they
+    /// belong to — is what the rest of the prompt asks for.
+    /// </para>
+    /// <para>
+    /// The scan's blob path is passed so the tool can open it. That is not a credential: the tool
+    /// runs as Team A's own identity, which holds <c>Storage Blob Data Reader</c> on the
+    /// <c>scans</c> container and nothing else, so naming a blob grants no access the team did not
+    /// already have, and no access at all to <c>crops</c>, Cosmos or the queue.
+    /// </para>
+    /// <para>
+    /// Corners are requested as <em>fractions of the image</em> rather than pixels, which is also
+    /// the shape <c>detect_cards</c> returns, so a measured corner can be passed straight through
+    /// without the model doing arithmetic on it. The caller, which decoded the image, scales them
+    /// back.
     /// </para>
     /// </summary>
-    internal static string BuildPrompt(int width, int height) => $$"""
+    internal static string BuildPrompt(int width, int height, string scanBlobPath) => $$"""
         Locate every collectible trading card visible in this photo.
 
-        The photo is {{width}} pixels wide and {{height}} pixels high.
+        The photo is {{width}} pixels wide and {{height}} pixels high. The same photo is stored at
+        the blob path {{scanBlobPath}}.
+
+        FIRST, call the detect_cards tool with sourceBlobPath = {{scanBlobPath}}. It measures the
+        card corners by edge detection and returns them as fractions of the image, already ordered
+        and already filtered to card-shaped regions. Do not estimate coordinates yourself while that
+        tool can measure them for you.
+
+        THEN use the photo to judge what the tool could not:
+        - Drop any returned region that is not actually a card — a coaster, a phone, a playmat
+          panel, a shadow. Geometry alone cannot tell.
+        - Add any card the tool missed, estimating its corners yourself. A card touching the edge of
+          the frame, or one with almost no contrast against the surface, is the usual miss.
+        - Fix the rotation. The tool cannot tell which end of a card is its top, because that is
+          printed on the face rather than being part of its shape; you can see it. Rotate the four
+          points so the card's printed top-left comes first.
+        - Set gameHint from the card frame or back.
+
+        If the tool fails or returns no cards, estimate every corner yourself and say nothing about
+        the failure — just return your best answer in the same format.
 
         Cards may be at an oblique angle, rotated arbitrarily, partially overlapping, and misaligned
         with each other. Many modern printings are borderless, full-art, textured, foil-etched or
@@ -63,9 +95,9 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
     public string AgentId => $"cardgeo/{_agentId}";
 
     public async Task<IReadOnlyList<DetectedBoundary>> DetectAsync(
-        AgentImage image, int width, int height, CancellationToken ct = default)
+        AgentImage image, string scanBlobPath, int width, int height, CancellationToken ct = default)
     {
-        var reply = await _client.RunAsync(_agentId, BuildPrompt(width, height), image, ct);
+        var reply = await _client.RunAsync(_agentId, BuildPrompt(width, height, scanBlobPath), image, ct);
 
         // Logged in full because a wrong quad is invisible downstream: the crop succeeds, the
         // identification agent sees a picture of a table, and nothing anywhere reports an error.
