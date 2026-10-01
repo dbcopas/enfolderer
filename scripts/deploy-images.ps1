@@ -305,46 +305,65 @@ List what the registry holds with:
         @{ name = "$prefix-mcp-cardcatalog-pokemon"; rg = "$prefix-cardid" }
     )
 
+    # One read per app, returning both the image and the ingress hostname. Two separate `az
+    # containerapp show` calls would be twice the chances of a transient CLI failure, and when one
+    # of the pair failed the report contradicted itself: an app listed as missing in this section
+    # and answering /healthz in the next.
+    #
+    # az exits non-zero and writes to stderr for a genuinely absent app, but also for a throttled
+    # or dropped request, and the two are indistinguishable from the exit code. Retrying tells them
+    # apart: an app that does not exist fails every time.
     $stillPlaceholder = 0
     $missing = 0
+    $unhealthy = 0
     foreach ($app in $apps) {
-        $running = az containerapp show -g $app.rg -n $app.name `
-            --query "properties.template.containers[0].image" -o tsv 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $running) {
-            Write-Bad "$($app.name): not found in $($app.rg)"
+        $info = $null
+        foreach ($attempt in 1..3) {
+            $json = az containerapp show -g $app.rg -n $app.name --query `
+                "{image:properties.template.containers[0].image, fqdn:properties.configuration.ingress.fqdn}" `
+                -o json 2>$null
+            if ($LASTEXITCODE -eq 0 -and $json) {
+                $info = $json | ConvertFrom-Json
+                break
+            }
+            if ($attempt -lt 3) { Start-Sleep -Seconds 3 }
+        }
+
+        if (-not $info -or -not $info.image) {
+            Write-Bad "$($app.name): could not be read from $($app.rg) after 3 attempts"
             $missing++
             continue
         }
-        if ($running -like '*k8se/quickstart*') {
-            Write-Bad "$($app.name): still on the placeholder ($running)"
+
+        if ($info.image -like '*k8se/quickstart*') {
+            Write-Bad "$($app.name): still on the placeholder ($($info.image))"
             $stillPlaceholder++
-        }
-        else {
-            Write-Good "$($app.name): $running"
-        }
-    }
-
-    # Every app serves an anonymous /healthz — the API from its own Program.cs, the MCP servers
-    # from McpServerHost. Calling all of them checks image, ingress port and revision health at
-    # once, and a 404 here is the signature of an app still on the placeholder. The worker is
-    # absent because it has no ingress: it takes its work from the queue.
-    Write-Step "4. Call /healthz on everything that has ingress"
-
-    $unhealthy = 0
-    foreach ($app in $apps | Where-Object { $_.name -ne "$prefix-worker" }) {
-        $fqdn = az containerapp show -g $app.rg -n $app.name `
-            --query "properties.configuration.ingress.fqdn" -o tsv 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $fqdn) {
-            Write-Bad "$($app.name): no ingress"
-            $unhealthy++
             continue
         }
+
+        # The tag is the part worth seeing; the registry host is the same for all five.
+        $shortImage = ($info.image -split '/')[-1]
+
+        # Every app with ingress serves an anonymous /healthz — the API from its own Program.cs,
+        # the MCP servers from McpServerHost — so this checks image, ingress port and revision
+        # health together. The worker has none: it takes its work from the queue.
+        if (-not $info.fqdn) {
+            if ($app.name -eq "$prefix-worker") {
+                Write-Good "$($app.name): $shortImage (no ingress, as designed)"
+            }
+            else {
+                Write-Bad "$($app.name): $shortImage but no ingress"
+                $unhealthy++
+            }
+            continue
+        }
+
         try {
-            $health = Invoke-RestMethod -Uri "https://$fqdn/healthz" -TimeoutSec 30
-            Write-Good "$($app.name): $($health.status)"
+            $health = Invoke-RestMethod -Uri "https://$($info.fqdn)/healthz" -TimeoutSec 30
+            Write-Good "$($app.name): $shortImage — healthz $($health.status)"
         }
         catch {
-            Write-Bad "$($app.name): $($_.Exception.Message)"
+            Write-Bad "$($app.name): $shortImage — healthz failed: $($_.Exception.Message)"
             $unhealthy++
         }
     }
