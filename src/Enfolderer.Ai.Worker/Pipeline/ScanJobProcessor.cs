@@ -70,7 +70,7 @@ public sealed class ScanJobProcessor
             // what the customer wrote in the notes.
             var scanName = Path.GetFileName(job.BlobPath);
             var scan = new AgentImage(source.ToArray(), scanName, ScanBlobPaths.ContentTypeFor(scanName));
-            var boundaries = await _boundaryAgent.DetectAsync(scan, ct);
+            var boundaries = await _boundaryAgent.DetectAsync(scan, dimensions.Width, dimensions.Height, ct);
             job = await _jobs.UpsertAsync(
                 job with { Status = ScanJobStatus.Identifying, CardsDetected = boundaries.Count },
                 ct);

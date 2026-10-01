@@ -18,11 +18,16 @@ public sealed class StubCardBoundaryAgent : ICardBoundaryAgent
 
     public string AgentId => "stub/CardBoundaryAgent";
 
-    public Task<IReadOnlyList<DetectedBoundary>> DetectAsync(AgentImage image, CancellationToken ct = default)
+    public Task<IReadOnlyList<DetectedBoundary>> DetectAsync(
+        AgentImage image, int width, int height, CancellationToken ct = default)
     {
         _log.LogWarning("Using the stub boundary agent; configure ScanPipeline:GeometryProjectEndpoint for real detection.");
 
-        var dimensions = TryReadDimensions(image) ?? new ImageDimensions(1000, 1400);
+        // The caller has already decoded the image, so its size is preferred; the fallback keeps
+        // the stub usable from a test that does not have real bytes to hand.
+        var dimensions = width > 0 && height > 0
+            ? new ImageDimensions(width, height)
+            : TryReadDimensions(image) ?? new ImageDimensions(1000, 1400);
 
         // Inset by 10% so the quad is obviously a placeholder rather than the whole frame.
         double insetX = dimensions.Width * 0.1, insetY = dimensions.Height * 0.1;
