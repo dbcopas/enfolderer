@@ -213,6 +213,37 @@ List the ones you have with:
         $registry = $outputs.Value.registryName.value
     }
 
+    # Read the parameters file once if it is going to be used at all: both the recovery branch below
+    # and the placeholder check need it, and two reads could disagree.
+    $onFile = $null
+    if ($UseParametersFile) {
+        $fromFile = Get-Content -Raw -Path 'infra/main.parameters.json' | ConvertFrom-Json
+        if (-not $fromFile.PSObject.Properties['parameters']) {
+            throw "infra/main.parameters.json has no 'parameters' object. Is it an ARM parameters file?"
+        }
+        $onFile = $fromFile.parameters
+
+        # It ships with placeholder object ids. Deploying all-zero GUIDs points every role assignment
+        # at principals that do not exist, and the deployment reports success while nothing can sign
+        # in — so check before deploying rather than diagnosing it afterwards.
+        $placeholder = '00000000-0000-0000-0000-000000000000'
+        $unset = @(
+            foreach ($n in 'apiClientId', 'teamAGroupObjectId', 'teamBGroupObjectId') {
+                if ($onFile.PSObject.Properties[$n] -and $onFile.$n.value -eq $placeholder) { $n }
+            }
+        )
+        if ($unset) {
+            throw @"
+infra/main.parameters.json still holds placeholder ids for: $($unset -join ', ')
+
+Those are checked in as all-zero GUIDs. Deploying them points the role assignments at principals
+that do not exist: the deployment reports success and nothing can sign in. Fill them in first — see
+"If the deployment records no parameters" in docs/azure-setup.md, which gives a command that reads
+each value back out of your deployment.
+"@
+        }
+    }
+
     if ($parameters -and $parameters.PSObject.Properties['namePrefix'] -and $registry) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $cache) | Out-Null
         [ordered] @{
@@ -228,22 +259,21 @@ List the ones you have with:
         $location = $saved.location
         $parameters = $saved.parameters
         $registry = $saved.registryName
-        Write-Bad "deployment '$DeploymentName' is in a failed state and records no parameters"
+        Write-Bad "deployment '$DeploymentName' records no usable parameters"
         Write-Note "using the copy this script saved at $($saved.savedUtc) in .deploy-images/"
     }
     elseif ($UseParametersFile) {
         # -UseParametersFile is the way out of exactly this situation, so it must not depend on the
-        # deployed parameters it exists to replace. The file uses ARM's own { "value": … } shape,
-        # so it drops straight into the same variable.
-        $fromFile = Get-Content -Raw -Path 'infra/main.parameters.json' | ConvertFrom-Json
-        $parameters = $fromFile.parameters
-        if (-not $parameters.PSObject.Properties['namePrefix']) {
+        # deployed parameters it exists to replace. The file uses ARM's own { "value": … } shape, so
+        # it drops straight into the same variable.
+        if (-not $onFile.PSObject.Properties['namePrefix']) {
             throw "infra/main.parameters.json records no namePrefix. Is it this template's file?"
         }
-        if ($parameters.PSObject.Properties['location']) {
-            $location = $parameters.location.value
+        $parameters = $onFile
+        if ($onFile.PSObject.Properties['location']) {
+            $location = $onFile.location.value
         }
-        Write-Bad "deployment '$DeploymentName' is in a failed state and records no parameters"
+        Write-Bad "deployment '$DeploymentName' records no usable parameters"
         Write-Note "reading infra/main.parameters.json instead, as -UseParametersFile asks"
     }
     else {
@@ -265,29 +295,6 @@ registry:
 That run succeeds, ARM records the parameters again, and every later run can go back to replaying
 them. Do not commit the filled-in parameters file.
 "@
-    }
-
-    # The file ships with placeholder object ids, so check it whenever it is the source of truth,
-    # not only on the recovery path. Deploying all-zero GUIDs points every role assignment at
-    # principals that do not exist, and the deployment reports success while nothing can sign in.
-    if ($UseParametersFile) {
-        $onFile = (Get-Content -Raw -Path 'infra/main.parameters.json' | ConvertFrom-Json).parameters
-        $placeholder = '00000000-0000-0000-0000-000000000000'
-        $unset = @(
-            foreach ($n in 'apiClientId', 'teamAGroupObjectId', 'teamBGroupObjectId') {
-                if ($onFile.PSObject.Properties[$n] -and $onFile.$n.value -eq $placeholder) { $n }
-            }
-        )
-        if ($unset) {
-            throw @"
-infra/main.parameters.json still holds placeholder ids for: $($unset -join ', ')
-
-Those are checked in as all-zero GUIDs. Deploying them points the role assignments at principals
-that do not exist: the deployment reports success and nothing can sign in. Fill them in first — see
-"If the deployment records no parameters" in docs/azure-setup.md, which gives a command that reads
-each value back out of your deployment.
-"@
-        }
     }
 
     $prefix = $parameters.namePrefix.value
