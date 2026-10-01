@@ -1,9 +1,10 @@
-// The private path from the compute tier to storage.
+// The private path from the compute tier to the data tier.
 //
-// Storage is reachable only over private endpoints, so every service that touches blobs or queues
-// has to send its outbound traffic through this VNet. A Container Apps environment does that by
-// being created on a subnet of its own — the delegation is exclusive, so an environment cannot
-// share one — hence one subnet for the platform environment and one per team.
+// Storage and Cosmos are reachable only over private endpoints, so every service that touches
+// blobs, queues or job documents has to send its outbound traffic through this VNet. A Container
+// Apps environment does that by being created on a subnet of its own — the delegation is
+// exclusive, so an environment cannot share one — hence one subnet for the platform environment
+// and one per team.
 //
 // The desktop client is deliberately absent from all of this: it only ever calls the API's public
 // HTTPS endpoint, so it can run from anywhere without a VPN, a private resolver or a jump host.
@@ -16,6 +17,9 @@ param location string = resourceGroup().location
 
 @description('Resource id of the storage account to place behind private endpoints.')
 param storageAccountId string
+
+@description('Resource id of the Cosmos account to place behind a private endpoint.')
+param cosmosAccountId string
 
 @description('''
 Address space of the demo VNet. A /24 holds the three /27 environment subnets and the /28 for
@@ -95,6 +99,14 @@ resource queueZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
   location: 'global'
 }
 
+// Cosmos is private for the same reasons as storage, and needs the same three pieces: a zone, a
+// link to the VNet, and an endpoint. Job documents hold the customer's scan history, so the job
+// store is no less sensitive than the photographs themselves.
+resource cosmosZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: 'privatelink.documents.azure.com'
+  location: 'global'
+}
+
 resource blobZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
   parent: blobZone
   name: '${namePrefix}-vnet'
@@ -107,6 +119,16 @@ resource blobZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@202
 
 resource queueZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
   parent: queueZone
+  name: '${namePrefix}-vnet'
+  location: 'global'
+  properties: {
+    virtualNetwork: { id: vnet.id }
+    registrationEnabled: false
+  }
+}
+
+resource cosmosZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: cosmosZone
   name: '${namePrefix}-vnet'
   location: 'global'
   properties: {
@@ -179,6 +201,41 @@ resource queueZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups
     ]
   }
   dependsOn: [ queueZoneLink ]
+}
+
+// 'Sql' is the group id for the Cosmos SQL (core) API, which is the one this demo uses. It is
+// unrelated to Azure SQL.
+resource cosmosEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = {
+  name: '${namePrefix}-cosmos-pe'
+  location: location
+  properties: {
+    subnet: {
+      id: '${vnet.id}/subnets/private-endpoints'
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'cosmos'
+        properties: {
+          privateLinkServiceId: cosmosAccountId
+          groupIds: [ 'Sql' ]
+        }
+      }
+    ]
+  }
+}
+
+resource cosmosZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01' = {
+  parent: cosmosEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'cosmos'
+        properties: { privateDnsZoneId: cosmosZone.id }
+      }
+    ]
+  }
+  dependsOn: [ cosmosZoneLink ]
 }
 
 output platformSubnetId string = '${vnet.id}/subnets/platform-apps'

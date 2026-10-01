@@ -113,12 +113,14 @@ jobs.MapPost("/", async (
         return Results.Problem(
             title: "Could not create the scan job.",
             detail: $"Azure Cosmos DB returned {(int)ex.StatusCode}/{ex.SubStatusCode} for the identity "
-                  + $"{cosmosPrincipal}. That principal needs the Cosmos DB Built-in Data Contributor "
-                  + "role on the account. It is a data-plane assignment, so it does not appear in "
-                  + "`az role assignment list` and is not granted by Owner — list it with "
-                  + "`az cosmosdb sql role assignment list`. If the oid above is already listed "
-                  + "there, the assignment is fine and the account is reached over a blocked "
-                  + "network path instead.",
+                  + $"{cosmosPrincipal}. Either that principal lacks the Cosmos DB Built-in Data "
+                  + "Contributor role on the account, or the account was unreachable over the "
+                  + "network — Cosmos reports both the same way, so check both. The role is a "
+                  + "data-plane assignment: it never appears in `az role assignment list` or the "
+                  + "portal's IAM blade, and is listed only by `az cosmosdb sql role assignment "
+                  + "list`. For the network, an account with public access disabled needs a private "
+                  + "endpoint, or nothing can reach it at all. See the API log for Cosmos's own "
+                  + "message, which does distinguish the two.",
             statusCode: StatusCodes.Status502BadGateway);
     }
     catch (CosmosException ex)

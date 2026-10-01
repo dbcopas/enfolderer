@@ -71,6 +71,11 @@ resource cosmos 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
     databaseAccountOfferType: 'Standard'
     // Job state is only ever read through the data-plane RBAC roles below.
     disableLocalAuth: true
+    // Private-only, matching the storage account: job documents hold the customer's scan history,
+    // and are reached over the private endpoint in modules/network.bicep. Stated explicitly rather
+    // than left to default, because a policy-governed subscription may disable public access
+    // anyway — and without the endpoint below, that silently cuts the API off from its job store.
+    publicNetworkAccess: 'Disabled'
     consistencyPolicy: { defaultConsistencyLevel: 'Session' }
     locations: [
       {
