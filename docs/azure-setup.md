@@ -1082,12 +1082,14 @@ anything else, read it before continuing — that would mean the deployed infras
 from the templates for some other reason.
 
 ```powershell
-az deployment sub create `
-  --name enfolderer-scan `
-  --location $location `
-  --template-file infra/main.bicep `
-  --parameters infra/main.parameters.json
+./scripts/deploy-images.ps1 -SkipBuild
 ```
+
+That redeploys the template without rebuilding anything. Use it rather than a bare
+`az deployment sub create --parameters infra/main.parameters.json`, which would omit `imageTag` and
+send every container app back to the placeholder image — see
+[Record the agent ids](#record-the-agent-ids). If you have not built any images yet, there is
+nothing to preserve and the plain deployment above is fine.
 
 Then confirm the capability hosts exist before doing anything else — this is the check that tells
 you the redeploy actually fixed the thing you were chasing:
@@ -1259,20 +1261,27 @@ Put them in `infra/main.parameters.json`, alongside the values already there:
 "pokemonAgentId":  { "value": "asst_..." }
 ```
 
-Then apply them with a deployment:
+Then apply them:
 
 ```powershell
-az deployment sub create --name enfolderer-scan --location $location `
-  --template-file infra/main.bicep --parameters infra/main.parameters.json `
-  --parameters boundaryAgentId=$boundaryId mtgAgentId=$mtgId pokemonAgentId=$pokemonId
+./scripts/deploy-images.ps1 -SkipBuild `
+  -BoundaryAgentId asst_... -MtgAgentId asst_... -PokemonAgentId asst_...
 ```
 
-**Do not set these with `az containerapp update --set-env-vars`.** It works, and it lasts until the
-next deployment: every `az deployment sub create` rewrites the container app's environment from the
-template, so hand-set variables are silently reverted and the worker goes back to calling the agents
-by name. Passing them as parameters makes them stick, because
-[`deploy-images.ps1`](#build-and-push-the-images) replays the previous deployment's parameters on
-every later run.
+`-SkipBuild` means no image is rebuilt: the script keeps the tag the apps are already running and
+changes only the agent ids.
+
+**Do not do this with a bare `az deployment sub create`.** Two different settings revert if you do:
+
+- `az containerapp update --set-env-vars` works until the next deployment, because every deployment
+  rewrites the container app's environment from the template.
+- A deployment that does not pass `imageTag` deploys its empty default, and an empty `imageTag`
+  means *no images exist yet* — so all five apps go back to the
+  `mcr.microsoft.com/k8se/quickstart` placeholder, and every route starts returning 404. The
+  placeholder also listens on port 80 rather than 8080, so ingress moves with it.
+
+`deploy-images.ps1` avoids both by replaying the previous deployment's parameters, `imageTag`
+included, and overriding only what you asked it to change.
 
 Check what the worker is actually using at any time:
 
@@ -1443,14 +1452,24 @@ All three should report `ok`. The `try` has to be a statement in its own right: 
 try *expression*, so folding it into the output string as `"..." + (try { ... })` fails to parse
 with `The term 'try' is not recognized as a name of a cmdlet`.
 
-If a server reports `FAILED`, it is not serving yet, and attaching its tool to an agent will appear
-to succeed and then fail at run time. Check whether it is still on the placeholder image:
+**A 404 from every server means they are running the placeholder image**, not that `/healthz` is
+missing — `McpServerHost` maps it unconditionally, so a deployed server always answers it. The
+usual cause is a deployment that did not pass `imageTag`; see
+[Record the agent ids](#record-the-agent-ids). Confirm by looking at what each app is running:
 
 ```powershell
-foreach ($rg in $geometryRg, $identificationRg) {
+$prefix = 'enf-demo'   # whatever you used for namePrefix
+foreach ($rg in "$prefix-platform", "$prefix-cardgeo", "$prefix-cardid") {
   az containerapp list -g $rg `
     --query "[].{Name:name, Image:properties.template.containers[0].image}" -o table
 }
+```
+
+`mcr.microsoft.com/k8se/quickstart` in that column is the placeholder. Put the real images back
+with:
+
+```powershell
+./scripts/deploy-images.ps1
 ```
 
 Container Apps FQDNs contain a generated suffix, so there is no hostname you can write out by
@@ -1547,8 +1566,9 @@ az containerapp list -g $platformRg `
   --query "[].{Name:name, Image:properties.template.containers[0].image, Replicas:properties.runningStatus}" -o table
 ```
 
-Anything still showing `mcr.microsoft.com/k8se/quickstart` never got the second deployment with
-`imageTag` set.
+Anything still showing `mcr.microsoft.com/k8se/quickstart` is on the placeholder. Either it never
+got a deployment with `imageTag` set, or a later deployment omitted `imageTag` and reverted it —
+both are fixed by `./scripts/deploy-images.ps1`.
 
 A warning in the API log that `AzureAd:TenantId` is not configured means the API is running
 unauthenticated — acceptable locally, not in a deployment. Confirm the setting survived.
