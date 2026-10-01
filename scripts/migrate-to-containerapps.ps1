@@ -676,7 +676,7 @@ Write-Host @"
      }
 
      ./agents/provision.ps1 -ProjectEndpoint '$geo' ``
-       -Path ./agents/cardgeo -McpServerUrl `$mcp
+       -Path ./agents/cardgeo
 
      ./agents/provision.ps1 -ProjectEndpoint '$ident' ``
        -Path ./agents/cardid -McpServerUrl `$mcp ``
