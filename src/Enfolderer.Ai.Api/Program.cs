@@ -96,15 +96,29 @@ jobs.MapPost("/", async (
         // role assignment would otherwise still surface as a bare 500. Only a refusal is read as a
         // permissions problem: throttling and outages use the same exception and must not send the
         // reader off to check role assignments.
-        loggerFactory.CreateLogger("Jobs").LogError(
-            ex, "Cosmos refused job {JobId}: {StatusCode}/{SubStatusCode}", jobId, ex.StatusCode, ex.SubStatusCode);
+        //
+        // Name the principal, as the upload handler does. "Grant the role" is actively misleading
+        // once the role is already granted, which is the common case: a host carrying several
+        // identities presents a different one than the role was granted to, and the only way to
+        // tell is to read the object id back off the token that was actually issued.
+        var cosmosLog = loggerFactory.CreateLogger("Jobs");
+
+        var cosmosPrincipal = await IdentityDiagnostics.DescribeAsync(
+            credential, "https://cosmos.azure.com/.default", cosmosLog, ct);
+
+        cosmosLog.LogError(
+            ex, "Cosmos refused job {JobId} from {Principal} (configured client id {ClientId}): {StatusCode}/{SubStatusCode}",
+            jobId, cosmosPrincipal, platform.ManagedIdentityClientId ?? "(unset)", ex.StatusCode, ex.SubStatusCode);
 
         return Results.Problem(
             title: "Could not create the scan job.",
-            detail: $"Azure Cosmos DB returned {(int)ex.StatusCode}/{ex.SubStatusCode}. The API's "
-                  + "managed identity needs the Cosmos DB Built-in Data Contributor role on the "
-                  + "account; that is a data-plane assignment, so it does not appear in "
-                  + "`az role assignment list` and is not granted by Owner.",
+            detail: $"Azure Cosmos DB returned {(int)ex.StatusCode}/{ex.SubStatusCode} for the identity "
+                  + $"{cosmosPrincipal}. That principal needs the Cosmos DB Built-in Data Contributor "
+                  + "role on the account. It is a data-plane assignment, so it does not appear in "
+                  + "`az role assignment list` and is not granted by Owner — list it with "
+                  + "`az cosmosdb sql role assignment list`. If the oid above is already listed "
+                  + "there, the assignment is fine and the account is reached over a blocked "
+                  + "network path instead.",
             statusCode: StatusCodes.Status502BadGateway);
     }
     catch (CosmosException ex)

@@ -1699,10 +1699,12 @@ policy-governed subscription the setting will be reverted under you anyway.
 A refusal from Cosmos rather than Storage looks like this:
 
 ```text
-Azure Cosmos DB returned 403/0. The API's managed identity needs the Cosmos DB Built-in Data
-Contributor role on the account; that is a data-plane assignment, so it does not appear in
-`az role assignment list` and is not granted by Owner.
+Azure Cosmos DB returned 403/0 for the identity oid=776dde8b-… appid=… tid=…
+That principal needs the Cosmos DB Built-in Data Contributor role on the account.
 ```
+
+The **oid is the thing to check first**, because the common cause is not a missing role but the app
+presenting a *different* identity than the one the role was granted to.
 
 Cosmos has **two separate role systems**, and this is the one people do not expect. The familiar
 `az role assignment` commands manage *control-plane* roles — who may rename the account, change its
@@ -1744,30 +1746,70 @@ foreach ($p in $apiPrincipal, $workerPrincipal) {
 }
 ```
 
-This is idempotent in effect: re-running it for a principal that already has the role returns the
-existing assignment rather than failing.
+Re-running this for a principal that already has the role creates a **second, identical
+assignment** rather than failing — so the listing will show the same principal twice. Duplicates
+are harmless (permissions are a union), but they are a sign you did not need to run it. Remove one
+with `az cosmosdb sql role assignment delete -g $platformRg -a $cosmosName --role-assignment-id <name>`
+if the clutter bothers you.
 
-Grant it and the next scan still fails for a minute or two — a new data-plane assignment takes a
-short while to be honoured. Wait, then retry before concluding it did not work.
+A genuinely new assignment takes a minute or two to be honoured, so wait before retrying.
 
-If both principals *are* listed and the call is still refused, the API is presenting a different
-identity than the one that was granted. The substatus distinguishes the two cases:
+### The principal is listed and it is still refused
 
-| Status | Means |
-| --- | --- |
-| `403/0` | The principal in the token holds no data-plane role on this account. |
-| `403/5` | A network rule blocked the request before RBAC was consulted. |
+This is the case to expect, because `infra/modules/data-rbac.bicep` already creates both
+assignments: a complete deployment has them, so finding them present proves only that the template
+worked. Granting them again changes nothing.
 
-For `403/0`, check which identity the app carries and which it was told to present, using the same
-two commands as the Storage section above — the value of `ScanPlatform__ManagedIdentityClientId`
-must be the API identity's **client id**:
+Work through these in order.
+
+**1. Does the oid in the error match the API identity?** This is why the error names it.
+
+```powershell
+az identity show -g $platformRg -n "$prefix-api-id" --query principalId -o tsv
+```
+
+If it differs, the app is presenting a different identity than the one that was granted. Check that
+`ScanPlatform__ManagedIdentityClientId` holds the API identity's **client id** — a different GUID
+from the object id above, and the usual mix-up:
 
 ```powershell
 az identity show -g $platformRg -n "$prefix-api-id" --query clientId -o tsv
+
+$env = az containerapp show -g $platformRg -n "$prefix-api" `
+  --query "properties.template.containers[0].env" -o json | ConvertFrom-Json
+($env | Where-Object name -eq 'ScanPlatform__ManagedIdentityClientId').value
 ```
 
-Redeploying is the safest way to restore any missing assignment, since the template owns all of
-them:
+**2. Restart the revision.** A replica that started before the assignment existed caches both its
+token and the refusal, and will keep returning 403 long after the grant is in place. Restarting is
+the only way to clear it:
+
+```powershell
+$revision = az containerapp revision list -g $platformRg -n "$prefix-api" `
+  --query "[?properties.active].name | [0]" -o tsv
+az containerapp revision restart -g $platformRg -n "$prefix-api" --revision $revision
+```
+
+**3. Read the API's own log.** The exception is logged in full, and Cosmos's own message names the
+principal it refused and why — which is more specific than anything the 502 can carry:
+
+```powershell
+az containerapp logs show -g $platformRg -n "$prefix-api" --tail 100
+```
+
+**4. Confirm it is the account you think.** The endpoint the API was configured with must be the
+account you granted on:
+
+```powershell
+($env | Where-Object name -eq 'ScanPlatform__CosmosEndpoint').value
+"expected: https://$cosmosName.documents.azure.com:443/"
+```
+
+The substatus narrows it further: `403/0` is RBAC refusing the principal in the token, while a
+network rule blocking the request before RBAC was consulted reports a different substatus and
+points at the private path rather than at roles.
+
+Redeploying restores any assignment that really is missing, since the template owns all of them:
 
 ```powershell
 ./scripts/deploy-images.ps1 -SkipBuild
