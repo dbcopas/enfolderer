@@ -26,8 +26,13 @@ public interface ICardBoundaryAgent
     /// Locates every collectible card in the image. The image is passed as bytes, which are
     /// uploaded to Team A's project: the agent never receives a storage credential, and Team A
     /// sees only the photograph it was given.
+    /// <para>
+    /// <paramref name="width"/> and <paramref name="height"/> are the decoded pixel size of that
+    /// photograph. They are needed because the returned corners are fractions of the image, which
+    /// only the caller can turn back into pixels.
+    /// </para>
     /// </summary>
-    Task<IReadOnlyList<DetectedBoundary>> DetectAsync(AgentImage image, CancellationToken ct = default);
+    Task<IReadOnlyList<DetectedBoundary>> DetectAsync(AgentImage image, int width, int height, CancellationToken ct = default);
 }
 
 /// <summary>A crop handed to an identification agent.</summary>
