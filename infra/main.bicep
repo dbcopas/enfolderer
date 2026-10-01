@@ -132,7 +132,7 @@ module data 'modules/data.bicep' = {
   }
 }
 
-// The private path to storage. Deployed before anything that reaches the data plane, so the
+// The private path to the data tier. Deployed before anything that reaches the data plane, so the
 // endpoints and DNS zones exist by the time the API and worker start.
 module network 'modules/network.bicep' = {
   name: 'network'
@@ -141,6 +141,7 @@ module network 'modules/network.bicep' = {
     namePrefix: namePrefix
     location: location
     storageAccountId: data.outputs.storageAccountId
+    cosmosAccountId: data.outputs.cosmosAccountId
   }
 }
 

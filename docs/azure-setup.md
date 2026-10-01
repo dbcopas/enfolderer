@@ -31,10 +31,10 @@ desktop client ──HTTPS──▶  <prefix>-api  ─┐
                   cardgeo mcp-imaging  ───┘
                                           │
                                           ▼
-                             private endpoints (blob, queue)
+                             private endpoints (blob, queue, Cosmos)
                                           │
                                           ▼
-                                   storage account
+                            storage account + Cosmos account
                              publicNetworkAccess: Disabled
 ```
 
@@ -44,9 +44,11 @@ Two consequences are worth knowing before you read the rest of this guide:
   client write to the account, and there never will be. `POST /jobs` returns the job id; the client
   PUTs the image to `jobs/{jobId}/content` with its bearer token, and the API — which holds the
   write permission on the `scans` container — relays the bytes.
-- **Storage is private unconditionally.** There is no parameter to turn it back on. In a
-  policy-governed subscription `publicNetworkAccess: Enabled` is reverted anyway, and the demo is
-  more honest without it.
+- **Storage and Cosmos are private unconditionally.** There is no parameter to turn either back on.
+  In a policy-governed subscription `publicNetworkAccess: Enabled` is reverted anyway, and the demo
+  is more honest without it. Both accounts therefore depend on their private endpoints: an account
+  with public access disabled and no endpoint is unreachable from everywhere, including from your
+  own compute.
 - **The agents are sent image bytes, not image URLs.** Foundry runs the agents on Microsoft's own
   service, outside your VNet, so it cannot fetch a private blob however the URL is signed. The
   worker uploads the photo to Team A's project and each crop to Team B's project through the
@@ -1700,11 +1702,14 @@ A refusal from Cosmos rather than Storage looks like this:
 
 ```text
 Azure Cosmos DB returned 403/0 for the identity oid=776dde8b-… appid=… tid=…
-That principal needs the Cosmos DB Built-in Data Contributor role on the account.
+Either that principal lacks the Cosmos DB Built-in Data Contributor role on the
+account, or the account was unreachable over the network.
 ```
 
-The **oid is the thing to check first**, because the common cause is not a missing role but the app
-presenting a *different* identity than the one the role was granted to.
+Cosmos reports both faults with the same status **and the same substatus**, so the 502 cannot tell
+you which it was. Two things narrow it down: the **oid**, because a common cause is the app
+presenting a *different* identity than the one the role was granted to; and the API's own log,
+which carries Cosmos's original message and does distinguish them.
 
 Cosmos has **two separate role systems**, and this is the one people do not expect. The familiar
 `az role assignment` commands manage *control-plane* roles — who may rename the account, change its
@@ -1712,6 +1717,10 @@ throughput, read its keys. Reading and writing documents is governed by a second
 assignments stored on the account itself, listed with `az cosmosdb sql role assignment`. Subscription
 Owner grants you nothing in that second system, and `az role assignment list` will never show it, so
 an identity can look fully privileged and still be refused.
+
+**The portal cannot show you these either.** The account's *Access control (IAM)* blade lists
+control-plane assignments only, so a correctly configured identity appears nowhere in it. Do not
+read that absence as a missing role — the CLI below is the only view of the data plane.
 
 `infra/modules/data-rbac.bicep` creates the two assignments the pipeline needs, so a complete
 deployment has them. Check what is actually there:
@@ -1762,7 +1771,37 @@ worked. Granting them again changes nothing.
 
 Work through these in order.
 
-**1. Does the oid in the error match the API identity?** This is why the error names it.
+**1. Is there a private endpoint for Cosmos?** This is the one that does not look like a
+permissions problem but reports itself as one. A Cosmos account with **public network access
+disabled and no private endpoint** is unreachable from everywhere, and the refusal it returns is a
+`403` — the same status and substatus as a missing role, with no hint that the cause is the network
+rather than RBAC. Check both halves:
+
+```powershell
+az cosmosdb show -g $platformRg -n $cosmosName --query publicNetworkAccess -o tsv
+
+az network private-endpoint list -g $platformRg `
+  --query "[].{Name:name, Target:privateLinkServiceConnections[0].privateLinkServiceId}" -o table
+```
+
+If the first prints `Disabled` and no endpoint in the second targets the Cosmos account, that is the
+fault. `infra/modules/network.bicep` creates it — along with the `privatelink.documents.azure.com`
+zone and its VNet link, all three of which are needed — so redeploy:
+
+```powershell
+./scripts/deploy-images.ps1 -SkipBuild
+```
+
+A deployment that predates that endpoint will not have one, and a subscription policy that disables
+public access on new accounts produces exactly this state. Confirm the fix from inside a replica,
+where a `10.x` address means DNS reached the private zone:
+
+```powershell
+az containerapp exec -g $platformRg -n "$prefix-api" `
+  --command "getent hosts $cosmosName.documents.azure.com"
+```
+
+**2. Does the oid in the error match the API identity?** This is why the error names it.
 
 ```powershell
 az identity show -g $platformRg -n "$prefix-api-id" --query principalId -o tsv
@@ -1780,7 +1819,7 @@ $env = az containerapp show -g $platformRg -n "$prefix-api" `
 ($env | Where-Object name -eq 'ScanPlatform__ManagedIdentityClientId').value
 ```
 
-**2. Restart the revision.** A replica that started before the assignment existed caches both its
+**3. Restart the revision.** A replica that started before the assignment existed caches both its
 token and the refusal, and will keep returning 403 long after the grant is in place. Restarting is
 the only way to clear it:
 
@@ -1790,29 +1829,20 @@ $revision = az containerapp revision list -g $platformRg -n "$prefix-api" `
 az containerapp revision restart -g $platformRg -n "$prefix-api" --revision $revision
 ```
 
-**3. Read the API's own log.** The exception is logged in full, and Cosmos's own message names the
-principal it refused and why — which is more specific than anything the 502 can carry:
+**4. Read the API's own log.** The exception is logged in full, and Cosmos's own message says which
+of the two it was — a network block names the client IP and the public internet, an RBAC refusal
+names the principal. Neither distinction survives into the 502:
 
 ```powershell
 az containerapp logs show -g $platformRg -n "$prefix-api" --tail 100
 ```
 
-**4. Confirm it is the account you think.** The endpoint the API was configured with must be the
+**5. Confirm it is the account you think.** The endpoint the API was configured with must be the
 account you granted on:
 
 ```powershell
 ($env | Where-Object name -eq 'ScanPlatform__CosmosEndpoint').value
 "expected: https://$cosmosName.documents.azure.com:443/"
-```
-
-The substatus narrows it further: `403/0` is RBAC refusing the principal in the token, while a
-network rule blocking the request before RBAC was consulted reports a different substatus and
-points at the private path rather than at roles.
-
-Redeploying restores any assignment that really is missing, since the template owns all of them:
-
-```powershell
-./scripts/deploy-images.ps1 -SkipBuild
 ```
 
 ## 7. Point the desktop app at the deployment
