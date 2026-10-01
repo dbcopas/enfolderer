@@ -52,9 +52,9 @@
     Show the request bodies that would be sent without calling Azure.
 
 .EXAMPLE
-    ./provision.ps1 -ProjectEndpoint $geo -Path ./cardgeo `
-        -McpServerUrl @{ 'mcp-imaging' = 'https://enf-demo-mcp-imaging.politeocean-1234.swedencentral.azurecontainerapps.io/mcp' }
-    Creates CardBoundaryAgent in Team A's project with its imaging tool attached.
+    ./provision.ps1 -ProjectEndpoint $geo -Path ./cardgeo
+    Creates CardBoundaryAgent in Team A's project. It takes no -McpServerUrl: its YAML declares
+    no tools, because the image reaches it as message content.
 
 .EXAMPLE
     ./provision.ps1 -ProjectEndpoint $id -Path ./cardid `
