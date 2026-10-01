@@ -17,7 +17,11 @@ param workerPrincipalId string
 @description('Principal id of Team A\'s user-assigned identity.')
 param geometryPrincipalId string
 
-var storageBlobDataReader = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
+// Storage Blob Data Reader, *not* Reader (acdd72a7-3385-48ef-bd42-f606fba81ae7). Reader is a
+// control-plane role: it can see that a container exists but carries no dataActions, so a blob read
+// fails with AuthorizationPermissionMismatch while `az role assignment list` shows a plausible
+// assignment on the right container. Only the data roles below grant blob access.
+var storageBlobDataReader = '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'
 var storageBlobDataContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var storageQueueDataContributor = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
 var cosmosDataContributorId = '00000000-0000-0000-0000-000000000002'
