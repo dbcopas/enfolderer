@@ -1705,6 +1705,15 @@ $tenantId = az account show --query tenantId -o tsv
 $apiUrl   = az deployment sub show --name enfolderer-scan `
   --query properties.outputs.apiUrl.value -o tsv
 
+# The two app ids were set in step 2. If this is a new shell they are empty, so
+# read them back from Entra by display name rather than assuming they survived.
+$apiAppId    = az ad app list --display-name "Enfolderer Scan API" --query "[0].appId" -o tsv
+$clientAppId = az ad app list --display-name "Enfolderer Desktop"  --query "[0].appId" -o tsv
+
+foreach ($v in 'apiUrl','apiAppId','clientAppId') {
+  if (-not (Get-Variable $v -ValueOnly)) { throw "$v is empty - see the note below this block." }
+}
+
 @"
 api_base_url=$apiUrl
 tenant_id=$tenantId
@@ -1717,6 +1726,21 @@ scope=api://$apiAppId/Scan.Submit
 
 The `@"` … `"@` here-string expands variables; `@'` … `'@` would not, and would leave the literal
 `$prefix` in the file.
+
+If the guard throws, the named variable is empty and the file would have been written with a blank
+value — which the desktop app rejects with *Missing or empty 'client_id' in aiconfig.txt*. An empty
+`$apiAppId` or `$clientAppId` means the lookup found no app with that display name: either step 2
+has not been run, or the app was registered under a different name. List what is there with
+
+```powershell
+az ad app list --query "[].{name:displayName, appId:appId}" -o table
+```
+
+and either adjust the `--display-name` strings above to match, or go back to step 2 and create the
+registrations. An empty `$apiUrl` means the deployment name is not `enfolderer-scan`; list yours
+with `az deployment sub list --query "[].name" -o table`.
+
+A trailing `/` on `api_base_url` is optional — the app normalises it either way.
 
 Then **Tools → Scan Card Image…**, pick a photo, and sign in when prompted.
 
