@@ -50,6 +50,16 @@
     Skip the image build and only redeploy. Use with -Tag to point the apps at a tag that already
     exists in the registry, for example to roll back.
 
+.PARAMETER BoundaryAgentId
+    Agent id of Team A's boundary agent, e.g. asst_…. Omit to keep whatever the last deployment
+    used.
+
+.PARAMETER MtgAgentId
+    Agent id of Team B's Magic: The Gathering identification agent.
+
+.PARAMETER PokemonAgentId
+    Agent id of Team B's Pokemon identification agent.
+
 .EXAMPLE
     ./scripts/deploy-images.ps1
 
@@ -59,6 +69,13 @@
     ./scripts/deploy-images.ps1 -SkipBuild -Tag v1
 
     Roll the apps back to images already in the registry.
+
+.EXAMPLE
+    ./scripts/deploy-images.ps1 -SkipBuild -BoundaryAgentId asst_abc -MtgAgentId asst_def
+
+    Change only the agent ids, leaving the running images alone. Use this rather than a bare
+    `az deployment sub create`: that would deploy imageTag's empty default and send every app back
+    to the placeholder.
 
 .NOTES
     Run from the repository root: the build context is '.', and every service project has
@@ -72,7 +89,10 @@ param(
     [string] $DeploymentName = 'enfolderer-scan',
     [string] $Tag,
     [switch] $UseParametersFile,
-    [switch] $SkipBuild
+    [switch] $SkipBuild,
+    [string] $BoundaryAgentId,
+    [string] $MtgAgentId,
+    [string] $PokemonAgentId
 )
 
 Set-StrictMode -Version Latest
@@ -93,7 +113,13 @@ $images = [ordered] @{
     'mcp-cardcatalog-pokemon' = 'Enfolderer.Ai.Mcp.CardCatalog.Pokemon'
 }
 
-if (-not $Tag) { $Tag = 'v{0}' -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmm') }
+# A build needs a tag no image already uses, because both ARM and `az containerapp update` decide
+# whether to create a revision by diffing the template: re-pushing a tag it is already running
+# changes nothing it can see. -SkipBuild is the opposite case — it deploys an existing image — so
+# there the tag is resolved from the deployment further down instead.
+if (-not $Tag -and -not $SkipBuild) {
+    $Tag = 'v{0}' -f (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmm')
+}
 
 # Resolve the repository root from this script's location, so the build context is right however
 # the script was invoked.
@@ -143,7 +169,45 @@ docs/azure-setup.md before building images, and check why it failed with:
     }
     $registry = $outputs.Value.registryName.value
     Write-Note "registry $registry"
-    Write-Note "tag      $Tag"
+
+    # The whole reason this script replays parameters: imageTag defaults to empty, and an empty
+    # imageTag means "no images exist yet, run the placeholder". So any deployment that forgets to
+    # pass it silently sends all five apps back to mcr.microsoft.com/k8se/quickstart, whose only
+    # visible symptom is a 404 on every route. Recover the tag the deployment is really using.
+    $deployedTag = ''
+    if ($parameters.PSObject.Properties['imageTag']) {
+        $deployedTag = [string] $parameters.imageTag.value
+    }
+
+    if (-not $Tag) {
+        if (-not $deployedTag) {
+            throw @"
+-SkipBuild was given, but deployment '$DeploymentName' records no image tag, so there is no
+existing image to point the apps at. Every app is on the placeholder right now.
+
+Build and deploy images first:
+
+    ./scripts/deploy-images.ps1
+
+or name a tag that already exists in ${registry}:
+
+    ./scripts/deploy-images.ps1 -SkipBuild -Tag <tag>
+
+List what the registry holds with:
+
+    az acr repository show-tags --name $registry --repository enfolderer/api -o table
+"@
+        }
+        $Tag = $deployedTag
+        Write-Note "tag      $Tag (from the deployment; -SkipBuild, so nothing is rebuilt)"
+    }
+    else {
+        Write-Note "tag      $Tag"
+    }
+
+    if ($deployedTag -and $deployedTag -ne $Tag -and $SkipBuild) {
+        Write-Note "the apps are currently on '$deployedTag' and will be moved to '$Tag'"
+    }
 
     if (-not $SkipBuild) {
         Write-Step "1. Build the images"
@@ -172,6 +236,16 @@ docs/azure-setup.md before building images, and check why it failed with:
 
     Write-Step "2. Point the apps at the images"
 
+    # Agent ids are deployment parameters, so they are set here rather than with
+    # `az containerapp update --set-env-vars`, which the next deployment would overwrite.
+    $agentOverrides = [ordered] @{}
+    if ($BoundaryAgentId) { $agentOverrides['boundaryAgentId'] = $BoundaryAgentId }
+    if ($MtgAgentId)      { $agentOverrides['mtgAgentId']      = $MtgAgentId }
+    if ($PokemonAgentId)  { $agentOverrides['pokemonAgentId']  = $PokemonAgentId }
+    foreach ($o in $agentOverrides.GetEnumerator()) {
+        Write-Note "$($o.Key) = $($o.Value)"
+    }
+
     $paramFile = $null
     $deployArgs = @(
         'deployment', 'sub', 'create',
@@ -183,6 +257,9 @@ docs/azure-setup.md before building images, and check why it failed with:
     if ($UseParametersFile) {
         Write-Note "parameters from infra/main.parameters.json, as requested"
         $deployArgs += @('--parameters', 'infra/main.parameters.json', '--parameters', "imageTag=$Tag")
+        foreach ($o in $agentOverrides.GetEnumerator()) {
+            $deployArgs += @('--parameters', "$($o.Key)=$($o.Value)")
+        }
     }
     else {
         # Replay the deployed parameters with imageTag overridden. ARM records each one as
@@ -192,6 +269,9 @@ docs/azure-setup.md before building images, and check why it failed with:
             $replay[$p.Name] = @{ value = $p.Value.value }
         }
         $replay['imageTag'] = @{ value = $Tag }
+        foreach ($o in $agentOverrides.GetEnumerator()) {
+            $replay[$o.Key] = @{ value = $o.Value }
+        }
 
         $paramFile = Join-Path ([System.IO.Path]::GetTempPath()) "enfolderer-params-$([guid]::NewGuid()).json"
         @{
@@ -226,11 +306,13 @@ docs/azure-setup.md before building images, and check why it failed with:
     )
 
     $stillPlaceholder = 0
+    $missing = 0
     foreach ($app in $apps) {
         $running = az containerapp show -g $app.rg -n $app.name `
             --query "properties.template.containers[0].image" -o tsv 2>$null
         if ($LASTEXITCODE -ne 0 -or -not $running) {
             Write-Bad "$($app.name): not found in $($app.rg)"
+            $missing++
             continue
         }
         if ($running -like '*k8se/quickstart*') {
@@ -242,24 +324,36 @@ docs/azure-setup.md before building images, and check why it failed with:
         }
     }
 
-    # The API's /healthz is anonymous, so this needs no token and is a clean end-to-end check of
-    # image, ingress port and revision health at once.
-    $apiFqdn = az containerapp show -g "$prefix-platform" -n "$prefix-api" `
-        --query "properties.configuration.ingress.fqdn" -o tsv 2>$null
-    if ($apiFqdn) {
-        Write-Step "4. Call the API"
-        Write-Note "https://$apiFqdn/healthz"
+    # Every app serves an anonymous /healthz — the API from its own Program.cs, the MCP servers
+    # from McpServerHost. Calling all of them checks image, ingress port and revision health at
+    # once, and a 404 here is the signature of an app still on the placeholder. The worker is
+    # absent because it has no ingress: it takes its work from the queue.
+    Write-Step "4. Call /healthz on everything that has ingress"
+
+    $unhealthy = 0
+    foreach ($app in $apps | Where-Object { $_.name -ne "$prefix-worker" }) {
+        $fqdn = az containerapp show -g $app.rg -n $app.name `
+            --query "properties.configuration.ingress.fqdn" -o tsv 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $fqdn) {
+            Write-Bad "$($app.name): no ingress"
+            $unhealthy++
+            continue
+        }
         try {
-            $health = Invoke-RestMethod -Uri "https://$apiFqdn/healthz" -TimeoutSec 30
-            Write-Good "healthz: $($health | ConvertTo-Json -Compress)"
+            $health = Invoke-RestMethod -Uri "https://$fqdn/healthz" -TimeoutSec 30
+            Write-Good "$($app.name): $($health.status)"
         }
         catch {
-            Write-Bad "healthz did not answer: $($_.Exception.Message)"
-            Write-Note "A revision can take a minute to come up. Wait and retry:"
-            Write-Note "  Invoke-RestMethod https://$apiFqdn/healthz"
-            Write-Note "If it keeps failing, the revision did not start. Diagnose it with:"
-            Write-Note "  ./scripts/diagnose-containerapps.ps1 -Prefix $prefix"
+            Write-Bad "$($app.name): $($_.Exception.Message)"
+            $unhealthy++
         }
+    }
+
+    if ($unhealthy -gt 0) {
+        Write-Host ''
+        Write-Note "A revision can take a minute to come up, so wait and re-run before digging in."
+        Write-Note "If it persists, the revision did not start. Diagnose it with:"
+        Write-Note "  ./scripts/diagnose-containerapps.ps1 -Prefix $prefix"
     }
 
     Write-Host ''
@@ -267,8 +361,15 @@ docs/azure-setup.md before building images, and check why it failed with:
         Write-Bad "$stillPlaceholder app(s) are still on the placeholder image."
         Write-Note "Run ./scripts/diagnose-containerapps.ps1 -Prefix $prefix to find out why."
     }
+    elseif ($missing -gt 0) {
+        Write-Bad "$missing app(s) could not be read. The deployment may be incomplete."
+        Write-Note "Run ./scripts/diagnose-containerapps.ps1 -Prefix $prefix to find out why."
+    }
+    elseif ($unhealthy -gt 0) {
+        Write-Bad "All apps are on tag '$Tag', but $unhealthy did not answer /healthz."
+    }
     else {
-        Write-Good "All five apps are running tag '$Tag'."
+        Write-Good "All five apps are running tag '$Tag' and answering /healthz."
         Write-Note "Deploy a later code change with: ./scripts/deploy-images.ps1"
     }
 }
