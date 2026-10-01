@@ -1694,6 +1694,85 @@ az network private-dns link vnet list -g $platformRg -z "privatelink.blob.core.w
 Do **not** try to fix this by re-enabling public access. The account is private on purpose, and in a
 policy-governed subscription the setting will be reverted under you anyway.
 
+### If Cosmos returns 403
+
+A refusal from Cosmos rather than Storage looks like this:
+
+```text
+Azure Cosmos DB returned 403/0. The API's managed identity needs the Cosmos DB Built-in Data
+Contributor role on the account; that is a data-plane assignment, so it does not appear in
+`az role assignment list` and is not granted by Owner.
+```
+
+Cosmos has **two separate role systems**, and this is the one people do not expect. The familiar
+`az role assignment` commands manage *control-plane* roles — who may rename the account, change its
+throughput, read its keys. Reading and writing documents is governed by a second, parallel set of
+assignments stored on the account itself, listed with `az cosmosdb sql role assignment`. Subscription
+Owner grants you nothing in that second system, and `az role assignment list` will never show it, so
+an identity can look fully privileged and still be refused.
+
+`infra/modules/data-rbac.bicep` creates the two assignments the pipeline needs, so a complete
+deployment has them. Check what is actually there:
+
+```powershell
+$platformRg   = "$prefix-platform"
+# Derived from the prefix, so read it back rather than composing it.
+$cosmosName   = az cosmosdb list -g $platformRg --query "[0].name" -o tsv
+$apiPrincipal    = az identity show -g $platformRg -n "$prefix-api-id"    --query principalId -o tsv
+$workerPrincipal = az identity show -g $platformRg -n "$prefix-worker-id" --query principalId -o tsv
+
+az cosmosdb sql role assignment list -g $platformRg -a $cosmosName `
+  --query "[].{Principal:principalId, Role:roleDefinitionId, Scope:scope}" -o table
+
+"api:    $apiPrincipal"
+"worker: $workerPrincipal"
+```
+
+Both principals must appear in that table. Note it lists `principalId` — the identity's **object
+id** — not its client id, so compare against the two values printed underneath.
+
+If a principal is missing, grant it. `00000000-0000-0000-0000-000000000002` is the built-in **Cosmos
+DB Built-in Data Contributor** definition; it is the same id in every Cosmos account:
+
+```powershell
+$cosmosId = az cosmosdb show -g $platformRg -n $cosmosName --query id -o tsv
+
+foreach ($p in $apiPrincipal, $workerPrincipal) {
+  az cosmosdb sql role assignment create -g $platformRg -a $cosmosName `
+    --role-definition-id "$cosmosId/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002" `
+    --principal-id $p --scope $cosmosId
+}
+```
+
+This is idempotent in effect: re-running it for a principal that already has the role returns the
+existing assignment rather than failing.
+
+Grant it and the next scan still fails for a minute or two — a new data-plane assignment takes a
+short while to be honoured. Wait, then retry before concluding it did not work.
+
+If both principals *are* listed and the call is still refused, the API is presenting a different
+identity than the one that was granted. The substatus distinguishes the two cases:
+
+| Status | Means |
+| --- | --- |
+| `403/0` | The principal in the token holds no data-plane role on this account. |
+| `403/5` | A network rule blocked the request before RBAC was consulted. |
+
+For `403/0`, check which identity the app carries and which it was told to present, using the same
+two commands as the Storage section above — the value of `ScanPlatform__ManagedIdentityClientId`
+must be the API identity's **client id**:
+
+```powershell
+az identity show -g $platformRg -n "$prefix-api-id" --query clientId -o tsv
+```
+
+Redeploying is the safest way to restore any missing assignment, since the template owns all of
+them:
+
+```powershell
+./scripts/deploy-images.ps1 -SkipBuild
+```
+
 ## 7. Point the desktop app at the deployment
 
 Create `aiconfig.txt` beside `Enfolderer.App.exe` (the app writes a template on the first scan if
