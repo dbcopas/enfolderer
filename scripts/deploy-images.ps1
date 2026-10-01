@@ -115,6 +115,35 @@ function Write-Note { param([string] $T) Write-Host "  $T" -ForegroundColor Dark
 function Write-Good { param([string] $T) Write-Host "  $T" -ForegroundColor Green }
 function Write-Bad  { param([string] $T) Write-Host "  $T" -ForegroundColor Red }
 
+# RoleAssignmentExists means someone granted one of the template's roles by hand. Azure identifies
+# a role assignment by principal + role + scope, but names it by a GUID the creator chooses: the
+# template derives that name with guid(), while a portal or `az role assignment create` grant gets a
+# random one. ARM therefore asks for an assignment that already exists under a different name, and
+# Azure refuses rather than adopting it. Deleting the hand-made one lets the template own it again.
+function Show-RoleAssignmentCollisionHelp {
+    Write-Host ''
+    Write-Host 'A role this template grants was already granted by hand.' -ForegroundColor Red
+    Write-Host ''
+    Write-Host 'Azure matches a role assignment on principal + role + scope, but names it with a'
+    Write-Host 'GUID chosen by whoever created it. The template derives its name from the three;'
+    Write-Host 'a grant made in the portal or with `az role assignment create` gets a random one.'
+    Write-Host 'Azure will not adopt the existing assignment under a new name, so the deployment'
+    Write-Host 'fails until the hand-made one is removed. Nothing is lost by removing it: the'
+    Write-Host 'template grants the same role at the same scope.'
+    Write-Host ''
+    Write-Host 'The error above ends with the id of the assignment in the way, e.g.' -ForegroundColor DarkYellow
+    Write-Host '  "The ID of the existing role assignment is 04d6663e9d994c1db26146747a9a64c2."'
+    Write-Host ''
+    Write-Host 'That is the assignment name, not its full resource id. Look it up, check that the'
+    Write-Host 'role and scope are the ones you expect, then delete it and re-run this script:' -ForegroundColor DarkYellow
+    Write-Host '  $name = "<the id from the message>"'
+    Write-Host '  $all = az role assignment list --all -o json | ConvertFrom-Json'
+    Write-Host '  $doomed = $all | Where-Object name -eq $name'
+    Write-Host '  $doomed | Select-Object roleDefinitionName, principalId, scope'
+    Write-Host '  az role assignment delete --ids $doomed.id --yes'
+    Write-Host ''
+}
+
 # The single Dockerfile publishes whichever project PROJECT names, so one entry per service is the
 # whole build matrix. The key is the image repository, the value the project directory.
 $images = [ordered] @{
@@ -301,11 +330,28 @@ List what the registry holds with:
         $deployArgs += @('--parameters', "@$paramFile")
     }
 
+    # az writes the failure JSON to stderr, and redirecting it into the success stream is not safe
+    # under $ErrorActionPreference = 'Stop' — Windows PowerShell turns native stderr into
+    # ErrorRecords and would throw before the text could be read. A temporary file keeps it out of
+    # the pipeline, so the error can be both shown and inspected.
+    $errFile = [System.IO.Path]::GetTempFileName()
     try {
-        az @deployArgs -o none
-        if ($LASTEXITCODE -ne 0) { throw "Deployment failed. See the error above." }
+        az @deployArgs -o none 2>$errFile
+        $deployExit = $LASTEXITCODE
+
+        $deployError = ''
+        if (Test-Path $errFile) { $deployError = [string] (Get-Content $errFile -Raw) }
+        if ($deployError) { Write-Host $deployError }
+
+        if ($deployExit -ne 0) {
+            if ($deployError -match 'RoleAssignmentExists') {
+                Show-RoleAssignmentCollisionHelp
+            }
+            throw "Deployment failed. See the error above."
+        }
     }
     finally {
+        Remove-Item $errFile -Force -ErrorAction SilentlyContinue
         if ($paramFile -and (Test-Path $paramFile)) {
             Remove-Item $paramFile -Force -ErrorAction SilentlyContinue
         }
