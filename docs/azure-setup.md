@@ -750,7 +750,7 @@ in it as a preflight check.
   The Bicep is pinned to an API version your tenant's resource provider does not offer. Take the
   newest stable version (no `-preview` suffix) from the list in the error and update the
   `Microsoft.CognitiveServices/...@<version>` lines in `infra/modules/foundry-account.bicep`,
-  `infra/modules/foundry-project.bicep` and `infra/modules/cross-project-access.bicep`. Foundry moves quickly, so this pinning is
+  `infra/modules/foundry-project.bicep` and `infra/modules/foundry-invoke-access.bicep`. Foundry moves quickly, so this pinning is
   the part of the template most likely to age.
 - **A `Warning BCP081: ... does not have types available`** at compile time is worth heeding rather
   than ignoring: it usually means that API version does not exist for that resource type, and the
@@ -1897,6 +1897,48 @@ account you granted on:
 ($env | Where-Object name -eq 'ScanPlatform__CosmosEndpoint').value
 "expected: https://$cosmosName.documents.azure.com:443/"
 ```
+
+### If Foundry returns 401 PermissionDenied
+
+A job that fails in `DetectingBoundaries` or `Identifying` with
+
+```text
+Foundry authorization failure (401). Foundry request POST /files against
+https://<account>.services.ai.azure.com/api/projects/cardgeo failed with 401:
+{"error":{"code":"PermissionDenied","message":"Principal does not have access to API/Operation."}}
+```
+
+is the worker being refused by a Foundry **project**. Note the status: Foundry answers a missing
+project role with `401`, not the `403` that storage and Cosmos use for the same situation, and the
+message names neither the principal nor the role. The endpoint in the message is the useful part —
+it names which project refused, and therefore which boundary was crossed.
+
+The worker needs **Foundry User** on both projects: on `cardid` to run Team B's identification
+agents, and on `cardgeo` to run Team A's boundary agent. Both come from
+`infra/modules/foundry-invoke-access.bicep`. List what it actually holds:
+
+```powershell
+$workerPrincipal = az identity show -g $platformRg -n "$prefix-worker-id" --query principalId -o tsv
+az role assignment list --assignee $workerPrincipal --all `
+  --query "[?contains(scope, 'CognitiveServices')].{Role:roleDefinitionName, Scope:scope}" -o table
+```
+
+Each scope must end in `/projects/cardgeo` or `/projects/cardid`. A grant on the **account** —
+a scope ending at `…/accounts/<name>` — would work, and is wrong: it reaches every project in the
+account, which is the boundary this demo exists to show. If either row is missing, redeploy rather
+than granting by hand:
+
+```powershell
+./scripts/deploy-images.ps1 -SkipBuild
+```
+
+Only the `cardgeo` row is missing deliberately, when the deployment was last run with
+`-GrantGeometryAccess $false`. That is demo scenario 1 in `docs/foundry-demo.md`; restore it with
+`./scripts/deploy-images.ps1 -SkipBuild -GrantGeometryAccess $true`.
+
+If both rows are present and the call is still refused, the agent id is the next suspect rather
+than the role — see "Record the agent ids" in step 4. A 401 means the project refused the
+principal; a run that starts and then fails names the agent instead.
 
 ## 7. Point the desktop app at the deployment
 
