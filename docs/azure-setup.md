@@ -1679,6 +1679,9 @@ it by hand, so the template stays the single description of who can reach what:
 ./scripts/deploy-images.ps1 -SkipBuild
 ```
 
+Granting by hand does more than duplicate the template: it **blocks** it. See "If the deployment
+fails with RoleAssignmentExists" below.
+
 **Read the role names in that table, not just the scopes.** A row reading plain **Reader** on the
 `scans` container is not Storage Blob Data Reader and grants no blob access at all: Reader is a
 control-plane role, with `*/read` under `actions` and nothing under `dataActions`. It lets the
@@ -1939,6 +1942,48 @@ Only the `cardgeo` row is missing deliberately, when the deployment was last run
 If both rows are present and the call is still refused, the agent id is the next suspect rather
 than the role — see "Record the agent ids" in step 4. A 401 means the project refused the
 principal; a run that starts and then fails names the agent instead.
+
+### If the deployment fails with RoleAssignmentExists
+
+```text
+{"code":"ResourceDeploymentFailure","target":"…/deployments/data-rbac", …
+ {"code":"RoleAssignmentExists","message":"The role assignment already exists.
+  The ID of the existing role assignment is 04d6663e9d994c1db26146747a9a64c2."}}
+```
+
+This is what granting one of the template's roles by hand costs you. Azure identifies a role
+assignment by **principal + role + scope**, but *names* it with a GUID chosen by whoever created
+it. The template derives that name deterministically with `guid()`; a grant made in the portal or
+with `az role assignment create` gets a random one. So ARM asks Azure to create an assignment that
+already exists under a different name, and Azure refuses rather than adopting it — which fails the
+whole deployment, including the parts that have nothing to do with RBAC.
+
+Nothing is lost by deleting the hand-made assignment: the template grants the same role at the same
+scope, under its own name, as soon as the collision is gone.
+
+The message ends with the assignment's **name**, not its full resource id, so look it up first.
+Filtering happens in PowerShell rather than in `--query`, because `az` on Windows is a `.cmd`
+wrapper that mangles a JMESPath expression containing `?`:
+
+```powershell
+$name = "04d6663e9d994c1db26146747a9a64c2"   # from the message
+$all = az role assignment list --all -o json | ConvertFrom-Json
+$doomed = $all | Where-Object name -eq $name
+
+# Confirm it is one of the template's before deleting it.
+$doomed | Select-Object roleDefinitionName, principalId, scope
+
+az role assignment delete --ids $doomed.id --yes
+```
+
+Then re-run the deployment:
+
+```powershell
+./scripts/deploy-images.ps1 -SkipBuild
+```
+
+If it fails again naming a different id, repeat — each hand-made grant collides separately. The
+script recognises this error and prints these steps for you.
 
 ## 7. Point the desktop app at the deployment
 
