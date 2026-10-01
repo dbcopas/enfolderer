@@ -1,5 +1,8 @@
+using Azure;
+using Azure.Core;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Imaging;
+using Enfolderer.Ai.Infrastructure;
 using Enfolderer.Ai.Infrastructure.Queueing;
 using Enfolderer.Ai.Infrastructure.Storage;
 using Enfolderer.Ai.Worker.Agents;
@@ -21,6 +24,8 @@ public sealed class ScanJobProcessor
     private readonly ICardBoundaryAgent _boundaryAgent;
     private readonly IReadOnlyDictionary<string, ICardIdentificationAgent> _idAgents;
     private readonly ScanPipelineOptions _options;
+    private readonly TokenCredential _credential;
+    private readonly ScanPlatformOptions _platform;
     private readonly ILogger<ScanJobProcessor> _log;
 
     public ScanJobProcessor(
@@ -29,6 +34,8 @@ public sealed class ScanJobProcessor
         ICardBoundaryAgent boundaryAgent,
         IEnumerable<ICardIdentificationAgent> idAgents,
         ScanPipelineOptions options,
+        TokenCredential credential,
+        ScanPlatformOptions platform,
         ILogger<ScanJobProcessor> log)
     {
         _jobs = jobs;
@@ -36,6 +43,8 @@ public sealed class ScanJobProcessor
         _boundaryAgent = boundaryAgent;
         _idAgents = idAgents.ToDictionary(a => a.Game, StringComparer.OrdinalIgnoreCase);
         _options = options;
+        _credential = credential;
+        _platform = platform;
         _log = log;
     }
 
@@ -99,13 +108,42 @@ public sealed class ScanJobProcessor
         {
             // A revoked cross-project connection lands here while the job is still in
             // DetectingBoundaries, which is exactly the first Foundry boundary demo.
-            var error = ex is FoundryAccessException { IsAuthorizationFailure: true } access
-                ? $"Foundry authorization failure ({access.StatusCode}). {access.Message}"
-                : ex.Message;
+            //
+            // A storage refusal lands here too, and in the same state, because the first thing the
+            // job does is read its own photograph. "403" on its own cannot be acted on: the useful
+            // question is which principal was refused and for which blob, since the worker's role
+            // is scoped to one container and a host can carry more than one identity.
+            var error = ex switch
+            {
+                FoundryAccessException { IsAuthorizationFailure: true } access
+                    => $"Foundry authorization failure ({access.StatusCode}). {access.Message}",
+                RequestFailedException { Status: 401 or 403 } refused
+                    => await DescribeStorageRefusalAsync(refused, job.BlobPath),
+                _ => ex.Message
+            };
 
-            _log.LogError(ex, "Job {JobId} failed in state {Status}.", job.JobId, job.Status);
+            _log.LogError(ex, "Job {JobId} failed in state {Status}. {Error}", job.JobId, job.Status, error);
             await _jobs.UpsertAsync(job with { Status = ScanJobStatus.Failed, Error = error }, CancellationToken.None);
         }
+    }
+
+    /// <summary>
+    /// Turns a storage refusal into something that names the principal Azure actually refused.
+    /// <para>
+    /// Configuration says only which identity was <em>asked</em> for, so reading the object id back
+    /// off the issued token is the only way to tell a missing role assignment from the app
+    /// presenting a different identity than the one the role was granted to.
+    /// </para>
+    /// </summary>
+    private async Task<string> DescribeStorageRefusalAsync(RequestFailedException ex, string blobPath)
+    {
+        var principal = await IdentityDiagnostics.DescribeAsync(
+            _credential, "https://storage.azure.com/.default", _log);
+
+        return $"Azure Storage returned {ex.Status} {ex.ErrorCode} reading {blobPath} as {principal} "
+             + $"(configured client id {_platform.ManagedIdentityClientId ?? "(unset)"}). The worker's "
+             + "identity needs Storage Blob Data Reader on the scans container and Storage Blob Data "
+             + "Contributor on crops; compare the oid above with the worker identity's principal id.";
     }
 
     private async Task<List<IdentifiedCard>> IdentifyAllAsync(

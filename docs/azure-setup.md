@@ -1659,6 +1659,42 @@ Expect **Storage Blob Data Contributor** scoped to the `scans` container, and **
 Contributor** on the account. The API needs write on `scans` because it relays the client's upload
 into the container itself.
 
+The **worker** is a separate identity with a different set, and a job that fails in
+`DetectingBoundaries` with `AuthorizationPermissionMismatch` is usually this one rather than the
+API's: the first thing a job does is read back the photograph the API just wrote. Its three
+assignments are **Storage Blob Data Reader** on `scans`, **Storage Blob Data Contributor** on
+`crops` and **Storage Queue Data Contributor** on the account — reader on `scans`, so the worker
+can never overwrite the original, and contributor only on the crops it produces:
+
+```powershell
+$workerPrincipal = az identity show -g $platformRg -n "$prefix-worker-id" --query principalId -o tsv
+az role assignment list --assignee $workerPrincipal --all `
+  --query "[].{Role:roleDefinitionName, Scope:scope}" -o table
+```
+
+`infra/modules/data-rbac.bicep` creates all three. If one is missing, redeploy rather than granting
+it by hand, so the template stays the single description of who can reach what:
+
+```powershell
+./scripts/deploy-images.ps1 -SkipBuild
+```
+
+The worker names the refused principal in its own log, the same way the API does, so compare the
+`oid` there with `$workerPrincipal` above:
+
+```powershell
+az containerapp logs show -g $platformRg -n "$prefix-worker" --tail 50
+```
+
+A newly granted blob role takes a few minutes to propagate, and a replica that started before it
+was honoured keeps the refusal cached. Restart it rather than waiting:
+
+```powershell
+$revision = az containerapp revision list -g $platformRg -n "$prefix-worker" `
+  --query "[?properties.active].name | [0]" -o tsv
+az containerapp revision restart -g $platformRg -n "$prefix-worker" --revision $revision
+```
+
 If the object ids match *and* those roles are present, read the error code again. Storage
 distinguishes the two kinds of refusal, and only one of them is about permissions:
 
