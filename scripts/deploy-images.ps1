@@ -204,7 +204,8 @@ List the ones you have with:
     # So keep a copy next to the repository, refreshed whenever ARM's own copy is readable.
     $cache = Join-Path $repoRoot ".deploy-images/$DeploymentName.json"
     $location = $deployment.location
-    $parameters = $deployment.properties.parameters
+    $recorded = $deployment.properties.PSObject.Properties['parameters']
+    $parameters = if ($recorded) { $recorded.Value } else { $null }
 
     $outputs = $deployment.properties.PSObject.Properties['outputs']
     $registry = $null
@@ -262,9 +263,10 @@ them. Do not commit the filled-in parameters file.
     Write-Note "deployment '$DeploymentName' in $location, prefix '$prefix'"
     if (-not $registry) {
         $registry = az acr list -g "$prefix-platform" --query "[0].name" -o tsv
-        if (-not $registry) {
+        if ($LASTEXITCODE -ne 0 -or -not $registry) {
             throw "No container registry found in $prefix-platform. Re-run step 3 of docs/azure-setup.md."
         }
+        $registry = $registry.Trim()
         Write-Note "registry $registry (found in $prefix-platform; the deployment records no outputs)"
     }
     else {
