@@ -6,9 +6,11 @@ using Microsoft.Extensions.Logging;
 namespace Enfolderer.Ai.Worker.Pipeline;
 
 /// <summary>
-/// Offline stand-in for Team A's boundary agent. It reports a single quad covering the middle of
-/// the image so the whole upload → poll → result loop can be demonstrated with no Azure resources.
-/// Selected only when no geometry project endpoint is configured.
+/// Offline stand-in for Team A's boundary agent. It runs the same <see cref="CardDetector"/> that
+/// sits behind Team A's <c>detect_cards</c> MCP tool, so the whole upload → poll → result loop can
+/// be demonstrated — with real geometry — and no Azure resources at all. What it cannot stand in
+/// for is the agent's judgement over those results. Selected only when no geometry project endpoint
+/// is configured.
 /// </summary>
 public sealed class StubCardBoundaryAgent : ICardBoundaryAgent
 {
@@ -19,7 +21,7 @@ public sealed class StubCardBoundaryAgent : ICardBoundaryAgent
     public string AgentId => "stub/CardBoundaryAgent";
 
     public Task<IReadOnlyList<DetectedBoundary>> DetectAsync(
-        AgentImage image, int width, int height, CancellationToken ct = default)
+        AgentImage image, string scanBlobPath, int width, int height, CancellationToken ct = default)
     {
         _log.LogWarning("Using the stub boundary agent; configure ScanPipeline:GeometryProjectEndpoint for real detection.");
 
@@ -28,6 +30,14 @@ public sealed class StubCardBoundaryAgent : ICardBoundaryAgent
         var dimensions = width > 0 && height > 0
             ? new ImageDimensions(width, height)
             : TryReadDimensions(image) ?? new ImageDimensions(1000, 1400);
+
+        var detected = TryDetect(image);
+        if (detected.Count > 0)
+        {
+            _log.LogInformation("Stub boundary agent measured {Count} card(s) locally.", detected.Count);
+            return Task.FromResult<IReadOnlyList<DetectedBoundary>>(
+                detected.Select(d => new DetectedBoundary(d.Quad, d.Confidence, CardGames.Unknown)).ToList());
+        }
 
         // Inset by 10% so the quad is obviously a placeholder rather than the whole frame.
         double insetX = dimensions.Width * 0.1, insetY = dimensions.Height * 0.1;
@@ -41,6 +51,20 @@ public sealed class StubCardBoundaryAgent : ICardBoundaryAgent
         ]);
 
         return Task.FromResult<IReadOnlyList<DetectedBoundary>>([new DetectedBoundary(quad, 0.1, CardGames.Unknown)]);
+    }
+
+    private IReadOnlyList<DetectedCard> TryDetect(AgentImage image)
+    {
+        try
+        {
+            using var buffer = new MemoryStream(image.Content.ToArray(), writable: false);
+            return CardDetector.Detect(buffer);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Local card detection failed; falling back to a placeholder quad.");
+            return [];
+        }
     }
 
     private ImageDimensions? TryReadDimensions(AgentImage image)

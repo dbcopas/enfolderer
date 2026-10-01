@@ -27,12 +27,17 @@ public interface ICardBoundaryAgent
     /// uploaded to Team A's project: the agent never receives a storage credential, and Team A
     /// sees only the photograph it was given.
     /// <para>
+    /// <paramref name="scanBlobPath"/> names that same photograph in storage, so Team A's own
+    /// imaging tool can open it and measure the corners properly. It is a name, not a credential —
+    /// the tool reads it as Team A's identity, which can read <c>scans</c> and nothing else.
+    /// </para>
+    /// <para>
     /// <paramref name="width"/> and <paramref name="height"/> are the decoded pixel size of that
     /// photograph. They are needed because the returned corners are fractions of the image, which
     /// only the caller can turn back into pixels.
     /// </para>
     /// </summary>
-    Task<IReadOnlyList<DetectedBoundary>> DetectAsync(AgentImage image, int width, int height, CancellationToken ct = default);
+    Task<IReadOnlyList<DetectedBoundary>> DetectAsync(AgentImage image, string scanBlobPath, int width, int height, CancellationToken ct = default);
 }
 
 /// <summary>A crop handed to an identification agent.</summary>
