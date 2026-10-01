@@ -1679,6 +1679,23 @@ it by hand, so the template stays the single description of who can reach what:
 ./scripts/deploy-images.ps1 -SkipBuild
 ```
 
+**Read the role names in that table, not just the scopes.** A row reading plain **Reader** on the
+`scans` container is not Storage Blob Data Reader and grants no blob access at all: Reader is a
+control-plane role, with `*/read` under `actions` and nothing under `dataActions`. It lets the
+identity see that the container exists, so the listing looks correct while every read fails with
+`AuthorizationPermissionMismatch`. Azure's built-in roles pair off into control-plane and data-plane
+versions with similar names — Reader and Storage Blob Data Reader, Contributor and Storage Blob Data
+Contributor — and only the data ones reach the bytes.
+
+Deployments before this was corrected granted the control-plane Reader to the worker and to Team A.
+Redeploying adds the right assignment beside the old one rather than replacing it, because an
+assignment's name is derived from the role definition id. Clear the leftovers:
+
+```powershell
+./scripts/cleanup.ps1 -Prefix $prefix -WhatIf     # lists what would go
+./scripts/cleanup.ps1 -Prefix $prefix -Confirm:$false
+```
+
 The worker names the refused principal in its own log, the same way the API does, so compare the
 `oid` there with `$workerPrincipal` above:
 

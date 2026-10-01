@@ -14,6 +14,12 @@
       Team B's identity no longer reads the crops container, and a run that dies before its own
       cleanup leaves an uploaded file behind in the project.
 
+    * data-rbac.bicep carried the role definition GUID for Reader where it meant Storage Blob Data
+      Reader. Reader has no dataActions, so the worker and Team A could never read the scans
+      container. Correcting the GUID writes a new assignment rather than replacing the old one,
+      because the assignment name is a guid() of the role definition id, so the useless Reader
+      grants linger and make the listing look right while blob reads keep failing.
+
     It also removes the two role assignments that were granted by hand while debugging the 403:
     Storage Blob Delegator at subscription scope, and Storage Blob Data Contributor at account
     scope. Those matter most. Account-scoped Contributor gives the API write access to the crops
@@ -32,6 +38,12 @@
 .PARAMETER PlatformResourceGroup
     Resource group holding the storage account and the API and worker identities.
     Defaults to "<Prefix>-platform".
+
+.PARAMETER GeometryResourceGroup
+    Resource group holding Team A's identity. Defaults to "<Prefix>-cardgeo".
+
+.PARAMETER IdentificationResourceGroup
+    Resource group holding Team B's identity. Defaults to "<Prefix>-cardid".
 
 .PARAMETER SubscriptionId
     Subscription to work in. Defaults to the one az is currently set to.
@@ -77,6 +89,8 @@
 param(
     [Parameter(Mandatory = $true)] [string] $Prefix,
     [string] $PlatformResourceGroup,
+    [string] $GeometryResourceGroup,
+    [string] $IdentificationResourceGroup,
     [string] $SubscriptionId,
     [string] $GeometryProjectEndpoint,
     [string] $IdentificationProjectEndpoint,
@@ -90,6 +104,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if (-not $PlatformResourceGroup) { $PlatformResourceGroup = "$Prefix-platform" }
+if (-not $GeometryResourceGroup) { $GeometryResourceGroup = "$Prefix-cardgeo" }
+if (-not $IdentificationResourceGroup) { $IdentificationResourceGroup = "$Prefix-cardid" }
 if (-not $SubscriptionId) {
     $SubscriptionId = az account show --query id -o tsv
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($SubscriptionId)) {
@@ -109,11 +125,16 @@ $script:removed = 0
 $script:pending = 0
 
 function Get-PrincipalId {
-    param([string] $IdentityName)
+    param(
+        [string] $IdentityName,
+        [string] $ResourceGroup
+    )
 
-    $id = az identity show -g $PlatformResourceGroup -n $IdentityName --query principalId -o tsv 2>$null
+    if (-not $ResourceGroup) { $ResourceGroup = $PlatformResourceGroup }
+
+    $id = az identity show -g $ResourceGroup -n $IdentityName --query principalId -o tsv 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($id)) {
-        Write-Warning "Identity $IdentityName not found in $PlatformResourceGroup; skipping its grants."
+        Write-Warning "Identity $IdentityName not found in $ResourceGroup; skipping its grants."
         return $null
     }
     return $id.Trim()
@@ -161,7 +182,8 @@ if ($RoleAssignments) {
 
     $apiPrincipal = Get-PrincipalId "$Prefix-api-id"
     $workerPrincipal = Get-PrincipalId "$Prefix-worker-id"
-    $cardidPrincipal = Get-PrincipalId "$Prefix-cardid-id"
+    $cardidPrincipal = Get-PrincipalId "$Prefix-cardid-id" $IdentificationResourceGroup
+    $cardgeoPrincipal = Get-PrincipalId "$Prefix-cardgeo-id" $GeometryResourceGroup
 
     # Nothing signs a blob URL any more, so Delegator has no purpose. The subscription-scoped
     # one was never in the template to begin with.
@@ -179,6 +201,17 @@ if ($RoleAssignments) {
     Remove-Grant $cardidPrincipal 'Storage Blob Data Reader' `
         "$storageId/blobServices/default/containers/crops" `
         'Team B receives crops through the Foundry Files API, not from storage'
+
+    # data-rbac.bicep used to carry the GUID for Reader where it meant Storage Blob Data Reader.
+    # Reader has no dataActions, so these never granted a blob read; the corrected template writes
+    # a differently named assignment beside them rather than replacing them, because the assignment
+    # name is a guid() of the role definition id.
+    Remove-Grant $workerPrincipal 'Reader' `
+        "$storageId/blobServices/default/containers/scans" `
+        'Reader is control plane only and never granted the blob read the worker needs'
+    Remove-Grant $cardgeoPrincipal 'Reader' `
+        "$storageId/blobServices/default/containers/scans" `
+        'Reader is control plane only and never granted the blob read Team A needs'
 
     if ($script:removed -eq 0 -and $script:pending -eq 0) {
         Write-Host '  nothing to remove' -ForegroundColor Green
