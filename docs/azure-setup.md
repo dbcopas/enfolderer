@@ -838,15 +838,17 @@ warning per MCP tool that was left off. Do [step 5](#5-host-the-mcp-servers), th
 URLs to attach the tools — agents are matched by name, so this updates them in place:
 
 ```powershell
-./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo -McpServerUrl @{
-  'mcp-imaging' = $mcp['mcp-imaging']
-}
 ./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid `
   -Only MtgCardIdAgent, PokemonCardIdAgent, OrchestratorAgent -McpServerUrl @{
     'mcp-cardcatalog-mtg'     = $mcp['mcp-cardcatalog-mtg']
     'mcp-cardcatalog-pokemon' = $mcp['mcp-cardcatalog-pokemon']
   }
 ```
+
+`cardgeo` takes no `-McpServerUrl`: `card-boundary-agent.yaml` declares `tools: []`, because the
+image reaches that agent as message content and the imaging server's only tool, `crop_quad`, is
+work the worker does itself. The server is still deployed and still running as Team A's identity;
+it is simply not attached to the agent.
 
 Pass only the URLs for servers that project is allowed to use. Handing `cardgeo` a catalogue URL
 is exactly what [demo scenario 2](foundry-demo.md#2-call-team-bs-mtg-catalogue-from-team-as-project)
@@ -1942,6 +1944,64 @@ Only the `cardgeo` row is missing deliberately, when the deployment was last run
 If both rows are present and the call is still refused, the agent id is the next suspect rather
 than the role — see "Record the agent ids" in step 4. A 401 means the project refused the
 principal; a run that starts and then fails names the agent instead.
+
+### If a run fails with tool_server_error
+
+```text
+Agent 'asst_…' run ended with status 'failed': {
+  "code": "tool_server_error",
+  "message": "MCP Connector error. Http status: 424, error details: Error retrieving tool
+   list from MCP server: 'imaging'. Http status code: 424 (Failed Dependency)"
+}
+```
+
+This failure is the opposite of the ones above: the worker is fully authorised — the upload, the
+thread and the run all returned `200` — and the *agent* then failed because Foundry could not reach
+a tool server attached to it. The `424` is Foundry reporting that its own outbound call to the MCP
+server did not produce a tool list.
+
+Read the server label in the message first; it tells you whether that tool should be there at all.
+`CardBoundaryAgent` declares `tools: []`, so a label such as `imaging` on it means the live agent
+is **stale** — provisioned from an earlier definition that did attach the imaging server. Check what
+the agent actually has:
+
+```powershell
+$geo   = az deployment sub show --name enfolderer-scan --query properties.outputs.geometryProjectEndpoint.value -o tsv
+$token = az account get-access-token --resource 'https://ai.azure.com' --query accessToken -o tsv
+$agent = Invoke-RestMethod -Uri "$geo/assistants/asst_5YS2jhx13zVgso1f5yE6Dm9c?api-version=v1" `
+  -Headers @{ Authorization = 'Bearer ' + $token }
+$agent.tools | ConvertTo-Json -Depth 5
+```
+
+Anything other than `[]` is left over. Re-provision to clear it — agents are matched by name, so
+the id is kept and the worker needs no change:
+
+```powershell
+./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo
+```
+
+Note no `-McpServerUrl`: that is what makes the tool list empty. Re-run the `Invoke-RestMethod`
+above to confirm `tools` is now `[]`, then scan again.
+
+If the label *is* one the YAML asks for — `catalogue` on an identification agent — the server
+itself is unreachable. Check it answers at all, from your own machine:
+
+```powershell
+$mcpUrl = az containerapp show -g "$prefix-cardid" -n "$prefix-mcp-cardcatalog-mtg" `
+  --query properties.configuration.ingress.fqdn -o tsv
+Invoke-RestMethod -Uri "https://$mcpUrl/healthz"
+```
+
+A `404` there means the app is still on the placeholder image: run `./scripts/deploy-images.ps1`.
+Anything else is the container failing to start — `./scripts/diagnose-containerapps.ps1 -Prefix
+$prefix` reports which.
+
+> **Why a stale tool survives a re-provision in an older checkout.** The data plane treats an agent
+> update as a merge, so a key left out of the payload keeps its current value. `provision.ps1` used
+> to omit `tools` whenever a definition produced none, which meant an agent that had stopped
+> declaring a tool kept it forever and no amount of re-provisioning removed it. It now always sends
+> the list when the YAML has a `tools` key, and warns when a tool it could not resolve is about to
+> be removed.
 
 ### If the deployment fails with RoleAssignmentExists
 

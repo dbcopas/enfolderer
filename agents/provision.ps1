@@ -139,16 +139,23 @@ function ConvertTo-AgentPayload {
     }
 
     # Tool wiring differs per tool type and, for connected agents and MCP servers, depends on
-    # connections that must already exist in the project. Emitted only when present.
-    if ($Definition.ContainsKey('tools') -and $Definition.tools) {
+    # connections that must already exist in the project.
+    #
+    # An update is a merge: a key left out of the payload keeps whatever the live agent already has.
+    # So `tools` must be sent whenever the definition has a tools key at all, including when that
+    # key is an empty list — otherwise an agent that used to declare an MCP server keeps it forever,
+    # and every run fails with tool_server_error long after the YAML stopped asking for the tool.
+    if ($Definition.ContainsKey('tools')) {
         $tools = @()
-        foreach ($tool in $Definition.tools) {
+        $dropped = 0
+        foreach ($tool in @($Definition.tools | Where-Object { $_ })) {
             switch ($tool.type) {
                 'mcp' {
                     # The YAML names the server; only the caller knows where it ended up running.
                     # The data plane insists on an http(s) URL, so a server that is not yet hosted
                     # cannot be attached at all: leave the tool off and re-run later.
                     if (-not $McpUrls.ContainsKey($tool.server)) {
+                        $dropped++
                         Write-Warning "Agent '$($Definition.name)': no URL given for MCP server '$($tool.server)', so that tool is being left off. Re-run with -McpServerUrl @{ '$($tool.server)' = 'https://...' } once it is hosted."
                     }
                     else {
@@ -191,6 +198,7 @@ function ConvertTo-AgentPayload {
                     # no URL: provisioning one game only is a legitimate thing to do, and the
                     # orchestrator is updated in place when the other agents arrive.
                     if (-not $connectedId) {
+                        $dropped++
                         $hint = if ($tool.project -eq $ProjectName) {
                             "Provision '$($tool.agent)' in this project and re-run."
                         }
@@ -222,7 +230,14 @@ function ConvertTo-AgentPayload {
                 default { throw "Agent '$($Definition.name)' uses unsupported tool type '$($tool.type)'." }
             }
         }
-        if ($tools) { $payload.tools = $tools }
+
+        # The tool list is sent whole, so a tool left off above is removed from the live agent
+        # rather than merely not added. Say so: the warnings alone read like "nothing changed".
+        if ($dropped -gt 0) {
+            Write-Warning "Agent '$($Definition.name)': the tool list is replaced wholesale, so the $dropped tool(s) left off above will be removed from the agent if it already has them. Re-run once they can be resolved."
+        }
+
+        $payload.tools = $tools
     }
 
     return $payload
