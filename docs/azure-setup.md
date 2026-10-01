@@ -838,6 +838,10 @@ warning per MCP tool that was left off. Do [step 5](#5-host-the-mcp-servers), th
 URLs to attach the tools — agents are matched by name, so this updates them in place:
 
 ```powershell
+./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo -McpServerUrl @{
+    'mcp-imaging' = $mcp['mcp-imaging']
+  }
+
 ./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid `
   -Only MtgCardIdAgent, PokemonCardIdAgent, OrchestratorAgent -McpServerUrl @{
     'mcp-cardcatalog-mtg'     = $mcp['mcp-cardcatalog-mtg']
@@ -845,10 +849,17 @@ URLs to attach the tools — agents are matched by name, so this updates them in
   }
 ```
 
-`cardgeo` takes no `-McpServerUrl`: `card-boundary-agent.yaml` declares `tools: []`, because the
-image reaches that agent as message content and the imaging server's only tool, `crop_quad`, is
-work the worker does itself. The server is still deployed and still running as Team A's identity;
-it is simply not attached to the agent.
+Both projects need a URL, and each needs only its own. `cardgeo` gets `mcp-imaging`, which is where
+Team A's actual skill lives: `detect_cards` measures the card corners by edge detection. Run the
+boundary agent without that URL and provisioning still succeeds — it warns, attaches no tools, and
+the agent falls back to estimating coordinates from the picture, which it is bad at. If crops come
+back looking like pieces of the table, this is the first thing to check.
+
+The imaging server also offers `crop_quad`, and `card-boundary-agent.yaml` deliberately leaves it
+out of `allowed_tools`. That is the sharper half of the demo: one server, two tools, one reachable
+and one not — and the RBAC agrees, because writing a crop needs `Storage Blob Data Contributor` on
+`crops`, which Team A's identity does not hold. Both the allow-list and the role assignment would
+have to change before that tool could do anything.
 
 Pass only the URLs for servers that project is allowed to use. Handing `cardgeo` a catalogue URL
 is exactly what [demo scenario 2](foundry-demo.md#2-call-team-bs-mtg-catalogue-from-team-as-project)
@@ -1973,15 +1984,19 @@ $agent = Invoke-RestMethod -Uri "$geo/assistants/asst_5YS2jhx13zVgso1f5yE6Dm9c?a
 $agent.tools | ConvertTo-Json -Depth 5
 ```
 
-Anything other than `[]` is left over. Re-provision to clear it — agents are matched by name, so
-the id is kept and the worker needs no change:
+The boundary agent should have exactly one tool, labelled `imaging`, allowing only `detect_cards`.
+Anything else — a catalogue label, or `crop_quad` in `allowed_tools` — is left over from an earlier
+run. Re-provision to replace the list; agents are matched by name, so the id is kept and the worker
+needs no change:
 
 ```powershell
-./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo
+./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo -McpServerUrl @{
+    'mcp-imaging' = $mcp['mcp-imaging']
+  }
 ```
 
-Note no `-McpServerUrl`: that is what makes the tool list empty. Re-run the `Invoke-RestMethod`
-above to confirm `tools` is now `[]`, then scan again.
+The tool list is replaced wholesale, so this removes anything the YAML no longer declares. Re-run
+the `Invoke-RestMethod` above to confirm, then scan again.
 
 If the label *is* one the YAML asks for — `catalogue` on an identification agent — the server
 itself is unreachable. Check it answers at all, from your own machine:
@@ -2073,11 +2088,29 @@ az containerapp update -g "$prefix-cardgeo" -n "$prefix-worker" `
 Remember that a deployment rewrites container app environment variables, so this lasts only until
 the next `./scripts/deploy-images.ps1`.
 
-> **Why geometry is the weak link.** A chat model has no detection head: localising a card is the
-> hardest thing this pipeline asks of one, and it is the step most likely to need a better model
-> deployment, a few-shot example, or a real computer-vision tool behind Team A's imaging MCP
-> server. Identification is comparatively easy — reading text off a crop is what these models are
-> good at — which is why a bad crop shows up as an identification failure and misdirects you.
+> **Why geometry used to be the weak link.** A chat model has no detection head, and it never sees
+> the photo at its original resolution, so asked for corner coordinates it invents plausible ones.
+> That is why Team A's `detect_cards` tool exists: it *measures* the corners by edge detection and
+> hands the agent something to check rather than something to guess. The agent still decides which
+> regions are really cards and which way up they are, which is the part geometry cannot settle.
+>
+> So the first question when the crops are wrong is whether the tool is attached at all. The
+> boundary agent provisioned without `-McpServerUrl` loses its tools silently and goes straight back
+> to guessing:
+>
+> ```powershell
+> $token = az account get-access-token --resource 'https://ai.azure.com' --query accessToken -o tsv
+> $agent = Invoke-RestMethod -Uri "$geo/assistants/<boundary asst_ id>?api-version=v1" `
+>   -Headers @{ Authorization = 'Bearer ' + $token }
+> $agent.tools | ConvertTo-Json -Depth 5
+> ```
+>
+> Expect one `mcp` tool with `server_label` `imaging` and `allowed_tools` of exactly
+> `["detect_cards"]`. An empty list is the bug; re-provision with the URL as shown in
+> [Attaching the MCP tools](#attaching-the-mcp-tools).
+>
+> Identification is comparatively easy — reading text off a crop is what these models are good at —
+> which is why a bad crop shows up as an identification failure and misdirects you.
 
 **The agent answered but not in the shape asked for.** The reply is quoted in the message, so prose,
 a markdown fence or different key names are visible on sight. Fix the prompt in the agent YAML and

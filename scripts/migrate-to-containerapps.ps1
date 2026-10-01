@@ -665,9 +665,8 @@ Write-Step 'Done. Three things are left, and they need values only you have.'
 
 Write-Host @"
 
-  1. Re-provision the agents. CardBoundaryAgent no longer has any tools, and every MCP URL
-     changed, so this is not optional. provision.ps1 updates in place by name, so the asst_ ids
-     you already recorded survive.
+  1. Re-provision the agents. Every MCP URL changed, so this is not optional. provision.ps1
+     updates in place by name, so the asst_ ids you already recorded survive.
 
      `$mcp = @{}
      foreach (`$o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
@@ -676,7 +675,7 @@ Write-Host @"
      }
 
      ./agents/provision.ps1 -ProjectEndpoint '$geo' ``
-       -Path ./agents/cardgeo
+       -Path ./agents/cardgeo -McpServerUrl `$mcp
 
      ./agents/provision.ps1 -ProjectEndpoint '$ident' ``
        -Path ./agents/cardid -McpServerUrl `$mcp ``

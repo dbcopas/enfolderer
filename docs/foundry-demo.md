@@ -22,6 +22,14 @@ Team A's skill is *finding cards*: any game, any frame, borderless and full-art 
 at oblique angles or rotated relative to each other. It returns geometry only — four corner
 points per card — and knows nothing about card catalogues.
 
+That skill is not just a prompt. Behind `CardBoundaryAgent` sits Team A's own MCP server,
+`mcp-imaging`, whose `detect_cards` tool measures the card corners by edge detection. This is the
+division of labour worth pointing at on screen: a chat model has no detection head and never sees
+the photo at full resolution, so asked for coordinates it invents plausible ones — the tool
+*measures* them, and the model spends its judgement on what geometry cannot settle (is that
+rectangle really a card, which end is its top, which game is it). Team B gets the benefit of both
+by invoking one agent, and cannot see, call or redeploy the server underneath it.
+
 Team B's skill is *reading cards*: given a rectified crop, work out the set, collector number and
 name, using a per-game agent backed by that game's catalogue MCP server.
 
@@ -47,6 +55,9 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
 5. Worker → `DetectingBoundaries`: uploads the photo to the `cardgeo` project and calls Team A's
    `CardBoundaryAgent` with it as `image_file` message content. Storage is private, so an agent
    cannot be handed a URL to fetch — and the upload is deleted as soon as the run ends.
+   The agent then calls its own `detect_cards` tool to measure the corners, and reviews the result
+   against the picture it was sent. The worker passes the scan's blob path along for that call: it
+   is a name, not a credential, and Team A's identity could already read `scans` and nothing else.
 6. Worker crops each quadrilateral itself (perspective-correct warp) and writes the crops to
    `crops/{jobId}/`. Team A never gets blob write access.
 7. Worker → `Identifying`: uploads each crop to the `cardid` project and fans them out to the
