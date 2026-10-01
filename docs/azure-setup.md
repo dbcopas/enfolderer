@@ -1961,20 +1961,38 @@ whole deployment, including the parts that have nothing to do with RBAC.
 Nothing is lost by deleting the hand-made assignment: the template grants the same role at the same
 scope, under its own name, as soon as the collision is gone.
 
-The message ends with the assignment's **name**, not its full resource id, so look it up first.
+The message ends with the assignment's **name** — the last segment of its resource id — so look it
+up first. Match on the id rather than on a `name` property, which not every version of `az` returns.
 Filtering happens in PowerShell rather than in `--query`, because `az` on Windows is a `.cmd`
 wrapper that mangles a JMESPath expression containing `?`:
 
 ```powershell
 $name = "04d6663e9d994c1db26146747a9a64c2"   # from the message
 $all = az role assignment list --all -o json | ConvertFrom-Json
-$doomed = @($all | Where-Object name -eq $name)
-if (-not $doomed) { throw "No assignment named $name; check the id in the message." }
+$doomed = @($all | Where-Object { ($_.id -split '/')[-1] -eq $name })
 
 # Confirm it is one of the template's before deleting it.
-$doomed | Select-Object roleDefinitionName, principalId, scope
+$doomed | Select-Object roleDefinitionName, principalId, scope | Format-List
 
 az role assignment delete --ids $doomed.id --yes
+```
+
+If `$doomed` is empty, delete by principal, role and scope instead — that identifies the assignment
+the way Azure does, and never depends on the name. List what the worker holds:
+
+```powershell
+$worker = az identity show -g enf-demo-platform -n enf-demo-worker-id --query principalId -o tsv
+az role assignment list --all --assignee $worker -o json | ConvertFrom-Json |
+  Select-Object roleDefinitionName, scope | Format-List
+```
+
+Every row whose role and scope the template also grants — see the table in
+[If Azure returns 403](#if-azure-returns-403) — is a collision. Remove each one:
+
+```powershell
+az role assignment delete --assignee $worker `
+  --role "Storage Blob Data Reader" `
+  --scope "/subscriptions/<sub>/resourceGroups/enf-demo-platform/providers/Microsoft.Storage/storageAccounts/<account>/blobServices/default/containers/scans"
 ```
 
 Then re-run the deployment:
@@ -1985,6 +2003,46 @@ Then re-run the deployment:
 
 If it fails again naming a different id, repeat — each hand-made grant collides separately. The
 script recognises this error and prints these steps for you.
+
+### If the deployment records no parameters
+
+```text
+deploy-images.ps1: The property 'Properties' cannot be found on this object.
+```
+
+A failed deployment **replaces** the successful one of the same name, and ARM stores a failure with
+`"parameters": null` and no outputs. So one bad run — a `RoleAssignmentExists` collision, say —
+destroys the record `deploy-images.ps1` replays, and the script can no longer find the prefix, the
+registry or your object ids.
+
+The script now keeps its own copy under `.deploy-images/` (gitignored) every time it reads a good
+deployment, and falls back to it. That copy only exists from its first successful run onwards, so if
+you hit this before then, recover once from the parameters file. Collect the real values:
+
+```powershell
+$prefix = 'enf-demo'
+az containerapp show -g "$prefix-platform" -n "$prefix-api" -o json |
+  ConvertFrom-Json |
+  ForEach-Object { $_.properties.template.containers[0].env } |
+  Where-Object name -eq 'AzureAd__ClientId' |
+  Select-Object -ExpandProperty value           # apiClientId
+
+az ad group show --group "Enfolderer Team A (Geometry)"       --query id -o tsv   # teamAGroupObjectId
+az ad group show --group "Enfolderer Team B (Identification)" --query id -o tsv   # teamBGroupObjectId
+```
+
+Put them, the prefix and the region into `infra/main.parameters.json` — it ships with placeholder
+object ids, which is why the script normally avoids it — then deploy once from it, naming the tag
+already in the registry:
+
+```powershell
+az acr repository show-tags --name "<registry>" --repository enfolderer/api -o table
+./scripts/deploy-images.ps1 -SkipBuild -Tag "<tag>" -UseParametersFile
+```
+
+That run records the parameters in ARM again and saves the local copy, so every later run can go
+back to replaying them. Revert your edits to `infra/main.parameters.json` afterwards; those object
+ids should not be committed.
 
 ## 7. Point the desktop app at the deployment
 

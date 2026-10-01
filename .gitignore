@@ -39,3 +39,6 @@ Enfolderer.App/obj/
 *.csv
 !Tokens.csv
 !Lands.csv
+
+# Parameters deploy-images.ps1 saves so a failed deployment cannot strand it.
+.deploy-images/

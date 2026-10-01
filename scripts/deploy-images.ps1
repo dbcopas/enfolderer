@@ -134,14 +134,21 @@ function Show-RoleAssignmentCollisionHelp {
     Write-Host 'The error above ends with the id of the assignment in the way, e.g.' -ForegroundColor DarkYellow
     Write-Host '  "The ID of the existing role assignment is 04d6663e9d994c1db26146747a9a64c2."'
     Write-Host ''
-    Write-Host 'That is the assignment name, not its full resource id. Look it up, check that the'
-    Write-Host 'role and scope are the ones you expect, then delete it and re-run this script:' -ForegroundColor DarkYellow
+    Write-Host 'That is the assignment name, the last segment of its resource id. Find it, check'
+    Write-Host 'that the role and scope are the ones you expect, then delete it:' -ForegroundColor DarkYellow
     Write-Host '  $name = "<the id from the message>"'
     Write-Host '  $all = az role assignment list --all -o json | ConvertFrom-Json'
-    Write-Host '  $doomed = @($all | Where-Object name -eq $name)'
-    Write-Host '  if (-not $doomed) { throw "No assignment named $name; check the id." }'
-    Write-Host '  $doomed | Select-Object roleDefinitionName, principalId, scope'
+    Write-Host '  $doomed = @($all | Where-Object { ($_.id -split "/")[-1] -eq $name })'
+    Write-Host '  $doomed | Select-Object roleDefinitionName, principalId, scope | Format-List'
     Write-Host '  az role assignment delete --ids $doomed.id --yes   # --ids takes several'
+    Write-Host ''
+    Write-Host 'If that matches nothing, the assignment is one az will not list by id — delete it'
+    Write-Host 'by principal, role and scope instead. List what the worker holds:' -ForegroundColor DarkYellow
+    Write-Host '  $worker = az identity show -g <prefix>-platform -n <prefix>-worker-id --query principalId -o tsv'
+    Write-Host '  az role assignment list --all --assignee $worker -o json | ConvertFrom-Json |'
+    Write-Host '    Select-Object roleDefinitionName, scope | Format-List'
+    Write-Host 'then remove the one this template also grants, e.g.:' -ForegroundColor DarkYellow
+    Write-Host '  az role assignment delete --assignee $worker --role "Storage Blob Data Reader" --scope <scope>'
     Write-Host ''
 }
 
@@ -191,26 +198,78 @@ List the ones you have with:
 "@
     }
 
+    # A failed deployment replaces the successful one of the same name, and ARM records a failure
+    # with "parameters": null and no outputs at all. The deployment is therefore not a durable
+    # source of truth: one bad run would leave this script with nothing to replay and no way back.
+    # So keep a copy next to the repository, refreshed whenever ARM's own copy is readable.
+    $cache = Join-Path $repoRoot ".deploy-images/$DeploymentName.json"
     $location = $deployment.location
     $parameters = $deployment.properties.parameters
-    if (-not $parameters.PSObject.Properties['namePrefix']) {
-        throw "Deployment '$DeploymentName' records no namePrefix parameter. Is it this template?"
-    }
-    $prefix = $parameters.namePrefix.value
-    Write-Note "deployment '$DeploymentName' in $location, prefix '$prefix'"
 
-    # az omits null properties, so outputs is absent rather than empty on a failed deployment.
     $outputs = $deployment.properties.PSObject.Properties['outputs']
-    if (-not $outputs -or -not $outputs.Value.PSObject.Properties['registryName']) {
-        throw @"
-Deployment '$DeploymentName' has no registryName output, so it did not complete. Re-run step 3 of
-docs/azure-setup.md before building images, and check why it failed with:
+    $registry = $null
+    if ($outputs -and $outputs.Value -and $outputs.Value.PSObject.Properties['registryName']) {
+        $registry = $outputs.Value.registryName.value
+    }
 
-    az deployment sub show --name $DeploymentName --query properties.provisioningState -o tsv
+    if ($parameters -and $parameters.PSObject.Properties['namePrefix'] -and $registry) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $cache) | Out-Null
+        [ordered] @{
+            deployment   = $DeploymentName
+            savedUtc     = (Get-Date).ToUniversalTime().ToString('o')
+            location     = $location
+            registryName = $registry
+            parameters   = $parameters
+        } | ConvertTo-Json -Depth 20 | Set-Content -Path $cache -Encoding utf8
+    }
+    elseif (Test-Path $cache) {
+        $saved = Get-Content -Raw -Path $cache | ConvertFrom-Json
+        $location = $saved.location
+        $parameters = $saved.parameters
+        $registry = $saved.registryName
+        Write-Bad "deployment '$DeploymentName' is in a failed state and records no parameters"
+        Write-Note "using the copy this script saved at $($saved.savedUtc) in .deploy-images/"
+    }
+    else {
+        throw @"
+Deployment '$DeploymentName' records no parameters, so there is nothing to replay.
+
+That is what ARM leaves behind when a deployment fails: the failed run replaces the successful one
+under the same name, and a failed run is stored with no parameters and no outputs. This script
+normally keeps its own copy in .deploy-images/, but there is none yet — it only started saving one
+after your last successful run.
+
+Recover by deploying once from the parameters file. Fill in infra/main.parameters.json with your
+real values:
+
+    namePrefix           the prefix you deployed with, e.g. enf-demo
+    location             the region, e.g. swedencentral
+    apiClientId          az containerapp show -g <prefix>-platform -n <prefix>-api ``
+                           --query "properties.template.containers[0].env[?name=='AzureAd__ClientId'].value" -o tsv
+    teamAGroupObjectId   az ad group show --group "Enfolderer Team A (Geometry)" --query id -o tsv
+    teamBGroupObjectId   az ad group show --group "Enfolderer Team B (Identification)" --query id -o tsv
+
+then run this script once with -UseParametersFile, naming the tag already in the registry:
+
+    ./scripts/deploy-images.ps1 -SkipBuild -Tag <tag> -UseParametersFile
+
+That run succeeds, ARM records the parameters again, and every later run can go back to replaying
+them. Do not commit the filled-in parameters file.
 "@
     }
-    $registry = $outputs.Value.registryName.value
-    Write-Note "registry $registry"
+
+    $prefix = $parameters.namePrefix.value
+    Write-Note "deployment '$DeploymentName' in $location, prefix '$prefix'"
+    if (-not $registry) {
+        $registry = az acr list -g "$prefix-platform" --query "[0].name" -o tsv
+        if (-not $registry) {
+            throw "No container registry found in $prefix-platform. Re-run step 3 of docs/azure-setup.md."
+        }
+        Write-Note "registry $registry (found in $prefix-platform; the deployment records no outputs)"
+    }
+    else {
+        Write-Note "registry $registry"
+    }
 
     # The whole reason this script replays parameters: imageTag defaults to empty, and an empty
     # imageTag means "no images exist yet, run the placeholder". So any deployment that forgets to
