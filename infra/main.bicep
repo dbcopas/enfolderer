@@ -47,9 +47,11 @@ param mcpAudience string = ''
 
 @description('''
 Tag of the container images to run, e.g. "v1". Leave empty for the very first deployment: the
-registry it names does not exist yet, so every app starts on a placeholder image. Build the images
-with `az acr build`, then redeploy with the tag set. After that, a code change needs a new build
-and `az containerapp update --image`, not a redeployment of this template.
+registry it names does not exist yet, so every app starts on a placeholder image. After that, use
+`./scripts/deploy-images.ps1` for every code change: it builds a fresh tag and redeploys this
+template with it. `az containerapp update --image` is not enough on its own, because the template
+also sets each app's ingress target port — 80 on the placeholder, 8080 on ours — and the registry
+configuration that lets it pull as its own managed identity.
 ''')
 param imageTag string = ''
 
