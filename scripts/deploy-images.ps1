@@ -223,13 +223,28 @@ List the ones you have with:
             parameters   = $parameters
         } | ConvertTo-Json -Depth 20 | Set-Content -Path $cache -Encoding utf8
     }
-    elseif (Test-Path $cache) {
+    elseif ((Test-Path $cache) -and -not $UseParametersFile) {
         $saved = Get-Content -Raw -Path $cache | ConvertFrom-Json
         $location = $saved.location
         $parameters = $saved.parameters
         $registry = $saved.registryName
         Write-Bad "deployment '$DeploymentName' is in a failed state and records no parameters"
         Write-Note "using the copy this script saved at $($saved.savedUtc) in .deploy-images/"
+    }
+    elseif ($UseParametersFile) {
+        # -UseParametersFile is the way out of exactly this situation, so it must not depend on the
+        # deployed parameters it exists to replace. The file uses ARM's own { "value": … } shape,
+        # so it drops straight into the same variable.
+        $fromFile = Get-Content -Raw -Path 'infra/main.parameters.json' | ConvertFrom-Json
+        $parameters = $fromFile.parameters
+        if (-not $parameters.PSObject.Properties['namePrefix']) {
+            throw "infra/main.parameters.json records no namePrefix. Is it this template's file?"
+        }
+        if ($parameters.PSObject.Properties['location']) {
+            $location = $parameters.location.value
+        }
+        Write-Bad "deployment '$DeploymentName' is in a failed state and records no parameters"
+        Write-Note "reading infra/main.parameters.json instead, as -UseParametersFile asks"
     }
     else {
         throw @"
@@ -241,22 +256,38 @@ normally keeps its own copy in .deploy-images/, but there is none yet — it onl
 after your last successful run.
 
 Recover by deploying once from the parameters file. Fill in infra/main.parameters.json with your
-real values:
-
-    namePrefix           the prefix you deployed with, e.g. enf-demo
-    location             the region, e.g. swedencentral
-    apiClientId          az containerapp show -g <prefix>-platform -n <prefix>-api ``
-                           --query "properties.template.containers[0].env[?name=='AzureAd__ClientId'].value" -o tsv
-    teamAGroupObjectId   az ad group show --group "Enfolderer Team A (Geometry)" --query id -o tsv
-    teamBGroupObjectId   az ad group show --group "Enfolderer Team B (Identification)" --query id -o tsv
-
-then run this script once with -UseParametersFile, naming the tag already in the registry:
+real values — see "If the deployment records no parameters" in docs/azure-setup.md, which gives a
+command for each one — then run this script with -UseParametersFile, naming the tag already in the
+registry:
 
     ./scripts/deploy-images.ps1 -SkipBuild -Tag <tag> -UseParametersFile
 
 That run succeeds, ARM records the parameters again, and every later run can go back to replaying
 them. Do not commit the filled-in parameters file.
 "@
+    }
+
+    # The file ships with placeholder object ids, so check it whenever it is the source of truth,
+    # not only on the recovery path. Deploying all-zero GUIDs points every role assignment at
+    # principals that do not exist, and the deployment reports success while nothing can sign in.
+    if ($UseParametersFile) {
+        $onFile = (Get-Content -Raw -Path 'infra/main.parameters.json' | ConvertFrom-Json).parameters
+        $placeholder = '00000000-0000-0000-0000-000000000000'
+        $unset = @(
+            foreach ($n in 'apiClientId', 'teamAGroupObjectId', 'teamBGroupObjectId') {
+                if ($onFile.PSObject.Properties[$n] -and $onFile.$n.value -eq $placeholder) { $n }
+            }
+        )
+        if ($unset) {
+            throw @"
+infra/main.parameters.json still holds placeholder ids for: $($unset -join ', ')
+
+Those are checked in as all-zero GUIDs. Deploying them points the role assignments at principals
+that do not exist: the deployment reports success and nothing can sign in. Fill them in first — see
+"If the deployment records no parameters" in docs/azure-setup.md, which gives a command that reads
+each value back out of your deployment.
+"@
+        }
     }
 
     $prefix = $parameters.namePrefix.value

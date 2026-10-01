@@ -2032,17 +2032,40 @@ az ad group show --group "Enfolderer Team B (Identification)" --query id -o tsv 
 ```
 
 Put them, the prefix and the region into `infra/main.parameters.json` — it ships with placeholder
-object ids, which is why the script normally avoids it — then deploy once from it, naming the tag
-already in the registry:
+object ids, which is why the script normally avoids it. `location` must be the region the deployment
+was created in; a subscription deployment cannot change it. Also set the agent ids, since the file's
+defaults are agent *names*, which the data plane will not accept:
+
+```powershell
+$p = Get-Content -Raw infra/main.parameters.json | ConvertFrom-Json
+$p.parameters.namePrefix.value         = 'enf-demo'
+$p.parameters.location.value           = 'swedencentral'
+$p.parameters.apiClientId.value        = $apiClientId
+$p.parameters.teamAGroupObjectId.value = $teamA
+$p.parameters.teamBGroupObjectId.value = $teamB
+$p.parameters.boundaryAgentId.value    = '<asst_… for the boundary agent>'
+$p.parameters.mtgAgentId.value         = '<asst_… for the MTG agent>'
+$p | ConvertTo-Json -Depth 10 | Set-Content infra/main.parameters.json -Encoding utf8
+```
+
+Then deploy once from it, naming the tag already in the registry:
 
 ```powershell
 az acr repository show-tags --name "<registry>" --repository enfolderer/api -o table
 ./scripts/deploy-images.ps1 -SkipBuild -Tag "<tag>" -UseParametersFile
 ```
 
+`-UseParametersFile` deliberately ignores both the failed deployment and the local cache, so it is
+the one switch that always works here. It refuses to run while any of the three ids is still an
+all-zero GUID: deploying those would point every role assignment at a principal that does not exist,
+and the deployment would report success while nothing could sign in.
+
 That run records the parameters in ARM again and saves the local copy, so every later run can go
-back to replaying them. Revert your edits to `infra/main.parameters.json` afterwards; those object
-ids should not be committed.
+back to replaying them. Revert your edits afterwards; those object ids should not be committed:
+
+```powershell
+git checkout infra/main.parameters.json
+```
 
 ## 7. Point the desktop app at the deployment
 
