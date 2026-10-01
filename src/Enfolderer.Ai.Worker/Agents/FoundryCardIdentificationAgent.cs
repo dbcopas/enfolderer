@@ -180,9 +180,16 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             Agent = agentId
         };
 
+        // The reply goes into the error because this is the case that looks like success from the
+        // outside: valid JSON, a 200 from every call, and nothing identified. Without the text
+        // there is no way to tell a model that refused from one that answered a different shape.
         return card.IsIdentified
             ? card
-            : card with { Error = "Agent reply was missing set, collector number or name." };
+            : card with
+            {
+                Error = "Agent reply was missing set, collector number or name: "
+                      + AgentJson.Summarize(reply)
+            };
     }
 
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
