@@ -1,7 +1,12 @@
 # Team A ("Geometry") — MCP server definition.
 #
-# Paired with the boundary agent because it is geometry work: it can read the uploaded scan and
-# produce a perspective-corrected crop. It has no catalogue and no job-state access.
+# Paired with the boundary agent because it is geometry work: it can read the uploaded scan,
+# measure where the cards are in it, and produce a perspective-corrected crop. It has no catalogue
+# and no job-state access.
+#
+# This server is where Team A's skill actually lives. The agent is the interface to it; detect_cards
+# is the implementation. Team B consumes the skill through the agent and never sees this server, its
+# identity, or its resource group.
 name: mcp-imaging
 project: cardgeo
 owner: team-a-geometry
@@ -11,6 +16,16 @@ transport: http
 container_app: mcp-imaging
 project_source: src/Enfolderer.Ai.Mcp.Imaging
 tools:
+  - name: detect_cards
+    description: >
+      Measures the corners of every card in a stored photograph by edge detection and returns them
+      as fractions of the image. This is the one thing the boundary agent genuinely cannot do for
+      itself — a chat model has no detection head and never sees the photo at full resolution, so
+      asked for coordinates it invents plausible ones. Reading the scan needs Storage Blob Data
+      Reader on scans, which is exactly the grant below and nothing more.
+    allowed_for:
+      - CardBoundaryAgent
+
   # There is deliberately no SAS-minting tool. Storage is private, so a URL is not something a
   # Foundry-hosted model can fetch; the orchestrator uploads the image bytes to this project
   # instead, and the agent sees them as message content.
@@ -20,6 +35,9 @@ tools:
       the boundary agent's allowed_tools, and it would fail with 403 if it were: writing a crop
       needs Storage Blob Data Contributor on crops, which only the worker holds. The worker does
       the cropping itself rather than widening Team A's access to save a hop.
+      This is the sharper half of the demo: two tools on one server, one reachable by the agent and
+      one not, with the allow-list and the RBAC agreeing about which is which.
+    allowed_for: []
 identity:
   # Runs as Team A's own identity, which holds read on scans and nothing else. There is no Cosmos
   # role assignment, so job state is unreachable, and no write anywhere: the worker does the
