@@ -114,7 +114,7 @@ $oldPlans = @(
     @{ Rg = $idRg;       Name = "$Prefix-cardid-mcp-plan" }
 )
 
-$oldPrivateEndpoints = @("$Prefix-stg-blob-pe", "$Prefix-stg-queue-pe")
+$oldPrivateEndpoints = @("$Prefix-stg-blob-pe", "$Prefix-stg-queue-pe", "$Prefix-cosmos-pe")
 
 function Write-Step {
     param([string] $Text)
@@ -345,8 +345,8 @@ if (-not $vnetExists) {
     # Worth saying plainly: an account with public access disabled and no private path refuses
     # everything, and it looks exactly like a missing role assignment.
     Write-Skip ''
-    Write-Skip 'No VNet yet, so storage has had no private path at all. That alone would explain'
-    Write-Skip 'every 403 so far: the account is publicNetworkAccess: Disabled.'
+    Write-Skip 'No VNet yet, so storage and Cosmos have had no private path at all. That alone'
+    Write-Skip 'would explain every 403 so far: both accounts are publicNetworkAccess: Disabled.'
 }
 elseif ($vnetIsCurrent) {
     # An environment pulls its own system images, and the app images, out through this subnet, and
