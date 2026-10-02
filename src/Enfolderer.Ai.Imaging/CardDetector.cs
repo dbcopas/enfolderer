@@ -60,6 +60,40 @@ public sealed record CardDetectorOptions
     public int MinCellShortSide { get; init; } = 60;
 
     /// <summary>
+    /// How far a card may differ in size from the other cards in the same photo before it is not
+    /// believed, as a ratio either way.
+    /// <para>
+    /// Cards in one photograph are all the same size, so this is tight by nature. The slack is
+    /// there for perspective: a card at the edge of a wide-angle shot, or lying at an angle, is
+    /// genuinely a little smaller on the sensor than one in the middle.
+    /// </para>
+    /// </summary>
+    public double SizeTolerance { get; init; } = 1.35;
+
+    /// <summary>
+    /// Half the width, in working pixels, of the widest line that may be erased as a bridge rather
+    /// than kept as part of a card.
+    /// <para>
+    /// Wide enough to cover table grain, mat seams and shadow edges; far narrower than any card, so
+    /// a card is never at risk. Set to zero to keep every thin object.
+    /// </para>
+    /// </summary>
+    public int BridgeWidth { get; init; } = 4;
+
+    /// <summary>
+    /// How close to a card's proportions a division has to be before it may propose a card size.
+    /// <para>
+    /// Tighter than <see cref="AspectTolerance"/>, and deliberately so. That tolerance decides
+    /// whether to keep a crop, where being generous costs little, because the agent looking at the
+    /// crop can reject it. This one decides what a card measures, and a wrong answer here is
+    /// applied to every other object in the photo. Three touching cards cut down the middle give
+    /// two nearly square pieces, which the looser tolerance admits; at this one they are not cards
+    /// and cannot vote.
+    /// </para>
+    /// </summary>
+    public double ProposalAspect { get; init; } = 1.15;
+
+    /// <summary>
     /// How much of its own bounding rectangle a blob must fill to count as a card. A card is
     /// convex, so a low ratio means the blob is a shadow, a hand, or two cards merged by a gap the
     /// edge detector missed.
@@ -95,10 +129,19 @@ public sealed record DetectedCard(CardQuad Quad, double Confidence);
 /// never enters, so they are filled for free rather than fragmenting it.
 /// </para>
 /// <para>
-/// That same property is why cards laid out neatly need a second pass. When cards touch, or sit a
-/// few pixels apart, the background cannot get between them and they come back as one blob — so a
-/// tidy page detects *worse* than a scattered one, which is the opposite of what anyone expects.
-/// <see cref="FindGrid"/> splits such a block by looking for the seams between its cards.
+/// Two things have to be added to that, and both are here because a photograph of cards is not one
+/// picture of one card. The first is that an edge threshold is a budget for the whole frame, so a
+/// photo full of detailed artwork spends it on the artwork and leaves the cards' own borders below
+/// the line; <see cref="BackgroundLike"/> adds a second barrier, the colour of the table, which no
+/// amount of detail elsewhere can exhaust. The second is that cards touch, and touching cards are
+/// one shape to a flood — and worse, a tidy block of them is a card's shape exactly, because a
+/// card's proportions are near enough 1/sqrt(2) that halving or tiling one reproduces them.
+/// </para>
+/// <para>
+/// That last point is why this class looks at the whole photo before deciding anything. Shape
+/// cannot tell one card from four, nor from half of one. Size can, because every card in a
+/// photograph is the same size, so <see cref="ReferenceShortSide"/> has the objects vote on how
+/// wide a card is here and <see cref="GridFromCardSize"/> applies the answer to all of them.
 /// </para>
 /// </summary>
 public static class CardDetector
@@ -129,12 +172,15 @@ public static class CardDetector
         var edges = EdgeMask(luminance, width, height, opts.EdgeQuantile);
         Dilate(edges, width, height);
 
-        var cardMask = FloodBackground(edges, width, height);
+        var cardMask = FloodBackground(edges, BackgroundLike(working, width, height), width, height);
+        Open(cardMask, width, height, opts.BridgeWidth);
         var blobs = LabelBlobs(cardMask, width, height);
 
-        var results = new List<DetectedCard>();
         double imageArea = (double)width * height;
 
+        // Pass one: the outline of every object in the photo. No decision about how many cards an
+        // object holds is taken yet, because that decision needs the whole photo (see below).
+        var blocks = new List<Block>();
         foreach (var blob in blobs)
         {
             if (blob.Count < imageArea * opts.MinAreaFraction) continue;
@@ -145,16 +191,27 @@ public static class CardDetector
             var (corners, shortSide, longSide) = rect.Value;
             if (shortSide < 4 || longSide < 4) continue;
 
-            var rectArea = shortSide * longSide;
-            var rectangularity = blob.Count / rectArea;
+            var rectangularity = blob.Count / (shortSide * longSide);
             if (rectangularity < opts.MinRectangularity) continue;
 
-            // One blob may be several cards that are touching. Deciding how many comes before any
-            // judgement about shape, because a block of cards and a single card can be the same
-            // shape — a 3 x 3 arrangement has exactly a card's proportions.
-            var (cols, rows) = FindGrid(edges, width, height, corners, imageArea, opts);
+            blocks.Add(new Block(corners, shortSide, longSide, rectangularity));
+        }
 
-            foreach (var cell in Subdivide(corners, cols, rows))
+        // How big is a card in this photo? Every card in one photograph is the same size, because
+        // they are the same object seen from one camera position, and that single number is what
+        // makes the rest of this tractable.
+        var reference = ReferenceShortSide(blocks, opts);
+
+        var results = new List<DetectedCard>();
+        foreach (var block in blocks)
+        {
+            // One object may be several cards that are touching. Deciding how many comes before any
+            // judgement about shape, because shape cannot answer it.
+            var (cols, rows) = reference is null
+                ? FindGrid(edges, width, height, block.Corners, imageArea, opts)
+                : GridFromCardSize(edges, width, height, block.Corners, reference.Value, opts);
+
+            foreach (var cell in Subdivide(block.Corners, cols, rows))
             {
                 var (cellShort, cellLong) = SideLengths(cell);
                 if (cellShort < 4 || cellLong < 4) continue;
@@ -174,12 +231,14 @@ public static class CardDetector
                     .ToList();
 
                 var confidence = Math.Clamp(
-                    Math.Min(1d, rectangularity) * (1d / aspectError),
+                    Math.Min(1d, block.Rectangularity) * (1d / aspectError),
                     0d, 1d);
 
                 results.Add(new DetectedCard(new CardQuad(points), Math.Round(confidence, 3)));
             }
         }
+
+        results = DropOddSizes(results, opts);
 
         // Largest first, so a caller that trusts only the first few gets the clearest cards.
         return results
@@ -286,7 +345,183 @@ public static class CardDetector
     /// Floods the non-edge space inward from the image border and returns everything it could not
     /// reach. Holes inside a card are unreachable, so they are filled without a separate pass.
     /// </summary>
-    private static bool[] FloodBackground(bool[] edges, int width, int height)
+    /// <summary>
+    /// Erases anything narrower than a card from the object mask, then restores what is left to its
+    /// original size.
+    /// <para>
+    /// Not every edge in a photo belongs to a card. The grain of a wooden table, the seam between
+    /// two mats, the edge of a shadow: each is a line the flood cannot cross, so each survives as a
+    /// thin object. On its own that is harmless, since nothing that thin is ever mistaken for a
+    /// card. The damage is done when such a line runs past several cards and joins them, because
+    /// the result is one object that is neither card-shaped nor solid, and it is discarded whole —
+    /// taking every card it touched with it. A single grain line can cost the entire photo.
+    /// </para>
+    /// <para>
+    /// Shrinking the mask and growing it back is the standard remedy: a bridge a few pixels wide
+    /// disappears when the mask shrinks and never comes back, while a card, hundreds of pixels
+    /// across, loses only its corners and regains them. Cards that are genuinely touching are
+    /// joined along a whole edge rather than by a thin bridge, so they stay joined, which is right —
+    /// separating those is a question about seams and sizes, not about width.
+    /// </para>
+    /// </summary>
+    private static void Open(bool[] mask, int width, int height, int radius)
+    {
+        if (radius <= 0) return;
+        Erode(mask, width, height, radius);
+        Grow(mask, width, height, radius);
+    }
+
+    /// <summary>Shrinks the object mask by <paramref name="radius"/> in every direction.</summary>
+    private static void Erode(bool[] mask, int width, int height, int radius) =>
+        Sweep(mask, width, height, radius, all: true);
+
+    /// <summary>Grows the object mask by <paramref name="radius"/> in every direction.</summary>
+    private static void Grow(bool[] mask, int width, int height, int radius) =>
+        Sweep(mask, width, height, radius, all: false);
+
+    /// <summary>
+    /// Runs a square-window minimum (<paramref name="all"/>) or maximum over the mask. A square
+    /// window is separable, so one horizontal pass followed by one vertical pass gives the same
+    /// answer as the square itself at a fraction of the cost.
+    /// </summary>
+    private static void Sweep(bool[] mask, int width, int height, int radius, bool all)
+    {
+        var scratch = new bool[mask.Length];
+
+        for (var y = 0; y < height; y++)
+            for (var x = 0; x < width; x++)
+                scratch[y * width + x] = Window(d =>
+                {
+                    var nx = x + d;
+                    // Outside the photo counts as background, so an object running off the edge of
+                    // the frame is eroded there rather than held up by pixels that do not exist.
+                    return nx >= 0 && nx < width && mask[y * width + nx];
+                });
+
+        for (var y = 0; y < height; y++)
+            for (var x = 0; x < width; x++)
+                mask[y * width + x] = Window(d =>
+                {
+                    var ny = y + d;
+                    return ny >= 0 && ny < height && scratch[ny * width + x];
+                });
+
+        bool Window(Func<int, bool> at)
+        {
+            for (var d = -radius; d <= radius; d++)
+            {
+                var value = at(d);
+                if (all && !value) return false;
+                if (!all && value) return true;
+            }
+
+            return all;
+        }
+    }
+
+    /// <summary>
+    /// Marks the pixels that look like the surface the cards are lying on.
+    /// <para>
+    /// This is the second of the two barriers that stop the background flood, and it exists because
+    /// the first one competes with the artwork. <see cref="EdgeMask"/> keeps the strongest tenth of
+    /// gradients in the photo, which is a fixed budget for the whole frame; fill that frame with
+    /// nine cards of detailed art and the art spends the budget, leaving a card's own border below
+    /// the threshold and the flood free to pour in and erase the card. Nothing about the border
+    /// changed — the competition for the budget did.
+    /// </para>
+    /// <para>
+    /// Colour is not a budget, so it does not have that failure. The table is sampled where it is
+    /// certain to be visible, at the frame of the photo, and kept as a set of coarse colour bins
+    /// rather than one average, so that a two-tone surface or an uneven light still reads as one
+    /// background. The flood may then only pass through pixels that look like the table, which
+    /// means that whether a card is detected no longer depends on how busy the card next to it is.
+    /// </para>
+    /// </summary>
+    private static bool[] BackgroundLike(Image<Rgba32> image, int width, int height)
+    {
+        const double BackgroundCoverage = 0.80;
+        const int Shift = 5;              // 8 levels per channel
+        const int Levels = 256 >> Shift;
+        var frame = Math.Max(2, Math.Min(width, height) / 50);
+
+        var bins = new int[Levels * Levels * Levels];
+        var pixels = new byte[width * height * 3];
+        var sampled = 0;
+
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                var onFrame = y < frame || y >= height - frame;
+                for (var x = 0; x < width; x++)
+                {
+                    var p = row[x];
+                    var o = (y * width + x) * 3;
+                    pixels[o] = p.R;
+                    pixels[o + 1] = p.G;
+                    pixels[o + 2] = p.B;
+
+                    if (!onFrame && x >= frame && x < width - frame) continue;
+                    bins[Bin(p.R, p.G, p.B)]++;
+                    sampled++;
+                }
+            }
+        });
+
+        // The commonest colours of the frame are taken until they account for most of it. A share
+        // threshold would not do: a grained wooden table is dozens of browns, none of them common
+        // enough on its own to clear any fixed bar, and the flood would have nowhere to start. What
+        // is true of every background, flat or grained, is that between them its colours cover the
+        // frame — so that, rather than any one colour's share, is what is asked for. Stopping short
+        // of the whole frame is what keeps a card lying across the edge of the photo from
+        // nominating its own colours as table.
+        var order = Enumerable.Range(0, bins.Length)
+            .Where(i => bins[i] > 0)
+            .OrderByDescending(i => bins[i]);
+
+        var isTable = new bool[bins.Length];
+        var covered = 0;
+        foreach (var i in order)
+        {
+            if (covered >= sampled * BackgroundCoverage) break;
+            isTable[i] = true;
+            covered += bins[i];
+        }
+
+        // Accept neighbouring bins too: a surface shading gradually from one side of the photo to
+        // the other crosses bin boundaries without ever stopping being the table.
+        var accepted = new bool[bins.Length];
+        for (var r = 0; r < Levels; r++)
+            for (var g = 0; g < Levels; g++)
+                for (var b = 0; b < Levels; b++)
+                {
+                    if (!isTable[(r * Levels + g) * Levels + b]) continue;
+                    for (var dr = -1; dr <= 1; dr++)
+                        for (var dg = -1; dg <= 1; dg++)
+                            for (var db = -1; db <= 1; db++)
+                            {
+                                int nr = r + dr, ng = g + dg, nb = b + db;
+                                if (nr < 0 || ng < 0 || nb < 0) continue;
+                                if (nr >= Levels || ng >= Levels || nb >= Levels) continue;
+                                accepted[(nr * Levels + ng) * Levels + nb] = true;
+                            }
+                }
+
+        var mask = new bool[width * height];
+        for (var i = 0; i < mask.Length; i++)
+        {
+            var o = i * 3;
+            mask[i] = accepted[Bin(pixels[o], pixels[o + 1], pixels[o + 2])];
+        }
+
+        return mask;
+
+        static int Bin(byte r, byte g, byte b) =>
+            (((r >> Shift) * Levels) + (g >> Shift)) * Levels + (b >> Shift);
+    }
+
+    private static bool[] FloodBackground(bool[] edges, bool[] backgroundLike, int width, int height)
     {
         var background = new bool[width * height];
         var queue = new Queue<int>();
@@ -294,9 +529,26 @@ public static class CardDetector
         void Seed(int x, int y)
         {
             var i = y * width + x;
-            if (edges[i] || background[i]) return;
+            if (background[i] || !backgroundLike[i]) return;
+            // An edge only blocks the flood if it separates the background from something else.
+            // The grain of a table is an edge with background on both sides; a card's border is
+            // not, and that difference is what keeps grain from sealing the gaps between cards.
+            if (edges[i] && Borders(x, y)) return;
             background[i] = true;
             queue.Enqueue(i);
+        }
+
+        bool Borders(int x, int y)
+        {
+            for (var dy = -1; dy <= 1; dy++)
+                for (var dx = -1; dx <= 1; dx++)
+                {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+                    if (!backgroundLike[ny * width + nx]) return true;
+                }
+
+            return false;
         }
 
         for (var x = 0; x < width; x++) { Seed(x, 0); Seed(x, height - 1); }
@@ -398,6 +650,183 @@ public static class CardDetector
         return hull;
     }
 
+    /// <summary>An object found in the photo, before any decision about how many cards it holds.</summary>
+    private readonly record struct Block(
+        (double X, double Y)[] Corners, double Short, double Long, double Rectangularity);
+
+    /// <summary>
+    /// The width of a card in this photo, in working pixels, or null when the photo offers no
+    /// opinion.
+    /// <para>
+    /// Every card in one photograph is the same size: they are the same object, photographed
+    /// together from one camera position. That single number is the strongest piece of evidence
+    /// available here, and it is the only one that no individual object can supply, because an
+    /// object on its own cannot tell whether it is one card or four.
+    /// </para>
+    /// <para>
+    /// So the whole photo votes. Each object proposes the card sizes that would divide it into a
+    /// whole number of card-shaped pieces, and the size that accounts for the most of the photo
+    /// wins. A page of nine touching cards and a tenth card lying apart then agree on one answer,
+    /// which is what lets the page be divided correctly.
+    /// </para>
+    /// </summary>
+    private static double? ReferenceShortSide(IReadOnlyList<Block> blocks, CardDetectorOptions options)
+    {
+        var span = Math.Max(1, options.MaxGridSpan);
+
+        // Every way each object could be read as a whole number of card-shaped pieces is a proposal
+        // about how wide a card is in this photo. An object is weighted by its area, so a page of
+        // nine cards has more say than a stray button.
+        var proposals = new List<(double Size, double Weight)>();
+        var divisions = new List<(double Size, double Weight)>[blocks.Count];
+
+        for (var i = 0; i < blocks.Count; i++)
+        {
+            var block = blocks[i];
+            divisions[i] = [];
+
+            for (var cols = 1; cols <= span; cols++)
+                for (var rows = 1; rows <= span; rows++)
+                {
+                    var (cellShort, cellLong) = SideLengths(Subdivide(block.Corners, cols, rows).First());
+                    if (cellShort < 4 || cellLong < 4) continue;
+
+                    var aspect = cellShort / cellLong;
+                    if (Math.Max(aspect / CardAspect, CardAspect / aspect) > options.ProposalAspect) continue;
+
+                    var weight = block.Short * block.Long;
+                    divisions[i].Add((cellShort, weight));
+                    proposals.Add((cellShort, weight));
+                }
+        }
+
+        if (proposals.Count == 0) return null;
+
+        // The winning size is the one that explains the most of the photo: the size at which the
+        // largest share of what was found can be read as a whole number of cards. Where two sizes
+        // explain the same amount the larger wins, because of the proportion trap described on
+        // GridFromCardSize - half a card is card-shaped, so any size that fits also fits halved,
+        // and the smaller reading is the one that yields crops of text boxes.
+        double? best = null;
+        var bestSupport = double.MinValue;
+
+        foreach (var (size, _) in proposals)
+        {
+            var support = 0d;
+            for (var i = 0; i < blocks.Count; i++)
+                if (divisions[i].Any(d => Math.Max(d.Size / size, size / d.Size) <= options.SizeTolerance))
+                    support += blocks[i].Short * blocks[i].Long;
+
+            if (support > bestSupport || (Math.Abs(support - bestSupport) < 1e-9 && size > best))
+            {
+                best = size;
+                bestSupport = support;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Divides a block into cards of a known size.
+    /// <para>
+    /// This exists because shape alone is not merely weak evidence here, it is actively misleading.
+    /// A trading card is 63 x 88 mm, and 63/88 is 0.716 — near enough 1/sqrt(2) that a card cut in
+    /// half across its long side has, to within two per cent, a card's proportions all over again.
+    /// So a card's art box and its text box both look exactly like cards, a 3 x 6 division of nine
+    /// cards scores as well as the correct 3 x 3, and no amount of tightening the aspect tolerance
+    /// can separate them: the two shapes really are the same shape.
+    /// </para>
+    /// <para>
+    /// Size is what breaks the tie, and only the whole photo knows it. Each arrangement is measured
+    /// against the card size the photo agreed on, and the closest fit wins; a division into halves
+    /// is then wrong for the obvious reason, that the halves are half the size of the cards lying
+    /// next to them. Ties go to the coarser division, because a crop of a whole card that turned
+    /// out to be two cards can still be identified as one of them, whereas a crop of a text box
+    /// cannot be identified as anything.
+    /// </para>
+    /// </summary>
+    private static (int Cols, int Rows) GridFromCardSize(
+        bool[] edges, int width, int height,
+        (double X, double Y)[] corners, double referenceShort, CardDetectorOptions options)
+    {
+        var referenceLong = referenceShort / CardAspect;
+        var span = Math.Max(1, options.MaxGridSpan);
+
+        var best = (Cols: 1, Rows: 1);
+        var bestError = double.MaxValue;
+        var bestCells = int.MaxValue;
+
+        for (var cols = 1; cols <= span; cols++)
+        {
+            for (var rows = 1; rows <= span; rows++)
+            {
+                var cells = cols * rows;
+                var cell = Subdivide(corners, cols, rows).First();
+                var (cellShort, cellLong) = SideLengths(cell);
+                if (cellShort < 4 || cellLong < 4) continue;
+
+                var error = Math.Max(
+                    Math.Max(cellShort / referenceShort, referenceShort / cellShort),
+                    Math.Max(cellLong / referenceLong, referenceLong / cellLong));
+                if (error > options.SizeTolerance) continue;
+
+                // Size has already chosen the arrangement; the seams only have to corroborate it,
+                // so the bar here is evidence of a seam rather than a complete one. Two touching
+                // cards with the same border colour genuinely have no edge between them.
+                if (cells > 1)
+                {
+                    var seams = SeamCoverage(edges, width, height, corners, cols, rows);
+                    if (seams is null) continue;
+                    if (seams.Value.AcrossCols.Concat(seams.Value.AcrossRows)
+                        .Any(c => c < options.MinSeamEvidence)) continue;
+                }
+
+                if (error < bestError || (Math.Abs(error - bestError) < 1e-9 && cells < bestCells))
+                {
+                    best = (cols, rows);
+                    bestError = error;
+                    bestCells = cells;
+                }
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Removes crops that disagree with the rest of the photo about how big a card is.
+    /// <para>
+    /// A last line of defence rather than the main one: whatever route a fragment took to get here,
+    /// a crop half the size of every other crop in the same photo is not a card, because cards in
+    /// one photograph are all the same size. It only runs once there are enough crops for "the rest
+    /// of the photo" to mean something.
+    /// </para>
+    /// </summary>
+    private static List<DetectedCard> DropOddSizes(List<DetectedCard> cards, CardDetectorOptions options)
+    {
+        if (cards.Count < 3) return cards;
+
+        var sizes = cards.Select(c => SideLengths(Corners(c.Quad)).Short).OrderBy(s => s).ToList();
+        var median = sizes.Count % 2 == 1
+            ? sizes[sizes.Count / 2]
+            : (sizes[sizes.Count / 2 - 1] + sizes[sizes.Count / 2]) / 2d;
+        if (median <= 0) return cards;
+
+        var kept = cards
+            .Where(c =>
+            {
+                var s = SideLengths(Corners(c.Quad)).Short;
+                return Math.Max(s / median, median / s) <= options.SizeTolerance;
+            })
+            .ToList();
+
+        return kept.Count == 0 ? cards : kept;
+    }
+
+    private static (double X, double Y)[] Corners(CardQuad quad) =>
+        quad.Points.Select(p => (p.X, p.Y)).ToArray();
+
     /// <summary>
     /// Decides how many cards a rectangular block contains, by looking for the seams that would
     /// separate them.
@@ -420,6 +849,13 @@ public static class CardDetector
     /// only have to corroborate it. Candidates are scored by their mean seam coverage so that the
     /// arrangement whose seams are really there wins over one that merely fits.
     /// </para>
+    /// <para>
+    /// This is the fallback, used only when the photo contains no object that is card-shaped on its
+    /// own and so has no opinion about how big a card is. <see cref="GridFromCardSize"/> is both
+    /// stronger and simpler and is preferred whenever it can be used, because seams cannot settle
+    /// every case on their own: a card's proportions are near enough 1/sqrt(2) that halving it
+    /// reproduces them, so shape ranks a division into halves exactly as highly as the right one.
+    /// </para>
     /// </summary>
     private static (int Cols, int Rows) FindGrid(
         bool[] edges, int width, int height,
@@ -428,7 +864,7 @@ public static class CardDetector
         var span = Math.Max(1, options.MaxGridSpan);
         var best = (Cols: 1, Rows: 1);
         var bestScore = double.MinValue;
-        var bestCells = 1;
+        var bestCells = int.MaxValue;
 
         for (var cols = 1; cols <= span; cols++)
         {
@@ -463,8 +899,10 @@ public static class CardDetector
                     (acrossRows.Length > 0 && acrossRows.All(c => c >= options.MinSeamCoverage));
                 if (!anchored) continue;
 
+                // Ties go to the coarser division. A crop of two cards can still be identified as
+                // one of them; a crop of half a card cannot be identified as anything.
                 var score = acrossCols.Concat(acrossRows).Average();
-                if (score > bestScore || (Math.Abs(score - bestScore) < 1e-9 && cells > bestCells))
+                if (score > bestScore || (Math.Abs(score - bestScore) < 1e-9 && cells < bestCells))
                 {
                     best = (cols, rows);
                     bestScore = score;
