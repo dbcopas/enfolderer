@@ -81,6 +81,9 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
         - Emit no prose, no markdown fences, and no cards you are not confident are cards.
         """;
 
+    /// <summary>The <c>server_label</c> Team A's imaging MCP server is attached under.</summary>
+    private const string ImagingServerLabel = "imaging";
+
     private readonly FoundryAgentClient _client;
     private readonly string _agentId;
     private readonly ILogger<FoundryCardBoundaryAgent> _log;
@@ -97,7 +100,11 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
     public async Task<IReadOnlyList<DetectedBoundary>> DetectAsync(
         AgentImage image, string scanBlobPath, int width, int height, CancellationToken ct = default)
     {
-        var reply = await _client.RunAsync(_agentId, BuildPrompt(width, height, scanBlobPath), image, ct);
+        // "imaging" is the server_label card-boundary-agent.yaml gives Team A's own MCP server.
+        // Foundry pauses the run at each tool call for approval, and the orchestrator approves only
+        // this label — so an agent edited to reach for a catalogue server is refused here too.
+        var reply = await _client.RunAsync(
+            _agentId, BuildPrompt(width, height, scanBlobPath), image, ImagingServerLabel, ct);
 
         // Logged in full because a wrong quad is invisible downstream: the crop succeeds, the
         // identification agent sees a picture of a table, and nothing anywhere reports an error.

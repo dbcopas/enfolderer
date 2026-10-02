@@ -59,8 +59,15 @@ public sealed class FoundryAgentClient
     /// the bytes the orchestrator chose to send it, which is a tighter boundary than a
     /// container-scoped read grant.
     /// </para>
+    /// <para>
+    /// <paramref name="approvedServerLabel"/> is the one MCP server this agent is expected to call.
+    /// Foundry pauses a run at every MCP tool call and waits to be told to go ahead, so something
+    /// has to answer; this client approves calls to that label and refuses everything else. Pass
+    /// <see langword="null"/> for an agent with no tools, which then refuses any call at all.
+    /// </para>
     /// </summary>
-    public async Task<string> RunAsync(string agentId, string prompt, AgentImage? image, CancellationToken ct)
+    public async Task<string> RunAsync(
+        string agentId, string prompt, AgentImage? image, string? approvedServerLabel, CancellationToken ct)
     {
         string? fileId = null;
         try
@@ -88,7 +95,7 @@ public sealed class FoundryAgentClient
                 ct);
             var runId = RequireString(run, "id", "run id");
 
-            var (status, lastError) = await WaitForRunAsync(threadId, runId, ct);
+            var (status, lastError) = await WaitForRunAsync(threadId, runId, approvedServerLabel, ct);
             if (!IsCompleted(status))
             {
                 // The job's Error field only carries ex.Message, so the reason has to travel with it.
@@ -185,14 +192,45 @@ public sealed class FoundryAgentClient
         || string.Equals(status, "cancelled", StringComparison.OrdinalIgnoreCase)
         || string.Equals(status, "expired", StringComparison.OrdinalIgnoreCase);
 
-    private async Task<(string Status, string? LastError)> WaitForRunAsync(string threadId, string runId, CancellationToken ct)
+    /// <summary>
+    /// Foundry parks a run here when it wants to call a tool and is waiting to be told it may.
+    /// <para>
+    /// This is not a terminal state and it is not an error, but nothing moves until the caller
+    /// answers: a run left in <c>requires_action</c> simply sits there until the timeout, which
+    /// looks exactly like a hung model.
+    /// </para>
+    /// </summary>
+    private static bool RequiresAction(string status) =>
+        string.Equals(status, "requires_action", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Polls the run to completion, answering any tool-approval request along the way.
+    /// <para>
+    /// Approval is a real decision, not a formality, and it is made here rather than in the agent:
+    /// the agent asks to call a tool, and the orchestrator — which knows which server that agent is
+    /// supposed to be using — decides. An agent that has been edited to reference some other team's
+    /// server is refused here even if Foundry would have allowed it, so the boundary holds in two
+    /// independent places.
+    /// </para>
+    /// </summary>
+    private async Task<(string Status, string? LastError)> WaitForRunAsync(
+        string threadId, string runId, string? approvedServerLabel, CancellationToken ct)
     {
         var deadline = DateTimeOffset.UtcNow + _runTimeout;
+        var lastStatus = "unknown";
+        var approvals = 0;
+
         while (true)
         {
             ct.ThrowIfCancellationRequested();
             using var run = await SendAsync(HttpMethod.Get, $"/threads/{threadId}/runs/{runId}?api-version={_apiVersion}", null, ct);
             var status = RequireString(run, "status", "run status");
+
+            if (!string.Equals(status, lastStatus, StringComparison.OrdinalIgnoreCase))
+            {
+                _log.LogDebug("Foundry run {RunId} is {Status}.", runId, status);
+                lastStatus = status;
+            }
 
             if (IsTerminal(status))
             {
@@ -205,11 +243,116 @@ public sealed class FoundryAgentClient
                 return (status, reason);
             }
 
+            if (RequiresAction(status))
+            {
+                // A loop here would be the model calling a tool, being approved, and calling it
+                // again. That is legitimate up to a point and a bug past it, and the run timeout
+                // alone would not distinguish the two.
+                if (++approvals > MaxToolApprovals)
+                {
+                    throw new InvalidOperationException(
+                        $"Foundry run '{runId}' asked for tool approval more than {MaxToolApprovals} times; "
+                        + "the agent is probably calling its tool in a loop.");
+                }
+
+                await ApproveToolCallsAsync(threadId, runId, run.RootElement, approvedServerLabel, ct);
+                continue;
+            }
+
             if (DateTimeOffset.UtcNow > deadline)
-                throw new TimeoutException($"Foundry run '{runId}' did not complete within {_runTimeout}.");
+            {
+                throw new TimeoutException(
+                    $"Foundry run '{runId}' did not complete within {_runTimeout} (last status '{lastStatus}').");
+            }
 
             await Task.Delay(_pollInterval, ct);
         }
+    }
+
+    /// <summary>Most tool calls one run may ask approval for before it is treated as looping.</summary>
+    private const int MaxToolApprovals = 10;
+
+    /// <summary>
+    /// Answers a <c>requires_action</c> run, approving tool calls that come from the server the
+    /// caller named and refusing the rest.
+    /// <para>
+    /// Refusals are sent rather than dropped. Declining leaves the model to carry on without that
+    /// tool and say so, which is recoverable; staying silent would hang the run until the timeout,
+    /// which is not.
+    /// </para>
+    /// </summary>
+    private async Task ApproveToolCallsAsync(
+        string threadId, string runId, JsonElement run, string? approvedServerLabel, CancellationToken ct)
+    {
+        var decisions = BuildToolApprovals(run, approvedServerLabel, runId, _log);
+
+        using var _ = await SendAsync(
+            HttpMethod.Post,
+            $"/threads/{threadId}/runs/{runId}/submit_tool_outputs?api-version={_apiVersion}",
+            new { tool_approvals = decisions.Select(d => new { tool_call_id = d.ToolCallId, approve = d.Approve }) },
+            ct);
+    }
+
+    /// <summary>One answer to one pending tool call.</summary>
+    internal readonly record struct ToolApproval(string ToolCallId, bool Approve, string? ServerLabel, string ToolName);
+
+    /// <summary>
+    /// Decides which pending tool calls to allow. Internal so the decision can be self-tested
+    /// without a live run, because getting it wrong either hangs the pipeline or quietly widens the
+    /// boundary the demo is about.
+    /// </summary>
+    internal static IReadOnlyList<ToolApproval> BuildToolApprovals(
+        JsonElement run, string? approvedServerLabel, string runId, ILogger? log = null)
+    {
+        if (!run.TryGetProperty("required_action", out var required))
+            throw new InvalidOperationException($"Foundry run '{runId}' requires action but did not say what.");
+
+        var actionType = required.TryGetProperty("type", out var t) ? t.GetString() : null;
+        if (!string.Equals(actionType, "submit_tool_approval", StringComparison.OrdinalIgnoreCase))
+        {
+            // submit_tool_outputs means a function tool, which none of these agents declare: the
+            // tools are all MCP servers the service calls itself. Guessing an output would be
+            // worse than stopping.
+            throw new InvalidOperationException(
+                $"Foundry run '{runId}' is waiting on an action of type '{actionType}', which this "
+                + "orchestrator does not supply. Only MCP tool approval is supported.");
+        }
+
+        if (!required.TryGetProperty("submit_tool_approval", out var approval) ||
+            !approval.TryGetProperty("tool_calls", out var calls) || calls.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException($"Foundry run '{runId}' requested approval but listed no tool calls.");
+
+        var decisions = new List<ToolApproval>();
+        foreach (var call in calls.EnumerateArray())
+        {
+            var id = call.TryGetProperty("id", out var i) ? i.GetString() : null;
+            if (string.IsNullOrEmpty(id)) continue;
+
+            var label = call.TryGetProperty("server_label", out var l) ? l.GetString() : null;
+            var name = (call.TryGetProperty("name", out var n) ? n.GetString() : null) ?? "(unnamed)";
+
+            var approved = approvedServerLabel is not null
+                && string.Equals(label, approvedServerLabel, StringComparison.OrdinalIgnoreCase);
+
+            if (approved)
+            {
+                log?.LogInformation("Approving tool call {Tool} on '{Label}' for run {RunId}.", name, label, runId);
+            }
+            else
+            {
+                log?.LogError(
+                    "Refusing tool call {Tool} for run {RunId}: it targets MCP server '{Label}', but this "
+                    + "agent is only permitted to call '{Expected}'.",
+                    name, runId, label ?? "(none)", approvedServerLabel ?? "(nothing)");
+            }
+
+            decisions.Add(new ToolApproval(id, approved, label, name));
+        }
+
+        if (decisions.Count == 0)
+            throw new InvalidOperationException($"Foundry run '{runId}' requested approval but listed no usable tool calls.");
+
+        return decisions;
     }
 
     private async Task<string> ReadLastAssistantMessageAsync(string threadId, CancellationToken ct)

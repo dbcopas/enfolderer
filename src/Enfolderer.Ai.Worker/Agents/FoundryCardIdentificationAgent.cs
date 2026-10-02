@@ -75,6 +75,10 @@ public sealed record GameAgentProfile(string Game, string AgentName, string Cata
 /// </summary>
 public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
 {
+
+    /// <summary>The <c>server_label</c> each game's catalogue MCP server is attached under.</summary>
+    private const string CatalogueServerLabel = "catalogue";
+
     private readonly FoundryAgentClient _client;
     private readonly GameAgentProfile _profile;
     private readonly string _agentId;
@@ -99,7 +103,10 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
     public async Task<IdentifiedCard> IdentifyAsync(CardCrop crop, CancellationToken ct = default)
     {
         var prompt = BuildPrompt(_profile);
-        var reply = await _client.RunAsync(_agentId, prompt, crop.Image, ct);
+        // Each identification agent attaches its own game's catalogue server under this label.
+        // The label is the same for every game; the server behind it is not, and an agent can only
+        // ever be handed its own, so approving by label does not widen anything.
+        var reply = await _client.RunAsync(_agentId, prompt, crop.Image, CatalogueServerLabel, ct);
 
         try
         {
