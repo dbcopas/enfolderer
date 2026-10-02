@@ -58,6 +58,10 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
    The agent then calls its own `detect_cards` tool to measure the corners, and reviews the result
    against the picture it was sent. The worker passes the scan's blob path along for that call: it
    is a name, not a credential, and Team A's identity could already read `scans` and nothing else.
+   Foundry pauses the run at that tool call and waits for approval, and the worker — Team B's
+   orchestrator — approves it, having first checked the call targets the `imaging` server and not
+   some other team's. A call to any other server is refused, so the boundary is enforced twice over
+   by two different parties.
 6. Worker crops each quadrilateral itself (perspective-correct warp) and writes the crops to
    `crops/{jobId}/`. Team A never gets blob write access.
 7. Worker → `Identifying`: uploads each crop to the `cardid` project and fans them out to the

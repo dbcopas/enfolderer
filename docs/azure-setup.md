@@ -1956,6 +1956,52 @@ If both rows are present and the call is still refused, the agent id is the next
 than the role — see "Record the agent ids" in step 4. A 401 means the project refused the
 principal; a run that starts and then fails names the agent instead.
 
+### If a run times out in DetectingBoundaries
+
+```text
+Job 87e67f05… failed in state DetectingBoundaries.
+Foundry run 'run_Bi5wrk…' did not complete within 00:05:00.
+```
+
+Nothing failed here — the run is *waiting*. Foundry pauses a run at every MCP tool call and will
+not proceed until it is told to go ahead, parking it in the `requires_action` state. Approval is
+programmatic only; there is no button for it in the portal. A client that polls for a terminal
+status and nothing else will sit there until its own timeout, which is what this message is.
+
+The worker answers that request itself, approving calls to the one MCP server the agent is supposed
+to be using and refusing anything else. If you see this timeout, you are running a worker image
+built before that was added — check which tag is live and redeploy:
+
+```powershell
+$prefix = 'enf-demo'
+az containerapp show -g "$prefix-platform" -n "$prefix-worker" `
+  --query "properties.template.containers[0].image" -o tsv
+
+./scripts/deploy-images.ps1
+```
+
+Once the fix is deployed the approval shows up in the worker log, one line per tool call:
+
+```text
+info: Approving tool call detect_cards on 'imaging' for run run_…
+```
+
+If instead you see a refusal:
+
+```text
+fail: Refusing tool call lookup_by_name for run run_…: it targets MCP server 'catalogue',
+      but this agent is only permitted to call 'imaging'.
+```
+
+…then an agent is reaching for a server it is not entitled to, and the orchestrator stopped it
+before Foundry was ever asked. That is the boundary working, and it makes a good thing to trigger
+deliberately on screen — see
+[demo scenario 2](foundry-demo.md#2-call-team-bs-mtg-catalogue-from-team-as-project).
+
+A different message, `asked for tool approval more than 10 times`, means the agent is calling its
+tool in a loop. Check the prompt in the agent YAML: the usual cause is instructions that tell it to
+call the tool without telling it what to do with the answer.
+
 ### If a run fails with tool_server_error
 
 ```text
