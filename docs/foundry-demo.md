@@ -1,0 +1,286 @@
+# Foundry multi-project demo: geometry vs. identification
+
+This repository contains a working example of **two Azure AI Foundry projects owned by two
+different teams**, cooperating on one workload while being unable to reach into each other's
+assets. The workload is the Enfolderer card scanner: photograph a page of collectible cards, get
+back JSON listing every card.
+
+## The two teams
+
+| | Team A — geometry | Team B — identification |
+|---|---|---|
+| Foundry project | `cardgeo` | `cardid` |
+| Foundry account | `<prefix>-ai` (shared) | `<prefix>-ai` (shared) |
+| Resource group | `<prefix>-cardgeo` | `<prefix>-cardid` |
+| Owner group | `teamAGroupObjectId` | `teamBGroupObjectId` |
+| Agents | `CardBoundaryAgent` | `OrchestratorAgent`, `MtgCardIdAgent`, `PokemonCardIdAgent` |
+| MCP servers | `mcp-imaging` | `mcp-cardcatalog-mtg`, `mcp-cardcatalog-pokemon` |
+| Storage access | read `scans` | **none** |
+| Job state (Cosmos) | **none** | **none** |
+
+Team A's skill is *finding cards*: any game, any frame, borderless and full-art printings, cards
+at oblique angles or rotated relative to each other. It returns geometry only — four corner
+points per card — and knows nothing about card catalogues.
+
+That skill is not just a prompt. Behind `CardBoundaryAgent` sits Team A's own MCP server,
+`mcp-imaging`, whose `detect_cards` tool measures the card corners by edge detection. This is the
+division of labour worth pointing at on screen: a chat model has no detection head and never sees
+the photo at full resolution, so asked for coordinates it invents plausible ones — the tool
+*measures* them, and the model spends its judgement on what geometry cannot settle (is that
+rectangle really a card, which end is its top, which game is it). Team B gets the benefit of both
+by invoking one agent, and cannot see, call or redeploy the server underneath it.
+
+Team B's skill is *reading cards*: given a rectified crop, work out the set, collector number and
+name, using a per-game agent backed by that game's catalogue MCP server.
+
+Adding a game means adding one agent definition plus one MCP server under `agents/cardid/`.
+`YugiohCardIdAgent` and `LorcanaCardIdAgent` are checked in as growth slots to show that the
+reuse story does not require touching Team A at all.
+
+Both projects live in **one Foundry account** by default, so the boundary between the teams is the
+Foundry *project* boundary rather than the plain Azure RBAC boundary you get between two unrelated
+resources. Each team's identity and MCP servers stay in its own resource group. Deploy with
+`singleAccount=false` to give each team its own account instead; see
+[Two tiers of isolation](azure-setup.md#two-tiers-of-isolation) for which tier to pick.
+
+## End-to-end flow
+
+1. Desktop app (`Scan Card Image…`) signs the user in with Entra ID and calls `POST /jobs`.
+2. The API creates the job document in Cosmos and returns the relative URL
+   `jobs/{jobId}/content` to upload to.
+3. The app PUTs the image to the API with its bearer token, and the API writes it to
+   `scans/{jobId}/{filename}`. The storage account has no public endpoint, so the API is the only
+   thing the client can reach — which is what lets the client run anywhere.
+4. `POST /jobs/{id}/submit` enqueues the job; the worker picks it up.
+5. Worker → `DetectingBoundaries`: uploads the photo to the `cardgeo` project and calls Team A's
+   `CardBoundaryAgent` with it as `image_file` message content. Storage is private, so an agent
+   cannot be handed a URL to fetch — and the upload is deleted as soon as the run ends.
+   The agent then calls its own `detect_cards` tool to measure the corners, and reviews the result
+   against the picture it was sent. The worker passes the scan's blob path along for that call: it
+   is a name, not a credential, and Team A's identity could already read `scans` and nothing else.
+   Foundry pauses the run at that tool call and waits for approval, and the worker — Team B's
+   orchestrator — approves it, having first checked the call targets the `imaging` server and not
+   some other team's. A call to any other server is refused, so the boundary is enforced twice over
+   by two different parties.
+6. Worker crops each quadrilateral itself (perspective-correct warp) and writes the crops to
+   `crops/{jobId}/`. Team A never gets blob write access.
+7. Worker → `Identifying`: uploads each crop to the `cardid` project and fans them out to the
+   per-game agents. Team B receives one card at a time and never the whole page.
+8. Worker → `Completed`, writing the versioned result document to Cosmos.
+9. The app polls `GET /jobs/{id}` every 2s with exponential backoff and maps `cards[]` into the
+   CSV shape the importer already understands.
+
+## Why the boundaries are real
+
+* **Project-scoped ownership.** Each team's group holds `Foundry Project Manager` on *its own
+  project only* — see the `ownerAssignment` in `infra/modules/foundry-project.bicep`, whose scope
+  is the project resource. Team B cannot edit, redeploy or read the instructions of Team A's
+  boundary agent even though both projects sit in the same account and the same resource group.
+* **Invoke-only cross-project access.** `infra/modules/foundry-invoke-access.bicep` grants the
+  orchestrator `Foundry User` on the `cardgeo` **project** — enough to run Team A's agent, not
+  enough to change it. Scoping it to the project rather than the account matters: an account-scoped
+  grant would hand Team B access to every project in the account, which is the opposite of the
+  claim. The same module grants the orchestrator the same role on `cardid`, so the two halves of
+  the pipeline are two separate, separately revocable assignments.
+* **Entra-only data plane.** The storage account has `allowSharedKeyAccess: false` and Cosmos has
+  `disableLocalAuth: true`. There are no keys or connection strings to copy into a config file.
+* **No secrets in the desktop app.** `aiconfig.txt` carries only an API URL, tenant id, public
+  client id and scope. Sign-in is interactive (`InteractiveBrowserCredential`) or device code.
+  If an old file still contains `client_secret`, the app refuses to start the scan and tells you
+  to revoke the secret.
+* **Least-privilege identities.** The API can write `scans` and touch Cosmos, and has no access to
+  `crops` — it cannot read what either team produces. Team A can read `scans` and nothing else.
+  Neither project has any Cosmos role assignment, so neither can read job state.
+* **Team B holds no storage role at all.** Its agents receive each card as an uploaded file, so
+  there is nothing to grant. This is stronger than the container-scoped read it used to have:
+  read on `crops` would have let Team B enumerate *every* card of *every* job, where now it sees
+  only the single crop the orchestrator chose to send it, for as long as that run takes.
+* **One public entry point.** Storage and Cosmos are both `publicNetworkAccess: Disabled` and
+  reached only over private endpoints; every Container Apps environment sits on a subnet of this
+  VNet, so that is where their outbound traffic goes. The client's entire attack surface is one
+  authenticated HTTPS API.
+* **Each team operates its own environment.** Team A's containers run in `<prefix>-cardgeo-env` in
+  Team A's resource group, with their own log workspace. Team B cannot restart them, change their
+  scale, read their environment variables or read their console output.
+
+## Deploying
+
+See **[azure-setup.md](azure-setup.md)** for the full walkthrough: owner groups, app
+registrations, the deployment itself, the agents, and the desktop client's config file. The short
+version, once `infra/main.parameters.json` is filled in:
+
+```powershell
+az deployment sub create `
+  --location eastus2 `
+  --template-file infra/main.bicep `
+  --parameters infra/main.parameters.json
+```
+
+That creates the container registry but no images, so every container app starts on a placeholder.
+Build the five images with `az acr build` and redeploy with `imageTag` set — the setup guide gives
+the commands.
+
+Then create the agents from the definitions in `agents/cardgeo/` and `agents/cardid/`, and put the
+resulting agent ids into the worker's `ScanPipeline:BoundaryAgentId` and
+`ScanPipeline:IdentificationAgentIds` settings (the defaults assume the agent *names* are usable as
+ids).
+
+Every service authenticates with a **user-assigned managed identity** — one per role, created
+before the compute so the role assignments survive redeploys. Team A's identity lives in Team A's
+resource group, which is precisely why Team B cannot grant itself anything on it.
+
+The account topology is a parameter, not a decision baked into the templates:
+
+```powershell
+# One account per team instead of one shared account.
+az deployment sub create `
+  --location eastus2 `
+  --template-file infra/main.bicep `
+  --parameters infra/main.parameters.json `
+  --parameters singleAccount=false
+```
+
+Nothing in `src/` knows how many accounts exist. The worker holds one client per project endpoint,
+and those endpoints keep their shape either way.
+
+## "Break it" scenarios
+
+These are the point of the demo. Run a scan first so the audience sees the happy path.
+
+### 1. Revoke the orchestrator's access to Team A's agent
+
+```powershell
+./scripts/deploy-images.ps1 -SkipBuild -GrantGeometryAccess $false
+```
+
+Use the script rather than a bare `az deployment sub create`: that would deploy `imageTag`'s empty
+default and send all five container apps back to the placeholder image, which breaks the demo in a
+far less interesting way.
+
+Bicep deletes the `Foundry User` assignment on the `cardgeo` project. (RBAC changes can take a
+minute or two to propagate; re-run the scan until it fails.)
+
+Then scan an image again. Expected result:
+
+* The job stops in **`DetectingBoundaries`** and moves to `Failed`.
+* `GET /jobs/{id}` reports an error beginning
+  `Foundry authorization failure (401).` followed by the failing request and the `cardgeo`
+  project endpoint, so the revoked boundary is named explicitly. Foundry answers a missing project
+  role with 401 and `PermissionDenied` rather than the 403 the shape of the problem suggests.
+* The desktop app shows that message and offers to retry — grant the role back, click **Yes**,
+  and the same job flow succeeds without restarting the app.
+
+This is the whole point: Team B's pipeline degrades at a well-defined seam with a legible error,
+rather than silently returning wrong answers or leaking through some other path. The worker
+raises this from a single client instance bound to the `cardgeo` endpoint, so there is no
+ambiguity about which boundary was crossed.
+
+To restore access, run the same script with `-GrantGeometryAccess $true`.
+
+### 2. Call Team B's MTG catalogue from Team A's project
+
+In the Foundry portal, open the **`cardgeo`** project → `CardBoundaryAgent` → **Tools** and try to
+add the `mcp-cardcatalog-mtg` server. The server lives in Team B's resource group, so it is not
+among the connections Team A can select.
+
+The stronger version of this is to hand Team A the URL anyway and call it directly:
+
+```powershell
+$token = az account get-access-token --resource "api://$prefix-mcp" --query accessToken -o tsv
+$url = az containerapp show -g "$prefix-cardid" -n "$prefix-mcp-cardcatalog-mtg" `
+  --query properties.configuration.ingress.fqdn -o tsv
+Invoke-WebRequest -SkipHttpErrorCheck -Method Post `
+  -Uri "https://$url/mcp" `
+  -Headers @{ Authorization = "******"; Accept = 'application/json, text/event-stream' } `
+  -ContentType 'application/json' -Body '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+Expected result: **403 Forbidden**, even though the URL is reachable and the token is valid. Each
+server checks the caller's object id against an allow-list built by `infra/main.bicep`, and Team
+A's principals are deliberately absent from Team B's catalogue servers. That list is the enforced
+form of the `allowed_callers` key in `agents/cardid/mcp-cardcatalog-mtg.yaml`;
+`agents/cardgeo/card-boundary-agent.yaml` records the same boundary from the other side in
+`denied_connections`.
+
+Worth showing the two failures side by side: without a token the same call is a **401**, with one
+it is a **403**. The first says the caller is unknown, the second says the caller is known and
+still not allowed — which is the distinction the whole demo is about.
+
+Two useful follow-ups with the same shape:
+
+* Have Team A's identity try to read a document from the Cosmos `jobs` container → 403, because
+  `infra/modules/data-rbac.bicep` creates no Cosmos role assignment for either project identity.
+* Have Team A's identity try to write to the `crops` container → 403; only the worker holds
+  `Storage Blob Data Contributor` there. This is why the boundary agent returns geometry only and
+  the worker does the cropping: the alternative would hand Team A blob-write rights just to save
+  a hop.
+* Have **Team B's** identity try to read anything in storage → 403 on every container, because it
+  holds no storage role whatsoever. Then point at the same job completing successfully: a team can
+  do its work without any standing access to the data it works on, because the orchestrator hands
+  it one card at a time and takes it back afterwards.
+
+### 3. Show what the project boundary does *not* isolate
+
+Only exists in the default single-account layout, and it is the most interesting thing that layout
+buys you: the two projects share one model deployment and one pool of quota.
+
+```powershell
+az cognitiveservices account deployment list `
+  --name "$prefix-ai" --resource-group "$prefix-platform" -o table
+```
+
+One `gpt-4o` deployment, parented to the **account**, serving both projects. So:
+
+* Either team can saturate the shared TPM quota and throttle the other. Run a batch of scans from
+  `cardid` while someone invokes `CardBoundaryAgent` from `cardgeo` and watch the 429s cross the
+  boundary that the RBAC scenarios just proved was airtight.
+* A subscription Owner — or anyone with write access on the account — can change the model
+  version or delete the deployment out from under both teams. Project Manager on a project does not
+  grant that, which is why the account belongs to the platform team in this layout.
+
+The point to land: a project isolates **agents, connections and authoring**. It does not isolate
+**quota, model deployments, account settings or blast radius**. If the teams need those separated
+too, they need separate accounts — redeploy with `singleAccount=false` and re-run this scenario to
+show two independent deployments and two quota pools.
+
+## Result contract
+
+Frozen in `src/Enfolderer.Ai.Contracts/ScanContracts.cs` as `schemaVersion: 1`:
+
+```json
+{
+  "schemaVersion": 1,
+  "jobId": "…",
+  "status": "Completed",
+  "imageWidth": 4032,
+  "imageHeight": 3024,
+  "cards": [
+    {
+      "index": 0,
+      "quad": { "points": [ {"x":10,"y":20}, {"x":110,"y":25}, {"x":112,"y":165}, {"x":8,"y":160} ] },
+      "game": "mtg",
+      "set": "bro",
+      "collectorNumber": "167",
+      "name": "Ancient Silver Dragon",
+      "language": "en",
+      "finish": "nonfoil",
+      "confidence": 0.94,
+      "agent": "cardid/MtgCardIdAgent"
+    }
+  ]
+}
+```
+
+`agent` names the agent that produced each entry, which makes the boundary-vs-identification split
+visible in the output: unidentified cards come back attributed to `cardgeo/CardBoundaryAgent` with
+geometry but no name, so the audience can see exactly where a card was lost.
+
+Contract deserialisation, the polling state machine and the card mapping are covered by
+`Enfolderer.App/Tests/AiScanClientTests.cs`, which runs as part of `--selftests`.
+
+## Running locally without Azure
+
+Leave `ScanPlatform:CosmosEndpoint` and `ScanPlatform:StorageAccountUrl` empty. The API and worker
+fall back to an in-memory job store, a local directory image store and a directory-backed queue,
+and the worker uses stub agents when no Foundry endpoints are configured — enough to exercise the
+desktop upload/poll loop end to end.

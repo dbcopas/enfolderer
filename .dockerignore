@@ -1,0 +1,8 @@
+# The build context is the repository root, so that a service project can reference its siblings
+# under src/. Everything else in the repository is the desktop app and its data, which no container
+# image needs and which would otherwise be uploaded to ACR on every build.
+*
+!src/
+
+src/**/bin/
+src/**/obj/
