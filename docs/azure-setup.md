@@ -2064,6 +2064,66 @@ $prefix` reports which.
 > the list when the YAML has a `tools` key, and warns when a tool it could not resolve is about to
 > be removed.
 
+### If a tidy photo finds fewer cards than a messy one
+
+```text
+Job 9c1d... completed: 2 card(s) detected, 2 identified.
+```
+
+Nine cards were on the table, neatly aligned, and only two came back. Laying them out carelessly,
+with visible gaps, finds all nine. That is the right way round for the detector, and it is worth
+understanding before you blame the photograph.
+
+`detect_cards` finds cards by flooding the background inward from the edges of the photo and
+treating whatever the flood cannot reach as an object. This is what makes busy artwork harmless:
+the detail inside a card is enclosed, the background never gets in, and the card comes back whole
+without anyone having to decide which lines are art and which are its border. The same property is
+the trap. **Where two cards touch, there is no background between them for the flood to enter, so
+they come back as one object.** Push nine cards together into a tidy block and the detector sees a
+single shape.
+
+Shape cannot rescue it either, which is why the failure is silent rather than noisy. Cards tile
+without changing proportion: three columns of three are exactly as wide-to-tall as one card, so a
+block of nine passes every proportion check as one very large, very plausible card. It is cropped
+and sent for identification as a single picture of nine cards, and the identification agent
+reasonably names whichever one it can read.
+
+The detector now looks for the seams where cards meet before accepting a block as one card, and
+splits it into a grid when it finds them. Two details of that are worth knowing when you are
+looking at a result that is still wrong:
+
+- **A seam can be genuinely invisible.** Two touching cards with the same border colour leave no
+  edge between them at all. Only one axis of the grid has to be clearly seamed; the number of cards
+  along the other axis is then implied by card proportions, with the faint seams only corroborating
+  it. So a page can be split correctly even when parts of it show no seam.
+- **Over-splitting is preferred to under-splitting.** If the detector is unsure it would rather
+  hand the boundary agent nine crops, two of which are rubbish, than one crop of the whole page.
+  The agent sees each crop and is asked whether it is really a card, so a bad split is recoverable;
+  a missed one is not, because nothing downstream ever sees the eight cards that were thrown away.
+
+**Known limitation.** A card whose artwork is a hard, full-width grid of lines falling exactly on
+card proportions is indistinguishable from several touching cards by geometry alone, and will be
+split. Real card framing — a title bar, an inset art box, a text box — does not trigger this,
+because those lines neither span the full card nor land on the proportions a split would need. If
+you hit it, the boundary agent's review is the backstop.
+
+Nothing about this needs re-provisioning: the detector lives in Team A's MCP server image, not in
+the agent definition. Rebuild and redeploy the images:
+
+```powershell
+git pull
+./scripts/deploy-images.ps1
+```
+
+Then re-run the scan and read the worker log for the detected count:
+
+```powershell
+az containerapp logs show `
+  --name enf-demo-worker `
+  --resource-group enf-demo-cardid `
+  --tail 200 --follow false | Select-String "card\(s\) detected"
+```
+
 ### If a job completes with nothing identified
 
 ```text
