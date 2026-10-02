@@ -2064,51 +2064,81 @@ $prefix` reports which.
 > the list when the YAML has a `tools` key, and warns when a tool it could not resolve is about to
 > be removed.
 
+### If the crops are pieces of cards rather than whole cards
+
+```text
+Job 9c1d... completed: 18 card(s) detected, 0 identified.
+```
+
+Three cards on the table and eighteen crops, each one an art box or a text box, none of them a
+whole card. Nothing downstream can do anything with these: the identification agent is shown a
+picture of some artwork with no name, no set symbol and no collector number, and declines it.
+
+The cause is a coincidence in the size of a trading card. A card is 63 x 88 mm, and 63/88 is 0.716,
+which is within two per cent of 1/sqrt(2) — the same proportion that makes A4 paper fold into A5.
+Fold a card in half across its long side and you get a card shape again. So a card's art box is
+card-shaped, its text box is card-shaped, nine cards in a 3 x 3 block are card-shaped, and six
+cards in a 3 x 2 block are card-shaped. **Shape cannot tell any of these apart, and no tightening
+of the shape test will ever separate them, because they genuinely are the same shape.**
+
+What does separate them is size, and only the whole photo knows it. Every card in one photograph is
+the same size — the same object, photographed together from one camera position — so the detector
+now has the objects it found vote on how wide a card is in this photo, and applies that one answer
+to all of them. A text box loses because it is half the size of the cards lying next to it. This is
+also why a photo with one card set slightly apart from a tidy block works so well: that one card
+settles the size, and the block then divides correctly.
+
+Two consequences worth knowing:
+
+- **Under-splitting is now preferred to over-splitting.** Where the evidence is balanced the
+  detector takes the coarser reading. A crop of two cards can still be identified as one of them; a
+  crop of a text box cannot be identified as anything.
+- **A photo of nothing but touching cards is the hard case.** With no card set apart, and every
+  division of the block card-shaped, the photo has less to go on. Leaving one card slightly
+  separated from the rest costs nothing and removes the ambiguity entirely.
+
 ### If a tidy photo finds fewer cards than a messy one
 
 ```text
 Job 9c1d... completed: 2 card(s) detected, 2 identified.
 ```
 
-Nine cards were on the table, neatly aligned, and only two came back. Laying them out carelessly,
-with visible gaps, finds all nine. That is the right way round for the detector, and it is worth
-understanding before you blame the photograph.
+Nine cards on the table, neatly aligned, and two came back — correct crops, but only two of them.
+Scattering the same cards with visible gaps finds all nine. There are two separate reasons a photo
+can behave this way, and they have different fixes.
 
-`detect_cards` finds cards by flooding the background inward from the edges of the photo and
-treating whatever the flood cannot reach as an object. This is what makes busy artwork harmless:
-the detail inside a card is enclosed, the background never gets in, and the card comes back whole
-without anyone having to decide which lines are art and which are its border. The same property is
-the trap. **Where two cards touch, there is no background between them for the flood to enter, so
-they come back as one object.** Push nine cards together into a tidy block and the detector sees a
-single shape.
+**Cards that touch arrive as one object.** `detect_cards` finds cards by flooding the background
+inward from the edge of the photo and treating whatever the flood cannot reach as an object. That
+is what makes busy artwork harmless: the detail inside a card is enclosed, the background never
+gets in, and the card comes back whole, without anyone having to decide which lines are art and
+which are its border. It is also why touching cards merge — there is no background between them for
+the flood to enter. The detector divides such a block using the card size the photo agreed on, as
+described in the previous section.
 
-Shape cannot rescue it either, which is why the failure is silent rather than noisy. Cards tile
-without changing proportion: three columns of three are exactly as wide-to-tall as one card, so a
-block of nine passes every proportion check as one very large, very plausible card. It is cropped
-and sent for identification as a single picture of nine cards, and the identification agent
-reasonably names whichever one it can read.
+**Busy artwork used to cost the cards their own borders.** The edge threshold keeps the strongest
+tenth of gradients in the photo. That is a fixed budget for the whole frame, so filling the frame
+with detailed artwork spends the budget on the artwork, leaving a card's border below the threshold
+and the flood free to pour in and erase the card. Nothing about the border changed; the competition
+for the budget did, which is why adding cards to a photo could reduce the number found. The
+detector no longer depends on that threshold alone: it also samples the colour of the table at the
+frame of the photo and only lets the flood pass through pixels that look like the table. Colour is
+not a budget, so how busy one card is no longer affects whether the card beside it is found.
 
-The detector now looks for the seams where cards meet before accepting a block as one card, and
-splits it into a grid when it finds them. Two details of that are worth knowing when you are
-looking at a result that is still wrong:
+If a photo still comes up short, the things that genuinely help are, in order:
 
-- **A seam can be genuinely invisible.** Two touching cards with the same border colour leave no
-  edge between them at all. Only one axis of the grid has to be clearly seamed; the number of cards
-  along the other axis is then implied by card proportions, with the faint seams only corroborating
-  it. So a page can be split correctly even when parts of it show no seam.
-- **Over-splitting is preferred to under-splitting.** If the detector is unsure it would rather
-  hand the boundary agent nine crops, two of which are rubbish, than one crop of the whole page.
-  The agent sees each crop and is asked whether it is really a card, so a bad split is recoverable;
-  a missed one is not, because nothing downstream ever sees the eight cards that were thrown away.
+1. **Put the cards on a surface that does not look like a card.** The detector finds the table by
+   its colour, so a plain mat in a colour no card border uses — green, blue, red — is ideal. Bare
+   wood works; a cream tablecloth under cream-bordered cards does not.
+2. **Leave a gap, even a few millimetres.** Touching cards can be divided, but separated cards do
+   not need to be.
+3. **Keep the whole of every card in frame.** A card running off the edge of the photo is measured
+   wrong and may then disagree with the others about how big a card is.
+4. **Avoid a hard shadow falling across several cards.** A shadow is an object in its own right and
+   joining cards is the one thing that genuinely loses them. Thin shadows are removed; a broad one
+   is not.
 
-**Known limitation.** A card whose artwork is a hard, full-width grid of lines falling exactly on
-card proportions is indistinguishable from several touching cards by geometry alone, and will be
-split. Real card framing — a title bar, an inset art box, a text box — does not trigger this,
-because those lines neither span the full card nor land on the proportions a split would need. If
-you hit it, the boundary agent's review is the backstop.
-
-Nothing about this needs re-provisioning: the detector lives in Team A's MCP server image, not in
-the agent definition. Rebuild and redeploy the images:
+None of this needs re-provisioning: the detector lives in Team A's MCP server image, not in the
+agent definition. Rebuild and redeploy the images:
 
 ```powershell
 git pull
