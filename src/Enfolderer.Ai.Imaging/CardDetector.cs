@@ -17,8 +17,47 @@ public sealed record CardDetectorOptions
     /// <summary>Smallest card, as a fraction of the image area.</summary>
     public double MinAreaFraction { get; init; } = 0.004;
 
-    /// <summary>Largest card, as a fraction of the image area.</summary>
+    /// <summary>Largest single card, as a fraction of the image area.</summary>
+    /// <remarks>
+    /// Applied per card, after a merged block has been split. A tidy page of nine cards is one
+    /// blob covering most of the photo, and rejecting it wholesale is what loses all nine.
+    /// </remarks>
     public double MaxAreaFraction { get; init; } = 0.60;
+
+    /// <summary>Most cards a merged block may be split into along one axis.</summary>
+    public int MaxGridSpan { get; init; } = 6;
+
+    /// <summary>
+    /// Fraction of a candidate seam that must actually be edge for the seam to count as real.
+    /// <para>
+    /// This is the whole basis for telling one card from a block of them: nine cards in a 3 x 3
+    /// arrangement have exactly the proportions of one card, so shape alone cannot distinguish
+    /// them. The seams between them can.
+    /// </para>
+    /// </summary>
+    public double MinSeamCoverage { get; init; } = 0.65;
+
+    /// <summary>
+    /// Least coverage any candidate seam may show before the arrangement is rejected outright.
+    /// <para>
+    /// Two touching cards of the same colour leave no visible seam, so a real arrangement can have
+    /// a seam that is largely blank and still be correct. A division running through the middle of
+    /// a card, however, crosses unbroken artwork and shows almost nothing anywhere along its
+    /// length; this is the bar that separates the two.
+    /// </para>
+    /// </summary>
+    public double MinSeamEvidence { get; init; } = 0.30;
+
+    /// <summary>
+    /// Shortest side, in working pixels, that a cell of a split block may have.
+    /// <para>
+    /// This is not really a geometric limit but a legibility one. Splitting only pays off if the
+    /// pieces can still be identified as cards, and below roughly this size no title or set symbol
+    /// survives. It also stops ruled artwork from being read as a dense grid of tiny cards, which
+    /// shape alone cannot rule out.
+    /// </para>
+    /// </summary>
+    public int MinCellShortSide { get; init; } = 60;
 
     /// <summary>
     /// How much of its own bounding rectangle a blob must fill to count as a card. A card is
@@ -54,6 +93,12 @@ public sealed record DetectedCard(CardQuad Quad, double Confidence);
 /// border, and treat everything the background cannot reach as a card. Flooding from the border is
 /// what makes busy card art harmless: edges inside a card are holes in a region the background
 /// never enters, so they are filled for free rather than fragmenting it.
+/// </para>
+/// <para>
+/// That same property is why cards laid out neatly need a second pass. When cards touch, or sit a
+/// few pixels apart, the background cannot get between them and they come back as one blob — so a
+/// tidy page detects *worse* than a scattered one, which is the opposite of what anyone expects.
+/// <see cref="FindGrid"/> splits such a block by looking for the seams between its cards.
 /// </para>
 /// </summary>
 public static class CardDetector
@@ -93,7 +138,6 @@ public static class CardDetector
         foreach (var blob in blobs)
         {
             if (blob.Count < imageArea * opts.MinAreaFraction) continue;
-            if (blob.Count > imageArea * opts.MaxAreaFraction) continue;
 
             var rect = MinimumAreaRectangle(ConvexHull(blob.Points));
             if (rect is null) continue;
@@ -105,21 +149,36 @@ public static class CardDetector
             var rectangularity = blob.Count / rectArea;
             if (rectangularity < opts.MinRectangularity) continue;
 
-            var aspect = shortSide / longSide;
-            var aspectError = Math.Max(aspect / CardAspect, CardAspect / aspect);
-            if (aspectError > opts.AspectTolerance) continue;
+            // One blob may be several cards that are touching. Deciding how many comes before any
+            // judgement about shape, because a block of cards and a single card can be the same
+            // shape — a 3 x 3 arrangement has exactly a card's proportions.
+            var (cols, rows) = FindGrid(edges, width, height, corners, imageArea, opts);
 
-            // Scaled back to the original image, because the caller's quad is in source pixels and
-            // the crop is taken from the full-resolution photograph, not from this working copy.
-            var points = corners
-                .Select(p => new ImagePoint(p.X / scale, p.Y / scale))
-                .ToList();
+            foreach (var cell in Subdivide(corners, cols, rows))
+            {
+                var (cellShort, cellLong) = SideLengths(cell);
+                if (cellShort < 4 || cellLong < 4) continue;
 
-            var confidence = Math.Clamp(
-                Math.Min(1d, rectangularity) * (1d / aspectError),
-                0d, 1d);
+                var cellArea = cellShort * cellLong;
+                if (cellArea > imageArea * opts.MaxAreaFraction) continue;
+                if (cellArea < imageArea * opts.MinAreaFraction) continue;
 
-            results.Add(new DetectedCard(new CardQuad(points), Math.Round(confidence, 3)));
+                var aspect = cellShort / cellLong;
+                var aspectError = Math.Max(aspect / CardAspect, CardAspect / aspect);
+                if (aspectError > opts.AspectTolerance) continue;
+
+                // Scaled back to the original image, because the caller's quad is in source pixels
+                // and the crop is taken from the full-resolution photograph, not this working copy.
+                var points = OrderAsCard(cell)
+                    .Select(p => new ImagePoint(p.X / scale, p.Y / scale))
+                    .ToList();
+
+                var confidence = Math.Clamp(
+                    Math.Min(1d, rectangularity) * (1d / aspectError),
+                    0d, 1d);
+
+                results.Add(new DetectedCard(new CardQuad(points), Math.Round(confidence, 3)));
+            }
         }
 
         // Largest first, so a caller that trusts only the first few gets the clearest cards.
@@ -337,6 +396,206 @@ public static class CardDetector
 
         hull.RemoveAt(hull.Count - 1);
         return hull;
+    }
+
+    /// <summary>
+    /// Decides how many cards a rectangular block contains, by looking for the seams that would
+    /// separate them.
+    /// <para>
+    /// Shape cannot answer this. Cards tile without changing proportion — three columns of three
+    /// are exactly as wide-to-tall as one card — so a block of nine passes every aspect test as a
+    /// single card and is cropped as the whole page. What distinguishes them is that a block has
+    /// continuous edges running across its interior where the cards meet, and one card does not.
+    /// </para>
+    /// <para>
+    /// Only arrangements whose cells are card-shaped are considered, and an arrangement has to be
+    /// anchored: at least one axis must be divided by seams that are present along their whole
+    /// length, so art that happens to contain a straight line cannot on its own split a card.
+    /// </para>
+    /// <para>
+    /// The other axis is allowed to be fainter. Two touching cards whose borders happen to be the
+    /// same colour have no visible seam between them at all, so insisting every seam is complete
+    /// collapses a tidy page back into one card. Once one axis is anchored the cell width is known,
+    /// and card proportions then imply how many cells the other axis must hold; the faint seams
+    /// only have to corroborate it. Candidates are scored by their mean seam coverage so that the
+    /// arrangement whose seams are really there wins over one that merely fits.
+    /// </para>
+    /// </summary>
+    private static (int Cols, int Rows) FindGrid(
+        bool[] edges, int width, int height,
+        (double X, double Y)[] corners, double imageArea, CardDetectorOptions options)
+    {
+        var span = Math.Max(1, options.MaxGridSpan);
+        var best = (Cols: 1, Rows: 1);
+        var bestScore = double.MinValue;
+        var bestCells = 1;
+
+        for (var cols = 1; cols <= span; cols++)
+        {
+            for (var rows = 1; rows <= span; rows++)
+            {
+                var cells = cols * rows;
+                if (cells == 1) continue;
+
+                var cell = Subdivide(corners, cols, rows).First();
+                var (cellShort, cellLong) = SideLengths(cell);
+                if (cellShort < options.MinCellShortSide) continue;
+
+                var cellArea = cellShort * cellLong;
+                if (cellArea < imageArea * options.MinAreaFraction) continue;
+                if (cellArea > imageArea * options.MaxAreaFraction) continue;
+
+                var aspect = cellShort / cellLong;
+                var error = Math.Max(aspect / CardAspect, CardAspect / aspect);
+                if (error > options.AspectTolerance) continue;
+
+                var seams = SeamCoverage(edges, width, height, corners, cols, rows);
+                if (seams is null) continue;
+
+                var (acrossCols, acrossRows) = seams.Value;
+
+                // Every seam has to show something. A division placed through the middle of a card
+                // crosses unbroken artwork, and that is what rules out splitting three rows into four.
+                if (acrossCols.Concat(acrossRows).Any(c => c < options.MinSeamEvidence)) continue;
+
+                var anchored =
+                    (acrossCols.Length > 0 && acrossCols.All(c => c >= options.MinSeamCoverage)) ||
+                    (acrossRows.Length > 0 && acrossRows.All(c => c >= options.MinSeamCoverage));
+                if (!anchored) continue;
+
+                var score = acrossCols.Concat(acrossRows).Average();
+                if (score > bestScore || (Math.Abs(score - bestScore) < 1e-9 && cells > bestCells))
+                {
+                    best = (cols, rows);
+                    bestScore = score;
+                    bestCells = cells;
+                }
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Measures how much of each line where two cards in this arrangement would meet is really
+    /// drawn in the edge mask. Returns the coverage of the seams between columns and between rows
+    /// separately, because the two axes are independent evidence, or null when the block is too
+    /// small for the measurement to mean anything.
+    /// </summary>
+    private static (double[] AcrossCols, double[] AcrossRows)? SeamCoverage(
+        bool[] edges, int width, int height,
+        (double X, double Y)[] corners, int cols, int rows)
+    {
+        // The rectangle's own axes: u runs along corners[0]->corners[1], v down corners[0]->[3].
+        var ux = (corners[1].X - corners[0].X) / cols;
+        var uy = (corners[1].Y - corners[0].Y) / cols;
+        var vx = (corners[3].X - corners[0].X) / rows;
+        var vy = (corners[3].Y - corners[0].Y) / rows;
+
+        (double X, double Y) At(double c, double r) =>
+            (corners[0].X + ux * c + vx * r, corners[0].Y + uy * c + vy * r);
+
+        var acrossCols = new List<double>();
+        var acrossRows = new List<double>();
+
+        for (var c = 1; c < cols; c++)
+        {
+            var coverage = SeamCoverage(edges, width, height, At(c, 0), At(c, rows));
+            if (coverage is null) return null;
+            acrossCols.Add(coverage.Value);
+        }
+
+        for (var r = 1; r < rows; r++)
+        {
+            var coverage = SeamCoverage(edges, width, height, At(0, r), At(cols, r));
+            if (coverage is null) return null;
+            acrossRows.Add(coverage.Value);
+        }
+
+        return (acrossCols.ToArray(), acrossRows.ToArray());
+    }
+
+    /// <summary>
+    /// Walks a line and reports how much of it lies on an edge. A small search radius absorbs the
+    /// wobble from a slightly skewed photograph and from rounding the rectangle's corners to whole
+    /// pixels. Null means the line was too short to measure.
+    /// </summary>
+    private static double? SeamCoverage(
+        bool[] edges, int width, int height,
+        (double X, double Y) from, (double X, double Y) to)
+    {
+        var dx = to.X - from.X;
+        var dy = to.Y - from.Y;
+        var length = Math.Sqrt(dx * dx + dy * dy);
+        if (length < 8) return null;
+
+        var samples = (int)Math.Ceiling(length);
+        var counted = 0;
+        var hits = 0;
+
+        for (var i = 0; i <= samples; i++)
+        {
+            var t = (double)i / samples;
+            var x = (int)Math.Round(from.X + dx * t);
+            var y = (int)Math.Round(from.Y + dy * t);
+            if (x < 0 || y < 0 || x >= width || y >= height) continue;
+
+            counted++;
+            if (HasEdgeNear(edges, width, height, x, y, 2)) hits++;
+        }
+
+        return counted < 8 ? null : (double)hits / counted;
+    }
+
+    private static bool HasEdgeNear(bool[] edges, int width, int height, int x, int y, int radius)
+    {
+        for (var dy = -radius; dy <= radius; dy++)
+        {
+            var ny = y + dy;
+            if (ny < 0 || ny >= height) continue;
+            for (var dx = -radius; dx <= radius; dx++)
+            {
+                var nx = x + dx;
+                if (nx < 0 || nx >= width) continue;
+                if (edges[ny * width + nx]) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Cuts a rectangle into a <paramref name="cols"/> x <paramref name="rows"/> tiling.</summary>
+    private static IEnumerable<(double X, double Y)[]> Subdivide(
+        (double X, double Y)[] corners, int cols, int rows)
+    {
+        var ux = (corners[1].X - corners[0].X) / cols;
+        var uy = (corners[1].Y - corners[0].Y) / cols;
+        var vx = (corners[3].X - corners[0].X) / rows;
+        var vy = (corners[3].Y - corners[0].Y) / rows;
+
+        (double X, double Y) At(double c, double r) =>
+            (corners[0].X + ux * c + vx * r, corners[0].Y + uy * c + vy * r);
+
+        for (var r = 0; r < rows; r++)
+        {
+            for (var c = 0; c < cols; c++)
+            {
+                yield return [At(c, r), At(c + 1, r), At(c + 1, r + 1), At(c, r + 1)];
+            }
+        }
+    }
+
+    private static (double Short, double Long) SideLengths((double X, double Y)[] quad)
+    {
+        static double Distance((double X, double Y) a, (double X, double Y) b)
+        {
+            var dx = a.X - b.X;
+            var dy = a.Y - b.Y;
+            return Math.Sqrt(dx * dx + dy * dy);
+        }
+
+        var a = Distance(quad[0], quad[1]);
+        var b = Distance(quad[1], quad[2]);
+        return (Math.Min(a, b), Math.Max(a, b));
     }
 
     /// <summary>
