@@ -1,0 +1,8 @@
+0,0;Mightform Harmonizer;EOE;200;no;de
+0,1;Majestic Genesis;CLB;240;yes;jp
+0,2;Force of Vigor;MH1;164;yes;de
+1,0;Monster Manual;CLB;591;yes;jp
+1,2;Birthing Ritual;MH3;146;no;en
+2,0;Mossborn Hydra;FDN;107;no;en
+2,1;Ancient Bronze Dragon;CLB;369;no;jp
+2,2;Monster Manual;CLB;591;no;jp
