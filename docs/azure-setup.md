@@ -2064,52 +2064,66 @@ $prefix` reports which.
 > the list when the YAML has a `tools` key, and warns when a tool it could not resolve is about to
 > be removed.
 
-### If a photo of a binder page finds almost nothing
+### If a photo finds fewer cards than it should
 
 ```text
 Job 9c1d... completed: 2 card(s) detected, 2 identified.
 ```
 
-Nine cards in a nine-pocket binder sheet, and two came back. This is not the same failure as cards
-touching on a table, and the advice for that case does not fix it.
+Nine cards in the photograph and two came back. Before changing anything, know what `detect_cards`
+actually does, because it is not what it used to be and the old advice no longer applies.
 
-A photo of a page breaks the assumption the loose-card detector is built on. That detector floods
-the background inward from the edge of the frame and calls whatever the flood cannot reach a card.
-On a page there is no background between the cards: the pockets abut, so the whole sheet is one
-object, and the little that does show between two cards is the same dark plastic that surrounds the
-page. The polypropylene also mirrors the room, so a card's own border is often the weakest edge
-near it. Measured on real photographs, that pipeline found three cards out of twenty-seven.
+It finds each card by the card's own four sides, and it decides how big a card is by asking the
+whole photograph. Nothing is assumed about the arrangement: nine in a binder page, three in the
+corner of one, a dozen in a twelve-pocket sheet or five scattered on a desk are all the same
+problem to it, and all of them work. There is nothing to configure and no grid to declare.
 
-So `detect_cards` now tries a second reading first: it assumes the photo may be a page of nine
-pockets and fits that rigid lattice to it, rather than looking for cards one at a time. A page is
-only three unknowns — where the lattice starts across and down, and how big a pocket is — because
-the pockets are evenly spaced and a pocket has a card's proportions. Counting the pockets in
-advance is what makes this stable; left free to choose how many rows and columns to use, the fit
-always prefers one giant cell covering the page, for the 1/sqrt(2) reason in the next section.
+Two things about how it works are worth knowing, because they explain every way it fails:
 
-Three things follow from how the fit is checked, and each is something you can act on:
+- **All four sides have to be there, and the weakest one decides.** A box covering half a card, or
+  two cards, has some real sides and some imagined ones, and judging it on its weakest side is what
+  rejects it. So a card running off the edge of the frame is not a card as far as the detector is
+  concerned, and a card lying across the join of two others may be missed.
+- **Every card in one photograph votes on one width.** They were photographed together from one
+  position, so they are the same size, and the sizes that win are the ones that account for most of
+  the frame. This is what stops a card's own art box — which has four strong sides and a card's
+  proportions — from being reported as a card. It also means a photograph with one card much nearer
+  the camera than the rest can lose that card.
 
-- **Get the whole page in the frame.** The lattice has to fit inside the photo, and the grid it
-  finds must cover at least 40% of the frame before it is believed. A page with one column running
-  off the edge fits nothing, and the photo falls back to the loose-card path, which on a page finds
-  nothing either. This is the single most common cause of a page scanning badly.
-- **Empty pockets are dropped, not guessed at.** Each pocket is judged on how much detail it holds
-  inside its own borders. An empty pocket measures three to five times flatter than one holding a
-  card, so a half-full page returns only the cards that are there.
-- **A page that is not nine pockets needs telling.** `detect_cards` takes `pageRows` and
-  `pageColumns`, both 3 by default. Pass 4 and 3 for a twelve-pocket sheet. Pass 0 for either to
-  turn the page reading off altogether and use the loose-card path, which is what happens anyway
-  when no lattice fits.
+What genuinely helps, in order:
 
-To check a change against real photographs rather than your memory of them, the repository keeps a
-few in `training/`, each with a `cards.txt` listing what is in which pocket:
+1. **Keep the whole of every card in frame.** This is by far the most common cause. A binder page
+   with one column cut off at the edge of the photo loses that column, and a card half out of frame
+   is not found at all.
+2. **Fill the frame with the cards, not with the table.** The further away they are the smaller the
+   borders are in pixels, and the border is the whole of the evidence.
+3. **Photograph the cards from one position.** Standing square to the page is ideal, but an oblique
+   angle is fine — it is a page photographed at a steep angle from one corner, where the far cards
+   are much smaller than the near ones, that strains the one-width vote.
+4. **Avoid glare across a card's border.** A binder page under a ceiling light mirrors the room, and
+   a highlight lying along a pocket seam erases the border underneath it. Tilting the page a few
+   degrees moves the reflection.
+
+An empty pocket in the middle of a page is not a failure: a pocket showing the backing of the page
+is flat where a card is busy, so empty pockets are dropped and only the cards present are returned.
+
+To check a change against real photographs rather than against your memory of them, the repository
+keeps a few in `training/`, each with a `cards.txt` listing which card is in which pocket:
 
 ```powershell
 dotnet run --project tools/Enfolderer.Ai.Imaging.TrainingCheck
 ```
 
-It prints the pockets it expected and the pockets it found for each photo, and exits non-zero when
-they disagree, so it can be run before building new images.
+It prints the pockets it expected and the pockets it found for each photograph, and exits non-zero
+when they disagree, so it can be run before building new images.
+
+None of this needs re-provisioning: the detector lives in Team A's MCP server image, not in the
+agent definition. Rebuild and redeploy the images:
+
+```powershell
+git pull
+./scripts/deploy-images.ps1
+```
 
 ### If the crops are pieces of cards rather than whole cards
 
@@ -2129,60 +2143,62 @@ cards in a 3 x 2 block are card-shaped. **Shape cannot tell any of these apart, 
 of the shape test will ever separate them, because they genuinely are the same shape.**
 
 What does separate them is size, and only the whole photo knows it. Every card in one photograph is
-the same size — the same object, photographed together from one camera position — so the detector
-now has the objects it found vote on how wide a card is in this photo, and applies that one answer
-to all of them. A text box loses because it is half the size of the cards lying next to it. This is
-also why a photo with one card set slightly apart from a tidy block works so well: that one card
-settles the size, and the block then divides correctly.
+the same size — the same object, photographed together from one camera position — so every width is
+asked how much of the frame it accounts for, and the winner takes the photograph. A text box loses
+because the text boxes together cover a fraction of what the cards do.
 
-Two consequences worth knowing:
+Asking for coverage rather than for a count matters more than it sounds. Counting the boxes found
+at each width elects the smallest width every time, because a small box has far more places it can
+sit: a detector scored that way reports the specks inside one card's artwork as a dozen cards.
+Weighing each width by the share of the photograph it explains is scale-free, and a card's parts
+can never explain more of the photograph than the cards themselves.
 
-- **Under-splitting is now preferred to over-splitting.** Where the evidence is balanced the
-  detector takes the coarser reading. A crop of two cards can still be identified as one of them; a
-  crop of a text box cannot be identified as anything.
-- **A photo of nothing but touching cards is the hard case.** With no card set apart, and every
-  division of the block card-shaped, the photo has less to go on. Leaving one card slightly
-  separated from the rest costs nothing and removes the ambiguity entirely.
+One consequence worth knowing: **under-splitting is preferred to over-splitting.** Where the
+evidence is balanced the detector takes the coarser reading. A crop of two cards can still be
+identified as one of them; a crop of a text box cannot be identified as anything.
 
-### If a tidy photo finds fewer cards than a messy one
+### If a photo of loose cards on a table behaves differently from a binder page
 
 ```text
 Job 9c1d... completed: 2 card(s) detected, 2 identified.
 ```
 
-Nine cards on the table, neatly aligned, and two came back — correct crops, but only two of them.
-Scattering the same cards with visible gaps finds all nine. There are two separate reasons a photo
-can behave this way, and they have different fixes.
+There are two detectors, and which one answered explains a lot. Cards are looked for by their own
+borders first, as described above. Only when that finds nothing at all does the older pipeline run,
+which works the opposite way round: it floods the background inward from the edge of the photo and
+treats whatever the flood cannot reach as an object.
 
-**Cards that touch arrive as one object.** `detect_cards` finds cards by flooding the background
-inward from the edge of the photo and treating whatever the flood cannot reach as an object. That
-is what makes busy artwork harmless: the detail inside a card is enclosed, the background never
-gets in, and the card comes back whole, without anyone having to decide which lines are art and
-which are its border. It is also why touching cards merge — there is no background between them for
-the flood to enter. The detector divides such a block using the card size the photo agreed on, as
-described in the previous section.
+That fallback is good at loose cards on a plain surface and helpless at anything else, which is why
+it is no longer what runs first. It has two failure modes of its own, and both are recognisable:
 
-**Busy artwork used to cost the cards their own borders.** The edge threshold keeps the strongest
-tenth of gradients in the photo. That is a fixed budget for the whole frame, so filling the frame
-with detailed artwork spends the budget on the artwork, leaving a card's border below the threshold
-and the flood free to pour in and erase the card. Nothing about the border changed; the competition
-for the budget did, which is why adding cards to a photo could reduce the number found. The
-detector no longer depends on that threshold alone: it also samples the colour of the table at the
-frame of the photo and only lets the flood pass through pixels that look like the table. Colour is
-not a budget, so how busy one card is no longer affects whether the card beside it is found.
+**Cards that touch arrive as one object.** There is no background between them for the flood to
+enter, so a block of cards comes back as one blob, which it then divides using the card size the
+photo agreed on. A binder page is this problem at its worst — the pockets abut, the whole sheet is
+one object, and what little shows between two cards is the same dark plastic that surrounds the
+page. Measured on the photographs in `training/`, that pipeline found three cards out of
+twenty-seven. It is kept because it is better than the border search at a card lying on a cluttered
+surface, where the clutter supplies borders of its own.
 
-If a photo still comes up short, the things that genuinely help are, in order:
+**The table is found by its colour.** The flood only passes through pixels that look like the
+surface sampled at the frame of the photo, which is what stops busy artwork from erasing a card's
+border. So a plain mat in a colour no card border uses — green, blue, red — helps this path, and a
+cream tablecloth under cream-bordered cards hinders it. Bare wood is fine.
 
-1. **Put the cards on a surface that does not look like a card.** The detector finds the table by
-   its colour, so a plain mat in a colour no card border uses — green, blue, red — is ideal. Bare
-   wood works; a cream tablecloth under cream-bordered cards does not.
-2. **Leave a gap, even a few millimetres.** Touching cards can be divided, but separated cards do
+If a photo of loose cards comes up short, the things that genuinely help are, in order:
+
+1. **Leave a gap, even a few millimetres.** Touching cards can be divided, but separated cards do
    not need to be.
-3. **Keep the whole of every card in frame.** A card running off the edge of the photo is measured
-   wrong and may then disagree with the others about how big a card is.
+2. **Put the cards on a surface that does not look like a card.**
+3. **Keep the whole of every card in frame.** A card running off the edge is measured wrong and may
+   then disagree with the others about how big a card is.
 4. **Avoid a hard shadow falling across several cards.** A shadow is an object in its own right and
    joining cards is the one thing that genuinely loses them. Thin shadows are removed; a broad one
    is not.
+
+A last caveat for either path: a lone round object on an empty table — a coaster, a token — has
+four sides and roughly a card's proportions when there is nothing else in the photograph to
+disagree with it, and may be reported as one card. The identification agent declines it and the job
+still completes, with the refusal recorded against that crop.
 
 None of this needs re-provisioning: the detector lives in Team A's MCP server image, not in the
 agent definition. Rebuild and redeploy the images:
