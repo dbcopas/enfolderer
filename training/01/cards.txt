@@ -1,0 +1,9 @@
+0,0;Sword of Hearth and Home;TMC;136;no;en
+1,0;Food Chain;TMC;133;no;en
+2,0;Emeritus of Woe;SOS;80;yes;en
+0,1;Mystic Remora;DMR;420;no;en
+1,1;Ugin's Labyrinth;233;no;en
+2,1;Mavinda, Students' Advocate;21;no;en
+0,2;Echocasting Symposium;44;no;en
+1,2;Molten-Core Maestro;125;no;en
+2,2;Mockingbird;61;no;en
