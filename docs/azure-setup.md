@@ -2064,6 +2064,53 @@ $prefix` reports which.
 > the list when the YAML has a `tools` key, and warns when a tool it could not resolve is about to
 > be removed.
 
+### If a photo of a binder page finds almost nothing
+
+```text
+Job 9c1d... completed: 2 card(s) detected, 2 identified.
+```
+
+Nine cards in a nine-pocket binder sheet, and two came back. This is not the same failure as cards
+touching on a table, and the advice for that case does not fix it.
+
+A photo of a page breaks the assumption the loose-card detector is built on. That detector floods
+the background inward from the edge of the frame and calls whatever the flood cannot reach a card.
+On a page there is no background between the cards: the pockets abut, so the whole sheet is one
+object, and the little that does show between two cards is the same dark plastic that surrounds the
+page. The polypropylene also mirrors the room, so a card's own border is often the weakest edge
+near it. Measured on real photographs, that pipeline found three cards out of twenty-seven.
+
+So `detect_cards` now tries a second reading first: it assumes the photo may be a page of nine
+pockets and fits that rigid lattice to it, rather than looking for cards one at a time. A page is
+only three unknowns — where the lattice starts across and down, and how big a pocket is — because
+the pockets are evenly spaced and a pocket has a card's proportions. Counting the pockets in
+advance is what makes this stable; left free to choose how many rows and columns to use, the fit
+always prefers one giant cell covering the page, for the 1/sqrt(2) reason in the next section.
+
+Three things follow from how the fit is checked, and each is something you can act on:
+
+- **Get the whole page in the frame.** The lattice has to fit inside the photo, and the grid it
+  finds must cover at least 40% of the frame before it is believed. A page with one column running
+  off the edge fits nothing, and the photo falls back to the loose-card path, which on a page finds
+  nothing either. This is the single most common cause of a page scanning badly.
+- **Empty pockets are dropped, not guessed at.** Each pocket is judged on how much detail it holds
+  inside its own borders. An empty pocket measures three to five times flatter than one holding a
+  card, so a half-full page returns only the cards that are there.
+- **A page that is not nine pockets needs telling.** `detect_cards` takes `pageRows` and
+  `pageColumns`, both 3 by default. Pass 4 and 3 for a twelve-pocket sheet. Pass 0 for either to
+  turn the page reading off altogether and use the loose-card path, which is what happens anyway
+  when no lattice fits.
+
+To check a change against real photographs rather than your memory of them, the repository keeps a
+few in `training/`, each with a `cards.txt` listing what is in which pocket:
+
+```powershell
+dotnet run --project tools/Enfolderer.Ai.Imaging.TrainingCheck
+```
+
+It prints the pockets it expected and the pockets it found for each photo, and exits non-zero when
+they disagree, so it can be run before building new images.
+
 ### If the crops are pieces of cards rather than whole cards
 
 ```text

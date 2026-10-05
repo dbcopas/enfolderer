@@ -57,6 +57,18 @@ public sealed record PageGridOptions
 
     /// <summary>Least number of filled pockets before the fit is reported at all.</summary>
     public int MinFilledCells { get; init; } = 2;
+
+    /// <summary>
+    /// How much edge the weakest line of the grid must carry, as a z-score of the photo's own
+    /// edge profile.
+    /// <para>
+    /// Every line is judged, not the average of them, because the average is exactly what a wrong
+    /// grid exploits: a grid laid across a single row of cards has four strong verticals and two
+    /// horizontals running through the middle of the artwork, and that averages well. A page has
+    /// no weak lines, because every one of them is a pocket seam.
+    /// </para>
+    /// </summary>
+    public double MinLineSupport { get; init; } = 0.5;
 }
 
 /// <summary>
@@ -120,11 +132,6 @@ public static class PageGridDetector
 
         var (score, pitchX, pitchY, originX, originY) = fit.Value;
 
-        // A grid can be laid over any part of any photo. Covering the frame is what tells us the
-        // thing it landed on was the page.
-        if ((double)opts.Columns * pitchX * opts.Rows * pitchY < opts.MinCoverage * width * height)
-            return null;
-
         var detail = CellDetail(luminance, width, height, opts, pitchX, pitchY, originX, originY);
         var typical = Median(detail);
         if (typical <= 0) return null;
@@ -149,7 +156,7 @@ public static class PageGridDetector
                     new ImagePoint(x0, y1),
                 ]);
 
-                cards.Add(new DetectedCard(quad, Math.Round(Math.Clamp(score / 6d, 0d, 1d), 3)));
+                cards.Add(new DetectedCard(quad, Math.Round(Math.Clamp(score / 3d, 0d, 1d), 3)));
             }
         }
 
@@ -232,7 +239,7 @@ public static class PageGridDetector
         return result;
     }
 
-    /// <summary>Best mean line support, and where it falls, for a given count and pitch.</summary>
+    /// <summary>Best worst-line support, and where it falls, for a given count and pitch.</summary>
     private static (double Score, int Origin)? BestOffset(double[] profile, int count, int pitch)
     {
         var span = count * pitch;
@@ -241,11 +248,10 @@ public static class PageGridDetector
         (double Score, int Origin)? best = null;
         for (var origin = 0; origin + span < profile.Length; origin++)
         {
-            var total = 0d;
-            for (var i = 0; i <= count; i++) total += profile[origin + i * pitch];
+            var weakest = double.PositiveInfinity;
+            for (var i = 0; i <= count; i++) weakest = Math.Min(weakest, profile[origin + i * pitch]);
 
-            var score = total / (count + 1);
-            if (best is null || score > best.Value.Score) best = (score, origin);
+            if (best is null || weakest > best.Value.Score) best = (weakest, origin);
         }
         return best;
     }
@@ -280,6 +286,7 @@ public static class PageGridDetector
         }
 
         (double Score, int PitchX, int PitchY, int OriginX, int OriginY)? best = null;
+        var smallest = opts.MinCoverage * width * height;
         foreach (var (pitchX, acrossFit) in acrossFits)
         {
             // A pocket is a card plus a little margin, so its shape is the card's shape. Tying the
@@ -293,7 +300,15 @@ public static class PageGridDetector
             {
                 if (!downFits.TryGetValue(pitchY, out var downFit)) continue;
 
-                var score = (acrossFit.Score + downFit.Score) / 2;
+                // A grid can be laid over any part of any photo and scored well, and a small one
+                // that lands on a single card divides it into its art box and its text box. Only
+                // a grid big enough to be the page itself is considered at all, rather than
+                // picking the best-scoring grid and rejecting it afterwards, which would throw
+                // away a good fit because a bad one outscored it.
+                if ((double)opts.Columns * pitchX * opts.Rows * pitchY < smallest) continue;
+
+                var score = Math.Min(acrossFit.Score, downFit.Score);
+                if (score < opts.MinLineSupport) continue;
                 if (best is null || score > best.Value.Score)
                     best = (score, pitchX, pitchY, acrossFit.Origin, downFit.Origin);
             }
