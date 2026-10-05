@@ -14,10 +14,11 @@ namespace Enfolderer.Ai.Imaging.TrainingCheck;
 /// <c>Enfolderer.Ai.Imaging</c>.
 /// </para>
 /// <para>
-/// Each <c>cards.txt</c> names the pocket each card sits in as a pair of indices. The two indices
-/// are not in a consistent order across the files — <c>training/01</c> lists column first and the
-/// others list row first — so a layout is accepted if it matches either way round. What is checked
-/// is the shape of the layout, not which corner the counting starts from.
+/// Each <c>cards.txt</c> names the pocket each card sits in as <c>row,column</c>, counting from
+/// zero at the top left. The comparison slides both layouts to the origin first, because the
+/// listing counts from the corner of the page and a photograph may not show that corner — a photo
+/// of the middle of a page is still right if the cards are in the right places relative to each
+/// other.
 /// </para>
 /// </summary>
 internal static class Program
@@ -55,7 +56,7 @@ internal static class Program
             totalExpected += expected.Count;
             totalFound += detected.Count;
 
-            var matches = SameLayout(expected, actual) || SameLayout(Transpose(expected), actual);
+            var matches = SameLayout(expected, actual);
             var verdict = matches ? "ok  " : "FAIL";
             if (!matches) failures++;
 
@@ -83,7 +84,7 @@ internal static class Program
     }
 
     /// <summary>Reads the pocket of each card from a <c>cards.txt</c>: <c>a,b;name;set;...</c>.</summary>
-    private static HashSet<(int A, int B)> ReadExpectedCells(string path)
+    private static HashSet<(int Row, int Column)> ReadExpectedCells(string path)
     {
         var cells = new HashSet<(int, int)>();
         foreach (var line in File.ReadAllLines(path))
@@ -101,10 +102,16 @@ internal static class Program
     }
 
     /// <summary>
-    /// Places each located card on a lattice of its own, so that a layout can be compared with the
-    /// listing without knowing where in the photo the page happened to sit.
+    /// Works out which row and column each located card sits in, by grouping the cards that share
+    /// one, rather than by rounding their centres onto a lattice.
+    /// <para>
+    /// A page photographed from one side has its far column higher in the frame than its near one,
+    /// by a good fraction of a card, so a fixed lattice puts cards in the wrong row. What does hold
+    /// is that two cards in the same row are nearer each other, down the photo, than either is to
+    /// the next row.
+    /// </para>
     /// </summary>
-    private static HashSet<(int A, int B)> CellsOf(IReadOnlyList<DetectedCard> cards)
+    private static HashSet<(int Row, int Column)> CellsOf(IReadOnlyList<DetectedCard> cards)
     {
         var cells = new HashSet<(int, int)>();
         if (cards.Count == 0) return cells;
@@ -115,29 +122,45 @@ internal static class Program
             return (X: x + w / 2, Y: y + h / 2, W: w, H: h);
         }).ToList();
 
-        var pitchX = Math.Max(1, centres.Max(c => c.W));
-        var pitchY = Math.Max(1, centres.Max(c => c.H));
-        var leftmost = centres.Min(c => c.X);
-        var topmost = centres.Min(c => c.Y);
+        var rows = Group(centres.Select(c => c.Y).ToList(), centres.Average(c => c.H) * 0.6);
+        var columns = Group(centres.Select(c => c.X).ToList(), centres.Average(c => c.W) * 0.6);
 
         foreach (var centre in centres)
-        {
-            var row = (int)Math.Round((centre.Y - topmost) / pitchY);
-            var column = (int)Math.Round((centre.X - leftmost) / pitchX);
-            cells.Add((row, column));
-        }
+            cells.Add((IndexOf(rows, centre.Y), IndexOf(columns, centre.X)));
 
         return cells;
     }
 
-    private static HashSet<(int A, int B)> Transpose(HashSet<(int A, int B)> cells)
-        => cells.Select(c => (c.B, c.A)).ToHashSet();
+    /// <summary>Splits sorted positions wherever the gap between them exceeds <paramref name="apart"/>.</summary>
+    private static List<double> Group(List<double> positions, double apart)
+    {
+        var sorted = positions.OrderBy(v => v).ToList();
+        var groups = new List<double>();
+        var start = 0;
+        for (var i = 1; i <= sorted.Count; i++)
+        {
+            if (i < sorted.Count && sorted[i] - sorted[i - 1] <= apart) continue;
+            groups.Add(sorted.Skip(start).Take(i - start).Average());
+            start = i;
+        }
+        return groups;
+    }
+
+    private static int IndexOf(List<double> groups, double position)
+    {
+        var best = 0;
+        for (var i = 1; i < groups.Count; i++)
+        {
+            if (Math.Abs(groups[i] - position) < Math.Abs(groups[best] - position)) best = i;
+        }
+        return best;
+    }
 
     /// <summary>
     /// Compares two layouts after sliding each to the origin, because the listing counts from the
     /// corner of the page and the detector counts from the first card it located.
     /// </summary>
-    private static bool SameLayout(HashSet<(int A, int B)> left, HashSet<(int A, int B)> right)
+    private static bool SameLayout(HashSet<(int Row, int Column)> left, HashSet<(int Row, int Column)> right)
     {
         if (left.Count != right.Count) return false;
         if (left.Count == 0) return true;
@@ -145,15 +168,15 @@ internal static class Program
         return Normalise(left).SetEquals(Normalise(right));
     }
 
-    private static HashSet<(int A, int B)> Normalise(HashSet<(int A, int B)> cells)
+    private static HashSet<(int Row, int Column)> Normalise(HashSet<(int Row, int Column)> cells)
     {
-        var a = cells.Min(c => c.A);
-        var b = cells.Min(c => c.B);
-        return cells.Select(c => (c.A - a, c.B - b)).ToHashSet();
+        var row = cells.Min(c => c.Row);
+        var column = cells.Min(c => c.Column);
+        return cells.Select(c => (c.Row - row, c.Column - column)).ToHashSet();
     }
 
-    private static string Describe(HashSet<(int A, int B)> cells)
+    private static string Describe(HashSet<(int Row, int Column)> cells)
         => cells.Count == 0
             ? "(none)"
-            : string.Join(" ", cells.OrderBy(c => c.A).ThenBy(c => c.B).Select(c => $"{c.A},{c.B}"));
+            : string.Join(" ", cells.OrderBy(c => c.Row).ThenBy(c => c.Column).Select(c => $"{c.Row},{c.Column}"));
 }

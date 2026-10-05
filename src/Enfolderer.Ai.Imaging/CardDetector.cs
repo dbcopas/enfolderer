@@ -109,15 +109,17 @@ public sealed record CardDetectorOptions
     public double AspectTolerance { get; init; } = 1.35;
 
     /// <summary>
-    /// The binder page to look for first, or null to go straight to looking for loose cards.
+    /// How to look for cards by their own borders, or null to go straight to separating them from
+    /// the background.
     /// <para>
-    /// Most photographs taken of a collection are of a page of a binder, and a page is a far
-    /// easier thing to find than the cards on it, because its pockets are a rigid lattice of
-    /// identical cells. Trying that first costs little and is tried first for that reason; when
-    /// no page fits the photo, the loose-card pipeline below runs as it always did.
+    /// This runs first because it asks less of the photograph. Flooding the background inward needs
+    /// the cards to be surrounded by something; looking for a card-shaped border needs only the
+    /// card. Cards in a binder, cards overlapping each other and cards on a cluttered desk all
+    /// defeat the first and not the second. When it finds nothing at all, the pipeline below runs
+    /// as it always did.
     /// </para>
     /// </summary>
-    public PageGridOptions? Page { get; init; } = new();
+    public CardArrangementOptions? Arrangement { get; init; } = new();
 }
 
 /// <summary>One card located by <see cref="CardDetector"/>.</summary>
@@ -170,12 +172,13 @@ public static class CardDetector
         var fullHeight = source.Height;
         if (fullWidth < 8 || fullHeight < 8) return [];
 
-        // A page of a binder is a different problem from cards on a table, and an easier one, so
-        // it gets asked first. See PageGridDetector for why none of what follows can solve it.
-        if (opts.Page is not null)
+        // Cards found by their own borders, which is the only thing that works when they are not
+        // surrounded by background: in a binder page, or touching, or overlapping. See
+        // CardArrangementDetector for why none of what follows can solve those.
+        if (opts.Arrangement is not null)
         {
-            var page = PageGridDetector.TryDetect(source, opts.Page);
-            if (page is not null) return page.Cards;
+            var arrangement = CardArrangementDetector.Detect(source, opts.Arrangement);
+            if (arrangement.Count > 0) return arrangement;
         }
 
         // Everything below runs on the downscaled copy; the quads are scaled back at the end. The

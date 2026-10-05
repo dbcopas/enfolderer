@@ -34,8 +34,6 @@ public sealed class ImagingTools
     [Description("Locates every trading card in a stored photograph and returns their corners. Measured by edge detection, not estimated, so it is reliable for cards at an oblique angle or rotated out of alignment.")]
     public async Task<string> DetectCardsAsync(
         [Description("Source blob path as 'container/name', e.g. 'scans/<jobId>/page1.jpg'.")] string sourceBlobPath,
-        [Description("Pockets down a binder page, when the photo is of one. 3 suits a standard nine-pocket page. Pass 0 for loose cards on a table.")] int pageRows = 3,
-        [Description("Pockets across a binder page. 3 suits a standard nine-pocket page. Pass 0 for loose cards on a table.")] int pageColumns = 3,
         CancellationToken ct = default)
     {
         await using var source = await _images.OpenReadAsync(sourceBlobPath, ct);
@@ -46,16 +44,10 @@ public sealed class ImagingTools
         var size = PerspectiveCropper.ReadDimensions(buffered);
         buffered.Position = 0;
 
-        // A page whose grid does not fit the photo falls through to the loose-card pipeline on its
-        // own, so asking for one costs nothing when the guess is wrong.
-        var options = new CardDetectorOptions
-        {
-            Page = pageRows > 0 && pageColumns > 0
-                ? new PageGridOptions { Rows = pageRows, Columns = pageColumns }
-                : null
-        };
-
-        var detected = CardDetector.Detect(buffered, options);
+        // However many cards there are and however they are arranged — a full binder page, three
+        // in a corner of one, or a handful on a table — is worked out from the photograph, so
+        // there is nothing for the caller to say about it.
+        var detected = CardDetector.Detect(buffered);
 
         return JsonSerializer.Serialize(new
         {
