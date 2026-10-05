@@ -107,6 +107,17 @@ public sealed record CardDetectorOptions
     /// square is too distorted to identify anyway.
     /// </summary>
     public double AspectTolerance { get; init; } = 1.35;
+
+    /// <summary>
+    /// The binder page to look for first, or null to go straight to looking for loose cards.
+    /// <para>
+    /// Most photographs taken of a collection are of a page of a binder, and a page is a far
+    /// easier thing to find than the cards on it, because its pockets are a rigid lattice of
+    /// identical cells. Trying that first costs little and is tried first for that reason; when
+    /// no page fits the photo, the loose-card pipeline below runs as it always did.
+    /// </para>
+    /// </summary>
+    public PageGridOptions? Page { get; init; } = new();
 }
 
 /// <summary>One card located by <see cref="CardDetector"/>.</summary>
@@ -158,6 +169,14 @@ public static class CardDetector
         var fullWidth = source.Width;
         var fullHeight = source.Height;
         if (fullWidth < 8 || fullHeight < 8) return [];
+
+        // A page of a binder is a different problem from cards on a table, and an easier one, so
+        // it gets asked first. See PageGridDetector for why none of what follows can solve it.
+        if (opts.Page is not null)
+        {
+            var page = PageGridDetector.TryDetect(source, opts.Page);
+            if (page is not null) return page.Cards;
+        }
 
         // Everything below runs on the downscaled copy; the quads are scaled back at the end. The
         // detail that matters here is a card's outline, which survives downscaling, and working
