@@ -2263,7 +2263,7 @@ Then re-run the scan and read the worker log for the detected count:
 ```powershell
 az containerapp logs show `
   --name enf-demo-worker `
-  --resource-group enf-demo-cardid `
+  --resource-group enf-demo-platform `
   --tail 200 --follow false | Select-String "card\(s\) detected"
 ```
 
@@ -2279,23 +2279,47 @@ indistinguishable from a good one once it is in a lookup, because a set has a ca
 number: ask Scryfall for `mh3/436` when the card was `mh3/438` and you are handed a real printing
 of a different card. The lookup that was supposed to check the reading confirms it instead.
 
-What catches it is the name, which is the most legible thing on the card. The Magic catalogue
-server has a `resolve_printing` tool that takes the name, the set code, the number and the language
-together: it looks the number up, compares the name that comes back with the name that was read,
-and when they disagree it finds the printing by name and returns **its** collector number. The
-reply says which happened:
+What catches it is the name, which is the most legible thing on the card. So the Magic catalogue
+server does not build the answer from the number at all. Its `resolve_printing` tool takes the
+name, the set code and the language as the question, and the number only as a hint: it finds every
+printing of that name in that set, and the number is consulted solely to choose between them when
+there is more than one. The reply says how it was settled:
 
-| `resolution` | What it means |
-| --- | --- |
-| `confirmed` | The number named the card whose name was read. |
-| `corrected` | It did not. The name won, and `collectorNumber` is the catalogue's, not the one read. `readCollectorNumber` is what the agent read. |
-| `assumed` | The number was looked up with no name to check it against. |
-| `unresolved` | Neither the number nor the name found a printing. |
+| `resolution` | What it means | What to doubt |
+| --- | --- | --- |
+| `confirmed` | One printing of that name in that set, and the number read matches it. | Nothing. |
+| `named` | One printing of that name, and no number was read. Just as good. | Nothing. |
+| `corrected` | The number read named a different card. `collectorNumber` is the catalogue's; `readCollectorNumber` is what the agent read. | Nothing — this is the mechanism working. Expect it often. |
+| `assumed` | The name found no printing, so only the number was left. | Everything. The name was misread, so nothing checked the number. |
+| `ambiguous` | The set prints that name more than once and nothing separates them. No printing is returned; `candidates` lists them. | Not a failure — a question. Pick by hand. |
+| `unresolved` | Neither the name nor the number found a printing. | The set code, usually. |
+
+`ambiguous` is the one to understand, because it is a deliberate refusal rather than a miss. A set
+can carry the same name several times — basic lands, Secret Lairs, borderless and showcase
+variants — and when the number was unreadable there is nothing left to tell them apart. Guessing
+between two real printings produces an answer indistinguishable from a right one, so the tool
+declines and hands back the list instead.
+
+Every identified card is now logged with how it was settled, which is what makes this diagnosable
+at all:
+
+```text
+mh3 438 Flare of Denial resolved as corrected (read 436 off the card)
+neo 268 Boseiju, Who Endures resolved as named
+sld 1501 Lightning Bolt resolved as confirmed
+```
+
+A card logged as **saying nothing about how it was settled** is the important case: it means the
+agent never called `resolve_printing`, so no catalogue was consulted and the numbers are whatever
+the model read off the crop. That is a provisioning problem, not a reading one — see below.
 
 Two things are needed for this to be in play, and a demo environment built before it will have
-neither. First, the catalogue server has to be the current image:
+neither. First, the catalogue server and the worker both have to be the current image — the worker
+as much as the catalogue, because the worker image carries the per-run prompt that tells the agent
+which tool to call:
 
 ```powershell
+git pull
 ./scripts/deploy-images.ps1
 ```
 
@@ -2323,14 +2347,28 @@ hand-written hostname costs.
 To watch it work, turn the agent conversation up to `Debug` and look for the tool call:
 
 ```powershell
-az containerapp update -g "$prefix-cardid" -n "$prefix-worker" `
+az containerapp update -g "$prefix-platform" -n "$prefix-worker" `
   --set-env-vars Logging__LogLevel__Enfolderer.Ai.Worker.Agents=Debug
+
+az containerapp logs show -g "$prefix-platform" -n "$prefix-worker" --follow --tail 40
 ```
+
+That log level is set as an environment variable the next deployment overwrites, so it lasts until
+the next `./scripts/deploy-images.ps1` and no longer. That is deliberate: it is a debugging switch,
+not a setting.
 
 A card photographed in Japanese or German is the case to try it on. Those printings carry no
 English anywhere, so the name has to be matched as printed; the agent is asked for the name in the
 language it is printed in and the language code beside it, and the catalogue searches printed names
-when it has one.
+when it has one. Scryfall's search only looks at English names unless it is asked not to, so a
+language filter is always sent with `include_multilingual=true` — without it, a Japanese name read
+perfectly matches nothing at all, which is its own silent failure.
+
+What comes back is still the **English** name. Scryfall's `name` is the English one even on a
+Japanese card object, and `printed_name` is the localised one; the agent is told to answer with the
+first and never the second. The language is not thrown away — it travels in its own field and ends
+up in the CSV's language column, so `neo;268;;ja;Boseiju, Who Endures` is a Japanese card recorded
+under the name you can search for.
 
 ### If a job completes with nothing identified
 
@@ -2395,7 +2433,7 @@ Each file should be one card, upright and filling the frame. Three failures look
 To see what the agent actually said, the whole reply is logged at `Debug`:
 
 ```powershell
-az containerapp update -g "$prefix-cardgeo" -n "$prefix-worker" `
+az containerapp update -g "$prefix-platform" -n "$prefix-worker" `
   --set-env-vars Logging__LogLevel__Enfolderer.Ai.Worker.Agents=Debug
 ```
 
