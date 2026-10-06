@@ -12,6 +12,10 @@ container_app: mcp-cardcatalog-mtg
 project_source: src/Enfolderer.Ai.Mcp.CardCatalog.Mtg
 upstream: Scryfall
 tools:
+  - name: resolve_printing
+    description: >
+      Settles a printing from the name, set code and collector number read off a card, and replaces
+      the collector number when it was misread. The name is what decides it.
   - name: lookup_by_set_and_number
     description: Exact printing lookup by set code and collector number.
   - name: lookup_by_name
