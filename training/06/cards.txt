@@ -1,0 +1,8 @@
+0,0;Snow-Covered Island;MB2;117;no;en
+0,1;Snow-Covered Island;MB2;117;no;en
+0,2;Snow-Covered Swamp;MB2;118;no;en
+0,3;Mystic Sanctuary;TSR;408;no;jp
+1,0;Thundering Falls;MKM;269;no;jp
+1,1;Hedge Maze;MKM;262;no;jp
+1,2;Undercity Sewers;MKM;270;no;jp
+1,3;Undercity Sewers;MKM;270;no;jp
