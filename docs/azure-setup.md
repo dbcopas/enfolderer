@@ -2044,18 +2044,61 @@ needs no change:
 The tool list is replaced wholesale, so this removes anything the YAML no longer declares. Re-run
 the `Invoke-RestMethod` above to confirm, then scan again.
 
-If the label *is* one the YAML asks for — `catalogue` on an identification agent — the server
-itself is unreachable. Check it answers at all, from your own machine:
+If the label *is* one the YAML asks for — `imaging` on the boundary agent, `catalogue` on an
+identification agent — then either the agent is pointing at the wrong address or the server is
+down. Ask every server whether it is alive. `/healthz` is the one route they leave unauthenticated,
+so reaching it proves the host, the ingress and the container without needing to be on the server's
+allow-list. Read the URLs from the deployment rather than retyping them:
 
 ```powershell
-$mcpUrl = az containerapp show -g "$prefix-cardid" -n "$prefix-mcp-cardcatalog-mtg" `
-  --query properties.configuration.ingress.fqdn -o tsv
-Invoke-RestMethod -Uri "https://$mcpUrl/healthz"
+$mcp = @{}
+foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
+  (az deployment sub show --name enfolderer-scan --query "properties.outputs.$o.value" -o json |
+     ConvertFrom-Json) | ForEach-Object { $mcp[$_.name] = $_.url }
+}
+
+foreach ($entry in $mcp.GetEnumerator()) {
+  $health = ([Uri] $entry.Value).GetLeftPart('Authority') + '/healthz'
+  $code = try { (Invoke-WebRequest $health -SkipHttpErrorCheck -TimeoutSec 20).StatusCode }
+          catch { $_.Exception.Message }
+  '{0,-26} {1} {2}' -f $entry.Key, $code, $health
+}
 ```
 
-A `404` there means the app is still on the placeholder image: run `./scripts/deploy-images.ps1`.
-Anything else is the container failing to start — `./scripts/diagnose-containerapps.ps1 -Prefix
-$prefix` reports which.
+**`200` from every server** means the servers are healthy and the agent is addressing something
+else. The cause is nearly always a hostname that was typed rather than read. Each team has its own
+Container Apps environment, and every environment has its own randomly-suffixed default domain —
+`$prefix-cardgeo-env` and `$prefix-cardid-env` do not share one. A URL assembled from one team's
+domain therefore cannot name a server running in the other team's environment, however plausible
+it looks, and `mcp-imaging` lives in `$prefix-cardgeo` while the catalogue servers live in
+`$prefix-cardid`. Foundry stores whatever URL it is handed and checks none of it, so the mistake
+survives until the first scan.
+
+`provision.ps1` probes every URL passed to `-McpServerUrl` before it creates or updates anything,
+so a wrong hostname now stops the run with the URL in the message. An agent provisioned before that
+check existed keeps its bad URL until it is sent a good one — re-provision with `$mcp` from above
+and it is updated in place:
+
+```powershell
+$geo = az deployment sub show --name enfolderer-scan `
+         --query properties.outputs.geometryProjectEndpoint.value -o tsv
+
+./agents/provision.ps1 -ProjectEndpoint $geo -Path ./agents/cardgeo -McpServerUrl @{
+    'mcp-imaging' = $mcp['mcp-imaging']
+  }
+```
+
+There is nothing to redeploy and nothing to restart afterwards: the URL lives on the agent, so the
+next scan picks it up.
+
+**Anything other than `200`** and the server itself is the problem. A `404` means the app is still
+on the placeholder image: run `./scripts/deploy-images.ps1`. A timeout or a refused connection
+means no healthy replica — `./scripts/diagnose-containerapps.ps1 -Prefix $prefix` reports which,
+and the logs say why:
+
+```powershell
+az containerapp logs show -g "$prefix-cardgeo" -n "$prefix-mcp-imaging" --tail 50
+```
 
 > **Why a stale tool survives a re-provision in an older checkout.** The data plane treats an agent
 > update as a merge, so a key left out of the payload keeps its current value. `provision.ps1` used
@@ -2260,19 +2303,22 @@ Second, the agent has to know the tool exists. A Foundry agent update merges, so
 to be sent again, with the MCP URLs:
 
 ```powershell
-$id  = "https://$prefix-ai.services.ai.azure.com/api/projects/cardid"
-$mcp = @{
-    'mcp-cardcatalog-mtg'     = "https://$prefix-mcp-cardcatalog-mtg.$domain"
-    'mcp-cardcatalog-pokemon' = "https://$prefix-mcp-cardcatalog-pokemon.$domain"
-  }
+$id  = az deployment sub show --name enfolderer-scan `
+         --query properties.outputs.identificationProjectEndpoint.value -o tsv
+
+$mcp = @{}
+foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
+  (az deployment sub show --name enfolderer-scan --query "properties.outputs.$o.value" -o json |
+     ConvertFrom-Json) | ForEach-Object { $mcp[$_.name] = $_.url }
+}
 
 ./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid `
   -Only MtgCardIdAgent -McpServerUrl $mcp
 ```
 
-`$domain` is the Container Apps environment's default domain; if you no longer have it to hand,
-`az containerapp show -g "$prefix-cardid" -n "$prefix-mcp-cardcatalog-mtg" --query properties.configuration.ingress.fqdn -o tsv`
-prints the whole hostname.
+Take the URLs from the deployment rather than typing them: see
+[If a run fails with tool_server_error](#if-a-run-fails-with-tool_server_error) for what a
+hand-written hostname costs.
 
 To watch it work, turn the agent conversation up to `Debug` and look for the tool call:
 
