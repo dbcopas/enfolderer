@@ -106,6 +106,24 @@ public sealed record IdentifiedCard
     /// <summary>Printing finish, e.g. "nonfoil", "foil", "etched".</summary>
     [JsonPropertyName("finish")] public string? Finish { get; init; }
 
+    /// <summary>
+    /// How the catalogue settled this printing: <c>confirmed</c>, <c>corrected</c>, <c>named</c>,
+    /// <c>assumed</c>, <c>ambiguous</c> or <c>unresolved</c>.
+    /// <para>
+    /// Null means the agent did not say, which is itself the useful signal: it is what a run looks
+    /// like when the resolution tool was never called and the model answered from the crop alone.
+    /// That failure is otherwise invisible, because a card identified badly looks exactly like a
+    /// card identified well until someone reads the numbers.
+    /// </para>
+    /// </summary>
+    [JsonPropertyName("resolution")] public string? Resolution { get; init; }
+
+    /// <summary>
+    /// The collector number as the agent read it off the card, when the catalogue replaced it.
+    /// Kept beside the corrected number so a correction can be seen rather than inferred.
+    /// </summary>
+    [JsonPropertyName("readCollectorNumber")] public string? ReadCollectorNumber { get; init; }
+
     /// <summary>Confidence in the identification, 0..1.</summary>
     [JsonPropertyName("confidence")] public double Confidence { get; init; }
 

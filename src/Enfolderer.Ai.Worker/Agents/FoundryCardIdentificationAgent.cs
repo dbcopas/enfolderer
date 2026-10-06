@@ -5,11 +5,25 @@ using Microsoft.Extensions.Logging;
 namespace Enfolderer.Ai.Worker.Agents;
 
 /// <summary>
-/// Game-specific prompt knowledge for Team B's identification agents. Each agent is deployed
-/// separately in the <c>cardid</c> project and is wired to its own catalogue MCP server, so adding
-/// a game means adding a definition here plus an agent and an MCP server — no pipeline changes.
+/// Identifies one of Team B's identification agents, and says which catalogue tool settles a
+/// printing for that game. Each agent is deployed separately in the <c>cardid</c> project and is
+/// wired to its own catalogue MCP server, so adding a game means adding a definition here plus an
+/// agent and an MCP server — no pipeline changes.
 /// </summary>
-public sealed record GameAgentProfile(string Game, string AgentName, string CatalogueToolHint, string GameNotes)
+/// <param name="ResolutionTool">
+/// The tool that settles a printing from the name, or null for a game whose catalogue has none
+/// yet. Only Magic has one; the rest still look a number up, with everything that costs.
+/// </param>
+/// <remarks>
+/// What this deliberately no longer carries is the agent's instructions. They live in the agent
+/// YAML under <c>agents/cardid/</c> and nowhere else. Holding a second copy here is what caused
+/// the collector numbers to stay wrong after the YAML was corrected: the YAML is the system
+/// message, this was the user message, and the user message is what the model followed. A prompt
+/// in two places is a prompt that will disagree with itself, and the copy in the image is the one
+/// that cannot be fixed without a rebuild.
+/// </remarks>
+public sealed record GameAgentProfile(
+    string Game, string AgentName, string CatalogueToolHint, string GameNotes, string? ResolutionTool = null)
 {
     public static readonly GameAgentProfile Mtg = new(
         CardGames.Magic,
@@ -25,7 +39,8 @@ public sealed record GameAgentProfile(string Game, string AgentName, string Cata
         - Collector numbers may carry a suffix such as "a", "b", "s", "★" or "z".
         - Foil printings show a holographic stamp near the bottom centre on modern frames.
         - Prefer the printed set code and collector number over the artwork: reprints share art.
-        """);
+        """,
+        ResolutionTool: "resolve_printing");
 
     public static readonly GameAgentProfile Pokemon = new(
         CardGames.Pokemon,
@@ -126,24 +141,46 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
         }
     }
 
-    internal static string BuildPrompt(GameAgentProfile profile) => $$"""
-        Identify the single collectible card in this image.
+    /// <summary>
+    /// The message sent with the crop on every run.
+    /// <para>
+    /// It is deliberately thin. How to read a card, which tool to reach for and what to answer are
+    /// the agent's standing instructions, and those live in <c>agents/cardid/*.yaml</c>, which can
+    /// be edited and re-provisioned without rebuilding this image. A second copy of them here
+    /// would be sent as the user message, and the user message is what a model follows when the
+    /// two disagree — so the copy that is hardest to change would win.
+    /// </para>
+    /// <para>
+    /// What remains is the shape of the answer, which the pipeline — not the agent — depends on,
+    /// and a reminder of which tool settles the printing, because that is the step a model skips.
+    /// </para>
+    /// </summary>
+    internal static string BuildPrompt(GameAgentProfile profile)
+    {
+        var settle = profile.ResolutionTool is null
+            ? $"Confirm the printing with your catalogue tools ({profile.CatalogueToolHint}) before answering."
+            : $"""
+               Settle the printing by calling {profile.ResolutionTool} ({profile.CatalogueToolHint}) with the
+               name and set code you read, and the collector number only if you could read it. Answer with the
+               set, collector number and name it gives back, never with the number you read, and copy its
+               "resolution" and "readCollectorNumber" into your reply.
+               """;
 
-        {{profile.GameNotes}}
+        return $$"""
+            Identify the single collectible card in this image.
 
-        Read the printed set code, collector number and name from the card, then confirm the
-        printing with your catalogue tools ({{profile.CatalogueToolHint}}): try an exact
-        set + collector number lookup first, then name + set, then a fuzzy name search.
+            {{settle}}
 
-        Return ONLY a JSON object:
-        {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched","confidence":0.0}
+            Return ONLY a JSON object, with no prose and no markdown fences:
+            {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
+             "confidence":0.0,"resolution":"","readCollectorNumber":""}
 
-        Rules:
-        - Use the catalogue's canonical set code, collector number and name, not your own reading,
-          whenever a lookup succeeds.
-        - If you cannot identify the card, return {"error":"why"} instead.
-        - Emit no prose and no markdown fences.
-        """;
+            "name" is the catalogue's English name, whatever language the card is printed in, and
+            "language" is the language the card itself is printed in.
+
+            If you cannot identify the card, return {"error":"why"} instead.
+            """;
+    }
 
     /// <summary>Parses an identification reply. Internal so the contract can be self-tested.</summary>
     internal static IdentifiedCard ParseIdentification(string reply, CardCrop crop, string game, string agentId)
@@ -183,6 +220,8 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             Name = Read("name"),
             Language = Read("language") ?? "en",
             Finish = Read("finish") ?? "nonfoil",
+            Resolution = Read("resolution"),
+            ReadCollectorNumber = Read("readCollectorNumber"),
             Confidence = confidence,
             Agent = agentId
         };

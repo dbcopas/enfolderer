@@ -14,6 +14,8 @@ instructions: |
   Identify the single trading card in this image.
 
   This is a Magic: The Gathering card.
+  - The name is the largest text on the card, across the top. It is the most legible thing on a
+    crop and it is what the identification is built from.
   - The collector number and set code sit in the bottom-left corner, usually as
     "123/281 R" on the first line and "SET · EN" (set code, language) on the second.
     Older printings have no collector number at all.
@@ -21,27 +23,43 @@ instructions: |
     different code from the set the art is from.
   - Collector numbers may carry a suffix such as "a", "b", "s", "★" or "z".
   - Foil printings show a holographic stamp near the bottom centre on modern frames.
-  - Prefer the printed set code and collector number over the artwork: reprints share art.
+  - Prefer the printed set code and name over the artwork: reprints share art.
   - Read the name in the language it is printed in. A Japanese or German card carries no English
     anywhere on it, so transcribe what is there and pass the language code along with it.
 
-  Read the printed name, set code and collector number from the crop, then call resolve_printing
-  with all three, plus the language when you can tell it. Answer with the set, collector number and
-  name it returns, exactly as it returns them — never with the number you read.
+  Read the printed name and set code from the crop and call resolve_printing with them, plus the
+  language when you can tell it. Read the collector number too and pass it as a hint if you can,
+  but do not strain for it and never withhold the call because you could not read it: the name and
+  set are what the answer is built from, and six-point type in a corner, behind a sleeve, at an
+  angle, is not. Answer with the set, collector number and name the tool returns, exactly as it
+  returns them — never with the number you read.
 
-  The collector number is the least legible thing on a card and the name is the most legible, so
-  when the two disagree the number is what was misread. The catalogue settles that for you: a
-  resolution of "corrected" means your number named a different card and the name won. Do not argue
-  with it, and do not treat a "corrected" result as a reason to lower your confidence in the name.
-  A resolution of "unresolved" means neither the number nor the name found a printing: say so in
-  the error field rather than guessing a number.
+  The name field the tool returns is always the English name, even for a Japanese or Russian
+  printing. Answer with it. The tool also returns printedName, the name as it appears on that
+  card: use it only to check you matched the right card, and never put it in your answer. Put the
+  returned printing's language code in the language field.
+
+  Copy the tool's resolution and readCollectorNumber into your answer unchanged. They are how the
+  scan reports what happened, and they mean:
+  - "confirmed"  — the name and the number you read agree. Nothing to do.
+  - "corrected"  — your number named a different card and the name won. This is the expected
+                   outcome for a number you could barely see. Do not argue with it, and do not
+                   lower your confidence in the name because of it.
+  - "named"      — you read no number, so the name alone settled it. Equally good.
+  - "assumed"    — the name found nothing and only your number was left. Treat the answer as the
+                   weakest kind and lower your confidence accordingly.
+  - "ambiguous"  — the set prints that name more than once and nothing you read separates them.
+                   The tool deliberately returns no printing. Report the candidates in the error
+                   field. Do not pick one.
+  - "unresolved" — neither the name nor the number found a printing. Say so in the error field
+                   rather than guessing.
 
   The lookup tools remain for the awkward cases — a card whose name you cannot read at all, or one
   you want to check against another set — but resolve_printing is the one to reach for first.
 
   Return ONLY a JSON object:
   {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
-   "confidence":0.0,"error":null}
+   "confidence":0.0,"resolution":"","readCollectorNumber":null,"error":null}
   Set error to a short explanation and leave the other fields null when the card cannot be read.
 
 tools:

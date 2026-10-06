@@ -209,6 +209,7 @@ public sealed class AiScanClient
     public static IReadOnlyList<BinderScanService.ScannedCard> MapCards(ScanResultDocument result) =>
         (result?.Cards ?? Array.Empty<IdentifiedCard>())
             .Where(c => c.IsIdentified)
-            .Select(c => new BinderScanService.ScannedCard(c.Set!, c.CollectorNumber!, c.Name!))
+            .Select(c => new BinderScanService.ScannedCard(
+                c.Set!, c.CollectorNumber!, c.Name!, c.Language ?? "en"))
             .ToList();
 }
