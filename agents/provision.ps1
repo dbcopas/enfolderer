@@ -264,6 +264,64 @@ function Invoke-Foundry {
     return Invoke-RestMethod -Method $Method -Uri $url -Headers $headers
 }
 
+# Checks that an MCP server URL actually leads to one of our MCP servers.
+#
+# Foundry attaches a tool server by URL and never validates it, so a URL that leads nowhere is
+# accepted here, stored on the agent, and only discovered at run time — as
+# `tool_server_error: MCP Connector error. Http status: 424 ... Error retrieving tool list from MCP
+# server`, which names neither the URL nor what was wrong with it.
+#
+# The mistake worth catching is a hostname assembled by hand. Each team has its own Container Apps
+# environment, and each environment has its own default domain, so a name built from one team's
+# domain cannot address the other team's server however right the rest of it looks. The deployment
+# outputs carry the real URLs; this check is what tells you when something else was used instead.
+#
+# /healthz is deliberately the probe rather than /mcp: it is the one route the servers leave
+# unauthenticated, so reaching it proves the host, the ingress and the container without needing
+# the caller to be on the server's allow-list.
+function Test-McpServerUrl {
+    param(
+        [string] $Server,
+        [string] $Url
+    )
+
+    $uri = [Uri] $Url
+    $health = "$($uri.Scheme)://$($uri.Authority)/healthz"
+
+    try {
+        $response = Invoke-WebRequest -Uri $health -Method 'GET' -TimeoutSec 20 `
+            -SkipHttpErrorCheck -MaximumRedirection 0 -ErrorAction Stop
+    }
+    catch {
+        throw @"
+MCP server '$Server' is not reachable at $Url
+  $($_.Exception.Message)
+
+Nothing answered at $health. Foundry would accept this URL and every run would then fail with
+'tool_server_error ... 424 (Failed Dependency)'.
+
+Take the URLs from the deployment instead of assembling them; each team's Container Apps
+environment has its own default domain, so a hostname is not portable between them:
+
+  `$mcp = @{}
+  foreach (`$o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
+    (az deployment sub show --name enfolderer-scan --query "properties.outputs.`$o.value" -o json |
+       ConvertFrom-Json) | ForEach-Object { `$mcp[`$_.name] = `$_.url }
+  }
+  `$mcp
+"@
+    }
+
+    if ($response.StatusCode -ne 200) {
+        throw @"
+MCP server '$Server' answered $health with HTTP $($response.StatusCode), not 200.
+
+Something is listening, but it is not a healthy MCP server of ours. Check the container app is
+running the image it should be, and that its single revision is the active one.
+"@
+    }
+}
+
 $files = if (Test-Path -Path $Path -PathType Container) {
     Get-ChildItem -Path $Path -Filter '*.yaml' | Where-Object { $_.Name -notlike 'mcp-*' } | Sort-Object Name
 }
@@ -278,6 +336,12 @@ if (-not $files) {
 # The orchestrator references the other agents as connected agents, so it has to go last.
 $files = @($files | Where-Object { $_.Name -notlike '*orchestrator*' }) +
          @($files | Where-Object { $_.Name -like '*orchestrator*' })
+
+# Check every URL before anything is created, so a bad one fails the run rather than being baked
+# into an agent that then fails on every scan.
+foreach ($entry in $McpServerUrl.GetEnumerator()) {
+    Test-McpServerUrl -Server ([string] $entry.Key) -Url ([string] $entry.Value)
+}
 
 $token = if ($PSCmdlet.ShouldProcess($endpoint, 'Acquire Foundry token')) { Get-FoundryToken } else { $null }
 
