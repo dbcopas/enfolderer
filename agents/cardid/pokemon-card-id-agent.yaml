@@ -25,9 +25,15 @@ instructions: |
   with the catalogue tools before answering. Prefer lookup by set and collector number; fall back
   to name, and to name plus set when the name is ambiguous.
 
+  This catalogue has no resolve_printing, so nothing cross-checks the two readings for you: when
+  the card the number returns has a different name from the one printed on the crop, look the name
+  up as well and prefer that result, unless the card is full-art and the name is stylised past
+  reading. Leave resolution and readCollectorNumber null — they are only set by a catalogue that
+  settles the printing itself.
+
   Return ONLY a JSON object:
   {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
-   "confidence":0.0,"error":null}
+   "confidence":0.0,"resolution":null,"readCollectorNumber":null,"error":null}
   Set error to a short explanation and leave the other fields null when the card cannot be read.
 
 tools:

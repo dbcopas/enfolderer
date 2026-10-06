@@ -157,6 +157,35 @@ public sealed class ScanJobProcessor
              + "Contributor on crops; compare the oid above with the worker identity's principal id.";
     }
 
+    /// <summary>
+    /// Records how one card's printing was settled. <c>corrected</c> and <c>ambiguous</c> are
+    /// warnings rather than information: the first means a number was misread, and a photograph
+    /// that misreads one is likely misreading others; the second means two real printings could
+    /// not be told apart, which no amount of re-running will fix on its own.
+    /// </summary>
+    private void LogResolution(int index, string jobId, string agentId, IdentifiedCard card)
+    {
+        if (string.IsNullOrWhiteSpace(card.Resolution))
+        {
+            _log.LogWarning(
+                "Card {Index} of job {JobId} was identified by {Agent} as {Set} {Number} ({Name}) but said "
+                + "nothing about how it was settled, which is what a reply looks like when the catalogue was "
+                + "never asked. The number is the agent's own reading and nothing has checked it.",
+                index, jobId, agentId, card.Set, card.CollectorNumber, card.Name);
+            return;
+        }
+
+        var corrected = string.Equals(card.Resolution, "corrected", StringComparison.OrdinalIgnoreCase);
+        var level = corrected ? LogLevel.Warning : LogLevel.Information;
+
+        _log.Log(level,
+            "Card {Index} of job {JobId}: {Set} {Number} ({Name}, {Language}) resolved as {Resolution}{Read}.",
+            index, jobId, card.Set, card.CollectorNumber, card.Name, card.Language, card.Resolution,
+            corrected && !string.IsNullOrWhiteSpace(card.ReadCollectorNumber)
+                ? $" — the number read off the card was '{card.ReadCollectorNumber}'"
+                : string.Empty);
+    }
+
     private async Task<List<IdentifiedCard>> IdentifyAllAsync(
         ScanJobDocument job,
         IReadOnlyList<DetectedBoundary> boundaries,
@@ -208,6 +237,15 @@ public sealed class ScanJobProcessor
                     _log.LogWarning(
                         "Card {Index} of job {JobId} was not identified by {Agent}: {Error}",
                         index, job.JobId, agent.AgentId, card.Error ?? "(no reason given)");
+                }
+                else
+                {
+                    // How the printing was settled, logged for every card and not only the odd
+                    // ones. A wrong collector number is the failure that looks like success, so
+                    // the only way to tell a scan that resolved its cards from one that read them
+                    // off the crop and never asked is to say so per card. A missing resolution
+                    // means the agent never called the tool at all.
+                    LogResolution(index, job.JobId, agent.AgentId, card);
                 }
 
                 // Geometry always comes from Team A, whatever the identification agent echoed back.

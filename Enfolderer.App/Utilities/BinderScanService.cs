@@ -18,7 +18,12 @@ namespace Enfolderer.App.Utilities;
 /// </summary>
 public static class BinderScanService
 {
-    public record ScannedCard(string Set, string Number, string Name);
+    /// <param name="Language">
+    /// The language the card itself is printed in. <paramref name="Name"/> is always the
+    /// catalogue's English name, so this is the only record of which printing it was: a Japanese
+    /// card and its English reprint share a name, a set and a number.
+    /// </param>
+    public record ScannedCard(string Set, string Number, string Name, string Language = "en");
     public record ScanResult(int ImagesProcessed, int CardsFound, int LookupFailures, string OutputPath);
 
     private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"];
@@ -99,9 +104,27 @@ public static class BinderScanService
             unidentified += result.Cards.Count(c => !c.IsIdentified);
         }
 
-        File.WriteAllLines(outputPath, allCards.Select(c => $"{c.Set};{c.Number};;en;{c.Name}"));
+        File.WriteAllLines(outputPath, allCards.Select(BuildCsvRow));
 
         return new ScanResult(imageFiles.Count, allCards.Count, unidentified, outputPath);
+    }
+
+    /// <summary>
+    /// One CSV row in the shape the importer already understands:
+    /// <c>edition;number;modifier;language;name</c>.
+    /// </summary>
+    internal static string BuildCsvRow(ScannedCard card) =>
+        $"{card.Set};{card.Number};;{Normalise(card.Language)};{card.Name}";
+
+    /// <summary>
+    /// The language column only ever holds a two-letter code; anything else — a blank, or a model
+    /// answering "Japanese" — falls back to English, which is what the column held before it was
+    /// carried through at all.
+    /// </summary>
+    private static string Normalise(string? language)
+    {
+        var code = language?.Trim().ToLowerInvariant();
+        return code is { Length: 2 } && code.All(char.IsAsciiLetterLower) ? code : "en";
     }
 
     /// <summary>
