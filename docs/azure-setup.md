@@ -2089,6 +2089,13 @@ Two things about how it works are worth knowing, because they explain every way 
   the frame. This is what stops a card's own art box — which has four strong sides and a card's
   proportions — from being reported as a card. It also means a photograph with one card much nearer
   the camera than the rest can lose that card.
+- **A page photographed sideways is allowed for.** Cards lying on their side are each two upright
+  cards wide, so their halves are card-shaped too, and there are twice as many of them. The
+  detector catches this by sliding the photograph against itself: at one card's spacing a page
+  lands card on card and looks like itself; at half a card it lands artwork on text box and does
+  not. If a sideways photograph comes back with twice as many cards as it holds, each half the
+  width it should be, that test did not fire — the usual reason is too few cards in the frame for
+  a spacing to be measured at all.
 
 What genuinely helps, in order:
 
@@ -2216,6 +2223,68 @@ az containerapp logs show `
   --resource-group enf-demo-cardid `
   --tail 200 --follow false | Select-String "card\(s\) detected"
 ```
+
+### If the set codes are right but the collector numbers are wrong
+
+This one is worth reading even when it is not happening to you, because it is the failure that
+hides: every number comes back, every number is a real card, and nothing anywhere logs a warning.
+
+A collector number is the least legible thing on a card — six point type in the bottom corner,
+behind a sleeve, at whatever angle the photo was taken. A set code is four characters in the same
+corner and survives being half-read. So the number is what gets misread, and a misread number is
+indistinguishable from a good one once it is in a lookup, because a set has a card at nearly every
+number: ask Scryfall for `mh3/436` when the card was `mh3/438` and you are handed a real printing
+of a different card. The lookup that was supposed to check the reading confirms it instead.
+
+What catches it is the name, which is the most legible thing on the card. The Magic catalogue
+server has a `resolve_printing` tool that takes the name, the set code, the number and the language
+together: it looks the number up, compares the name that comes back with the name that was read,
+and when they disagree it finds the printing by name and returns **its** collector number. The
+reply says which happened:
+
+| `resolution` | What it means |
+| --- | --- |
+| `confirmed` | The number named the card whose name was read. |
+| `corrected` | It did not. The name won, and `collectorNumber` is the catalogue's, not the one read. `readCollectorNumber` is what the agent read. |
+| `assumed` | The number was looked up with no name to check it against. |
+| `unresolved` | Neither the number nor the name found a printing. |
+
+Two things are needed for this to be in play, and a demo environment built before it will have
+neither. First, the catalogue server has to be the current image:
+
+```powershell
+./scripts/deploy-images.ps1
+```
+
+Second, the agent has to know the tool exists. A Foundry agent update merges, so the tool list has
+to be sent again, with the MCP URLs:
+
+```powershell
+$id  = "https://$prefix-ai.services.ai.azure.com/api/projects/cardid"
+$mcp = @{
+    'mcp-cardcatalog-mtg'     = "https://$prefix-mcp-cardcatalog-mtg.$domain"
+    'mcp-cardcatalog-pokemon' = "https://$prefix-mcp-cardcatalog-pokemon.$domain"
+  }
+
+./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid `
+  -Only MtgCardIdAgent -McpServerUrl $mcp
+```
+
+`$domain` is the Container Apps environment's default domain; if you no longer have it to hand,
+`az containerapp show -g "$prefix-cardid" -n "$prefix-mcp-cardcatalog-mtg" --query properties.configuration.ingress.fqdn -o tsv`
+prints the whole hostname.
+
+To watch it work, turn the agent conversation up to `Debug` and look for the tool call:
+
+```powershell
+az containerapp update -g "$prefix-cardid" -n "$prefix-worker" `
+  --set-env-vars Logging__LogLevel__Enfolderer.Ai.Worker.Agents=Debug
+```
+
+A card photographed in Japanese or German is the case to try it on. Those printings carry no
+English anywhere, so the name has to be matched as printed; the agent is asked for the name in the
+language it is printed in and the language code beside it, and the catalogue searches printed names
+when it has one.
 
 ### If a job completes with nothing identified
 

@@ -48,6 +48,18 @@ public sealed record CardArrangementOptions
     public double CompletionRelief { get; init; } = 0.5;
 
     /// <summary>
+    /// How alike the photo must be to itself, a card's spacing apart, before that spacing is
+    /// believed to be the spacing of whole cards rather than of halves.
+    /// </summary>
+    public double MinSelfSimilarity { get; init; } = 0.35;
+
+    /// <summary>
+    /// How much better the double spacing must look than the single one before the cards found are
+    /// taken to be halves of wider cards.
+    /// </summary>
+    public double HalvesMargin { get; init; } = 1.4;
+
+    /// <summary>
     /// How much detail a box must hold relative to the typical box in this photo. This is what
     /// separates an empty pocket from a dim card: both are flat against the photo's mean, but only
     /// the empty one is flat against the cards beside it.
@@ -89,7 +101,11 @@ public sealed record CardArrangementOptions
 /// </summary>
 public static class CardArrangementDetector
 {
-    private const double CardAspect = PerspectiveCropper.StandardCardAspect;
+    /// <summary>A card standing upright: taller than it is wide.</summary>
+    private const double Upright = PerspectiveCropper.StandardCardAspect;
+
+    /// <summary>The same card on its side, which is how a sideways page photographs.</summary>
+    private const double OnItsSide = 1d / PerspectiveCropper.StandardCardAspect;
 
     private sealed record Box(int X, int Y, int Width, int Height, double Edge, double Detail);
 
@@ -111,11 +127,16 @@ public static class CardArrangementDetector
         var frame = new Frame(working, width, height);
         if (frame.MeanGradient < 1e-6) return [];
 
-        var proposals = Propose(frame, opts);
+        var proposals = Propose(frame, opts, Upright);
         if (proposals.Count == 0) return [];
 
-        var cards = KeepOneSize(proposals, opts, (long)width * height);
-        cards = Complete(frame, cards, opts);
+        var cards = KeepOneSize(proposals, opts, (long)width * height, Upright);
+        var aspect = Upright;
+
+        var sideways = WholeCardsFromHalves(frame, cards, opts);
+        if (sideways is not null) (cards, aspect) = (sideways, OnItsSide);
+
+        cards = Complete(frame, cards, opts, aspect);
         cards = DropEmptyPockets(cards, opts);
 
         return cards
@@ -144,16 +165,17 @@ public static class CardArrangementDetector
     }
 
     /// <summary>Every card-shaped box, at every size, whose four sides and interior hold up.</summary>
-    private static List<Box> Propose(Frame frame, CardArrangementOptions opts)
+    private static List<Box> Propose(Frame frame, CardArrangementOptions opts, double aspect, double minEdge = -1)
     {
+        var bar = minEdge < 0 ? opts.MinEdge : minEdge;
         var proposals = new List<Box>();
-        var widest = (int)Math.Min(frame.Width, frame.Height * CardAspect) - 1;
+        var widest = (int)Math.Min(frame.Width, frame.Height * aspect) - 1;
         var narrowest = Math.Max(16, (int)(0.05 * Math.Min(frame.Width, frame.Height)));
         var step = Math.Max(1, frame.Width / 180);
 
         for (var boxWidth = narrowest; boxWidth <= widest; boxWidth += Math.Max(1, boxWidth / 40))
         {
-            var boxHeight = (int)Math.Round(boxWidth / CardAspect);
+            var boxHeight = (int)Math.Round(boxWidth / aspect);
             if (boxHeight >= frame.Height) break;
 
             for (var y = 0; y + boxHeight < frame.Height; y += step)
@@ -161,7 +183,7 @@ public static class CardArrangementDetector
                 for (var x = 0; x + boxWidth < frame.Width; x += step)
                 {
                     var box = Measure(frame, x, y, boxWidth, boxHeight);
-                    if (box.Edge < opts.MinEdge || box.Detail < opts.MinDetail) continue;
+                    if (box.Edge < bar || box.Detail < opts.MinDetail) continue;
                     proposals.Add(box);
                 }
             }
@@ -173,7 +195,7 @@ public static class CardArrangementDetector
     /// <summary>Measures a candidate box: its weakest side, and how busy it is inside.</summary>
     private static Box Measure(Frame frame, int x, int y, int boxWidth, int boxHeight)
     {
-        var band = Math.Max(1, boxWidth / 30);
+        var band = Math.Max(1, Math.Min(boxWidth, boxHeight) / 30);
 
         var left = frame.MeanAcross(x - band, y, x + band + 1, y + boxHeight);
         var right = frame.MeanAcross(x + boxWidth - band, y, x + boxWidth + band + 1, y + boxHeight);
@@ -182,7 +204,7 @@ public static class CardArrangementDetector
 
         var edge = Math.Min(Math.Min(left, right), Math.Min(top, bottom)) / frame.MeanGradient;
 
-        var inset = (int)(boxWidth * 0.18);
+        var inset = (int)(Math.Min(boxWidth, boxHeight) * 0.18);
         var detail = frame.MeanAll(x + inset, y + inset, x + boxWidth - inset, y + boxHeight - inset)
                    / frame.MeanGradient;
 
@@ -199,7 +221,7 @@ public static class CardArrangementDetector
     /// ends up reporting the specks inside one card's artwork as a dozen cards.
     /// </para>
     /// </summary>
-    private static List<Box> KeepOneSize(List<Box> proposals, CardArrangementOptions opts, long frameArea)
+    private static List<Box> KeepOneSize(List<Box> proposals, CardArrangementOptions opts, long frameArea, double aspect)
     {
         List<Box>? winner = null;
         var mostVotes = 0d;
@@ -207,12 +229,60 @@ public static class CardArrangementDetector
         foreach (var candidate in proposals.Select(b => b.Width).Distinct().OrderBy(w => w))
         {
             var sized = Thin(proposals.Where(b => Math.Abs(b.Width - candidate) <= candidate * opts.SizeSlack), opts);
-            var votes = sized.Sum(b => b.Edge) * ((double)candidate * candidate / CardAspect) / frameArea;
+            var votes = sized.Sum(b => b.Edge) * ((double)candidate * candidate / aspect) / frameArea;
 
             if (votes > mostVotes) (mostVotes, winner) = (votes, sized);
         }
 
         return winner ?? [];
+    }
+
+    /// <summary>
+    /// Decides whether the cards just found are in fact the halves of cards lying on their side,
+    /// and if they are, finds the whole cards instead.
+    /// <para>
+    /// A binder page photographed sideways — the page turned a quarter turn, which is how anyone
+    /// holding a phone in landscape photographs one — puts every card on its side. A card on its
+    /// side is two upright cards wide, near enough: 63/88 is within two per cent of half of 88/63,
+    /// so each half of it is card-shaped, has four sides, and is busy inside. Each half is also
+    /// twice as common as the whole, so it wins the size vote outright. Nothing local tells the
+    /// two apart.
+    /// </para>
+    /// <para>
+    /// What tells them apart is the photograph repeating. Cards sit at a regular spacing, so a
+    /// page slid sideways by one card's spacing lands card on card and looks like itself. Slid by
+    /// half a card it lands a card's artwork on its text box, and does not. So the spacing of the
+    /// boxes found is tested against the spacing of twice that: when the double spacing is the one
+    /// the photograph agrees with, the boxes were halves, and the search is run again for cards on
+    /// their side at twice the width. The bar is lower the second time, because the border that
+    /// matters — the card's own, rather than the crisp edge of its text box — is the one that was
+    /// too faint to win the first time.
+    /// </para>
+    /// </summary>
+    private static List<Box>? WholeCardsFromHalves(Frame frame, List<Box> cards, CardArrangementOptions opts)
+    {
+        if (cards.Count < 4) return null;
+
+        var boxWidth = (int)Math.Round(cards.Average(b => (double)b.Width));
+        var pitch = (int)Math.Round(Pitch(cards.Select(b => b.X + b.Width / 2d).ToList(), boxWidth * 0.6));
+        if (pitch < 8 || pitch * 2 >= frame.Width) return null;
+
+        var region = (
+            X0: cards.Min(b => b.X),
+            Y0: cards.Min(b => b.Y),
+            X1: cards.Max(b => b.X + b.Width),
+            Y1: cards.Max(b => b.Y + b.Height));
+
+        var single = frame.SelfSimilarity(region.X0, region.Y0, region.X1, region.Y1, pitch);
+        var doubled = frame.SelfSimilarity(region.X0, region.Y0, region.X1, region.Y1, pitch * 2);
+        if (doubled < opts.MinSelfSimilarity || doubled < single * opts.HalvesMargin) return null;
+
+        var wide = Propose(frame, opts, OnItsSide, opts.MinEdge * opts.CompletionRelief)
+            .Where(b => Math.Abs(b.Width - pitch * 2) <= pitch * 2 * opts.SizeSlack)
+            .ToList();
+
+        var whole = Thin(wide, opts);
+        return whole.Count == 0 ? null : whole;
     }
 
     /// <summary>Keeps the best box of each cluster, so that one card is reported once.</summary>
@@ -232,12 +302,12 @@ public static class CardArrangementDetector
     /// chooses where to look: a box still has to earn its place, at a lower bar than a card found
     /// unaided but a real one, so an empty pocket in the middle of a page is not invented.
     /// </summary>
-    private static List<Box> Complete(Frame frame, List<Box> cards, CardArrangementOptions opts)
+    private static List<Box> Complete(Frame frame, List<Box> cards, CardArrangementOptions opts, double aspect)
     {
         if (cards.Count < 2) return cards;
 
         var boxWidth = (int)Math.Round(cards.Average(b => (double)b.Width));
-        var boxHeight = (int)Math.Round(boxWidth / CardAspect);
+        var boxHeight = (int)Math.Round(boxWidth / aspect);
 
         var centresX = cards.Select(b => b.X + b.Width / 2d).ToList();
         var centresY = cards.Select(b => b.Y + b.Height / 2d).ToList();
@@ -371,6 +441,7 @@ public static class CardArrangementDetector
     /// </summary>
     private sealed class Frame
     {
+        private readonly byte[] _luminance;
         private readonly double[] _across;
         private readonly double[] _down;
         private readonly double[] _all;
@@ -384,7 +455,7 @@ public static class CardArrangementDetector
             Width = width;
             Height = height;
 
-            var luminance = new byte[width * height];
+            var luminance = _luminance = new byte[width * height];
             image.ProcessPixelRows(accessor =>
             {
                 for (var y = 0; y < height; y++)
@@ -418,6 +489,41 @@ public static class CardArrangementDetector
             _all = Integral(all, width, height);
 
             MeanGradient = Sum(_all, width, 0, 0, width, height) / (width * (double)height);
+        }
+
+        /// <summary>
+        /// How alike a region is to itself slid sideways by a given distance, as a correlation
+        /// between -1 and 1. One card's spacing apart, a page of cards looks like itself.
+        /// </summary>
+        public double SelfSimilarity(int x0, int y0, int x1, int y1, int lag)
+        {
+            x0 = Math.Clamp(x0, 0, Width);
+            x1 = Math.Clamp(x1, 0, Width);
+            y0 = Math.Clamp(y0, 0, Height);
+            y1 = Math.Clamp(y1, 0, Height);
+            if (lag <= 0 || x1 - x0 <= lag || y1 <= y0) return 0;
+
+            double sumA = 0, sumB = 0, sumAA = 0, sumBB = 0, sumAB = 0;
+            var count = 0;
+            for (var y = y0; y < y1; y++)
+            {
+                for (var x = x0; x + lag < x1; x++)
+                {
+                    double a = _luminance[y * Width + x];
+                    double b = _luminance[y * Width + x + lag];
+                    sumA += a; sumB += b; sumAA += a * a; sumBB += b * b; sumAB += a * b;
+                    count++;
+                }
+            }
+            if (count < 64) return 0;
+
+            var meanA = sumA / count;
+            var meanB = sumB / count;
+            var varianceA = sumAA / count - meanA * meanA;
+            var varianceB = sumBB / count - meanB * meanB;
+            if (varianceA <= 1e-9 || varianceB <= 1e-9) return 0;
+
+            return (sumAB / count - meanA * meanB) / Math.Sqrt(varianceA * varianceB);
         }
 
         public double MeanAcross(int x0, int y0, int x1, int y1) => Mean(_across, x0, y0, x1, y1);

@@ -13,6 +13,11 @@ Each subdirectory holds one photograph and the ground truth for it:
 right, `2,0` is bottom left and `2,2` is bottom right of a nine-pocket page. Pockets with no card in
 them are simply absent from the file.
 
+Rows and columns are counted **as the cards read**, not as the photograph is stored. A page
+photographed sideways — `05` is one — has its cards lying on their side in the frame, so turn the
+photograph upright in your head before you write the file down. The check allows for that quarter
+turn when the cards it locates are wider than they are tall.
+
 The check compares layouts after sliding both to the origin, so a photograph that does not show the
 corner of the page is still right when the cards are in the right places relative to each other.
 `01/cards.txt` was originally written column-first and has been transposed to match the others.
@@ -22,8 +27,15 @@ code that found two cards out of nine in `01`.
 
 The photographs are deliberately awkward, and each one is here for a reason: `01` is a full page,
 `02` is a page cropped so that one column and the bottom row are out of frame, `03` is a page with
-two opposite corners empty, and `04` is shot at enough of an angle that the far column is a quarter
-narrower than the near one.
+two opposite corners empty, `04` is shot at enough of an angle that the far column is a quarter
+narrower than the near one, `05` is a twelve-pocket page photographed sideways and full of twelve
+near-identical Japanese full-art lands, and `06` is a twelve-pocket page showing eight cards.
+
+`05` is the hardest of them and worth understanding. Because its cards lie on their side, each one
+is two upright cards wide — and each half of it is therefore card-shaped, four-sided and busy
+inside, so the halves outnumber and outvote the whole cards. The detector settles it by sliding the
+photograph sideways against itself: a page slid by one card's spacing lands card on card and looks
+like itself, while slid by half a card it lands artwork on text box and does not.
 
 ## Running the check
 
@@ -32,7 +44,7 @@ dotnet run --project tools/Enfolderer.Ai.Imaging.TrainingCheck
 ```
 
 It prints the expected and the located pockets for each photograph and exits non-zero when any
-photograph disagrees. All four should pass, for 27 cards of 27.
+photograph disagrees. All six should pass, for 47 cards of 47.
 
 Note that a card cut off by the edge of the frame is **not** listed: `02` shows the top of a row of
 Annex cards along its bottom edge and they are deliberately absent from its `cards.txt`, because a

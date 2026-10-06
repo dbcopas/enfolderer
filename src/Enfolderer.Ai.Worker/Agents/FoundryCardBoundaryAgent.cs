@@ -51,9 +51,10 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
           panel, a shadow. Geometry alone cannot tell.
         - Add any card the tool missed, estimating its corners yourself. A card touching the edge of
           the frame, or one with almost no contrast against the surface, is the usual miss.
-        - Fix the rotation. The tool cannot tell which end of a card is its top, because that is
-          printed on the face rather than being part of its shape; you can see it. Rotate the four
-          points so the card's printed top-left comes first.
+        - Fix the rotation. A page photographed sideways puts every card on its side, and the tool
+          reports those cards lying down. It cannot tell which end of a card is its top either,
+          because that is printed on the face rather than being part of its shape; you can see it.
+          Rotate the four points so the card's printed top-left comes first.
         - Set gameHint from the card frame or back.
 
         If the tool fails or returns no cards, estimate every corner yourself and say nothing about

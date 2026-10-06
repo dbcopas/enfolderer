@@ -56,7 +56,18 @@ internal static class Program
             totalExpected += expected.Count;
             totalFound += detected.Count;
 
-            var matches = SameLayout(expected, actual);
+            // A page is often photographed sideways, so that the cards lie on their side in the
+            // frame. The listing is written the way the cards read, so the two differ by a quarter
+            // turn, and which turn it is cannot be told from the shapes alone: only the printing on
+            // the card says which end is its top, and that is the identification agent's business.
+            var sideways = detected.Count > 0 && detected.Average(card =>
+            {
+                var (_, _, w, h) = card.Quad.BoundingBox();
+                return w - h;
+            }) > 0;
+
+            var matches = SameLayout(expected, actual)
+                || (sideways && (SameLayout(expected, Turn(actual)) || SameLayout(expected, Turn(Turn(Turn(actual))))));
             var verdict = matches ? "ok  " : "FAIL";
             if (!matches) failures++;
 
@@ -167,6 +178,10 @@ internal static class Program
 
         return Normalise(left).SetEquals(Normalise(right));
     }
+
+    /// <summary>Turns a layout a quarter turn clockwise.</summary>
+    private static HashSet<(int Row, int Column)> Turn(HashSet<(int Row, int Column)> cells)
+        => cells.Select(c => (c.Column, -c.Row)).ToHashSet();
 
     private static HashSet<(int Row, int Column)> Normalise(HashSet<(int Row, int Column)> cells)
     {
