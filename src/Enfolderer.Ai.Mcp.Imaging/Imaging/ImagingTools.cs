@@ -73,7 +73,7 @@ public sealed class ImagingTools
         [Description("Source blob path as 'container/name', e.g. 'scans/<jobId>/page1.jpg'.")] string sourceBlobPath,
         [Description("Destination blob path as 'container/name', e.g. 'crops/<jobId>/card-000.png'.")] string destinationBlobPath,
         [Description("The four corners as JSON: [{\"x\":0,\"y\":0},...] ordered top-left, top-right, bottom-right, bottom-left.")] string quadPointsJson,
-        [Description("Height in pixels of the produced crop.")] int outputHeight = PerspectiveCropper.DefaultOutputHeight,
+        [Description("Height in pixels of the produced crop, between 16 and 4096.")] int outputHeight = PerspectiveCropper.DefaultOutputHeight,
         CancellationToken ct = default)
     {
         var quad = ParseQuad(quadPointsJson);

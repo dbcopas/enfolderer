@@ -19,6 +19,17 @@ public static class PerspectiveCropper
     /// <summary>Default height, in pixels, of a produced crop.</summary>
     public const int DefaultOutputHeight = 1024;
 
+    /// <summary>
+    /// Largest crop height this will produce. A card is 88mm tall, so 4096 pixels is already far
+    /// past any detail a scan can recover from a photograph of a page.
+    /// <para>
+    /// The bound exists because the height reaches here from an MCP tool argument, which is to say
+    /// from a language model. The output buffer is height squared in the worst case, so an
+    /// absent-minded extra digit is not a bad crop but an out-of-memory in a shared server.
+    /// </para>
+    /// </summary>
+    public const int MaxOutputHeight = 4096;
+
     public static ImageDimensions ReadDimensions(Stream image)
     {
         var info = Image.Identify(image);
@@ -35,8 +46,10 @@ public static class PerspectiveCropper
         ArgumentNullException.ThrowIfNull(quad);
         if (!quad.IsValid)
             throw new ArgumentException($"A quad must have exactly {CardQuad.RequiredPointCount} points.", nameof(quad));
-        if (outputHeight < 16)
-            throw new ArgumentOutOfRangeException(nameof(outputHeight), "Output height must be at least 16 pixels.");
+        if (outputHeight < 16 || outputHeight > MaxOutputHeight)
+            throw new ArgumentOutOfRangeException(
+                nameof(outputHeight),
+                $"Output height must be between 16 and {MaxOutputHeight} pixels.");
 
         using var image = Image.Load<Rgba32>(source);
 
