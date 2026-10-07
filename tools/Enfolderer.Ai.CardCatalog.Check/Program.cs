@@ -30,6 +30,7 @@ internal static class Program
         NumberReadingChecks();
         ResolutionChecks().GetAwaiter().GetResult();
         PromptChecks();
+        ThrottleChecks();
 
         Console.WriteLine(_failures == 0
             ? "\nAll checks passed."
@@ -256,6 +257,40 @@ internal static class Program
         var pokemon = FoundryCardIdentificationAgent.BuildPrompt(GameAgentProfile.Pokemon);
         Check(!pokemon.Contains("resolve_printing"), "a game without the tool is not told to call it");
         Check(pokemon.Contains("mcp-cardcatalog-pokemon"), "but is still pointed at its own catalogue");
+    }
+
+    /// <summary>
+    /// A model deployment's tokens-per-minute quota is spent per card, so it runs out part-way
+    /// through a page: the first crops identify and the rest are refused. Retrying is only right
+    /// for that one failure — retrying a card the model genuinely could not read would spend a
+    /// minute to fail it again — so which failures count as throttling is worth pinning down.
+    /// </summary>
+    private static void ThrottleChecks()
+    {
+        Section("A model deployment that has run out of tokens");
+
+        Check(FoundryAgentClient.IsThrottled("rate_limit_exceeded", "exceeded token rate limit"),
+            "the service's own code is enough to retry on");
+        Check(FoundryAgentClient.IsThrottled("RATE_LIMIT_EXCEEDED", "whatever"),
+            "and is matched whatever its case");
+        Check(FoundryAgentClient.IsThrottled(null, "Requests to gpt-4o have exceeded token rate limit."),
+            "a run that gave no code is read from its message instead");
+
+        Check(!FoundryAgentClient.IsThrottled("server_error", "something went wrong"),
+            "a server error is not retried as throttling");
+        Check(!FoundryAgentClient.IsThrottled("invalid_request", "rate limit"),
+            "and a message mentioning rate limits cannot override an explicit other code");
+        Check(!FoundryAgentClient.IsThrottled(null, null), "a failure with nothing in it is not retried");
+
+        Check(FoundryAgentClient.RetryAfter("Please retry after 37 seconds.") == TimeSpan.FromSeconds(37),
+            "the wait the service asked for is preferred to a guess");
+        Check(FoundryAgentClient.RetryAfter("retry after 500 ms") == TimeSpan.FromMilliseconds(500),
+            "milliseconds are read as milliseconds, not as half an hour");
+        Check(FoundryAgentClient.RetryAfter("exceeded token rate limit.") is null,
+            "a message with no figure in it falls back to the backoff");
+        // One card must not be able to stall the whole page behind it.
+        Check(FoundryAgentClient.RetryAfter("Please retry after 3600 seconds") == TimeSpan.FromMinutes(2),
+            "an implausible wait is capped");
     }
 
     private static (ScryfallCatalogue Catalogue, StubScryfall Stub) Build(Func<string, string?> reply)

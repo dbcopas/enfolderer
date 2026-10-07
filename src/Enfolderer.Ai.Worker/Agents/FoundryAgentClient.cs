@@ -27,6 +27,8 @@ public sealed class FoundryAgentClient
     private readonly string _apiVersion;
     private readonly TimeSpan _runTimeout;
     private readonly TimeSpan _pollInterval;
+    private readonly int _throttleRetries;
+    private readonly TimeSpan _throttleBackoff;
 
     public FoundryAgentClient(
         HttpClient http,
@@ -35,7 +37,9 @@ public sealed class FoundryAgentClient
         string projectEndpoint,
         string apiVersion,
         TimeSpan runTimeout,
-        TimeSpan pollInterval)
+        TimeSpan pollInterval,
+        int throttleRetries = 3,
+        TimeSpan throttleBackoff = default)
     {
         _http = http;
         _credential = credential;
@@ -44,6 +48,8 @@ public sealed class FoundryAgentClient
         _apiVersion = apiVersion;
         _runTimeout = runTimeout > TimeSpan.Zero ? runTimeout : TimeSpan.FromMinutes(5);
         _pollInterval = pollInterval > TimeSpan.Zero ? pollInterval : TimeSpan.FromSeconds(2);
+        _throttleRetries = throttleRetries >= 0 ? throttleRetries : 0;
+        _throttleBackoff = throttleBackoff > TimeSpan.Zero ? throttleBackoff : TimeSpan.FromSeconds(10);
     }
 
     /// <summary>Project endpoint this client talks to; useful in error messages during the demo.</summary>
@@ -88,20 +94,7 @@ public sealed class FoundryAgentClient
                 ct);
             var threadId = RequireString(thread, "id", "thread id");
 
-            using var run = await SendAsync(
-                HttpMethod.Post,
-                $"/threads/{threadId}/runs?api-version={_apiVersion}",
-                new { assistant_id = agentId },
-                ct);
-            var runId = RequireString(run, "id", "run id");
-
-            var (status, lastError) = await WaitForRunAsync(threadId, runId, approvedServerLabel, ct);
-            if (!IsCompleted(status))
-            {
-                // The job's Error field only carries ex.Message, so the reason has to travel with it.
-                var reason = string.IsNullOrEmpty(lastError) ? string.Empty : $": {lastError}";
-                throw new InvalidOperationException($"Agent '{agentId}' run ended with status '{status}'{reason}.");
-            }
+            await RunToCompletionAsync(agentId, threadId, approvedServerLabel, ct);
 
             return await ReadLastAssistantMessageAsync(threadId, ct);
         }
@@ -112,6 +105,123 @@ public sealed class FoundryAgentClient
             if (fileId is not null) await TryDeleteFileAsync(fileId);
         }
     }
+
+    /// <summary>
+    /// Starts a run on an existing thread and polls it to completion, retrying when the model
+    /// deployment throttles us.
+    /// </summary>
+    /// <remarks>
+    /// A token-per-minute limit is not a property of the request, so a run that failed on it would
+    /// very likely have succeeded a few seconds later. It also arrives part-way through a page
+    /// rather than at the start — the first few cards spend the minute's budget and the rest are
+    /// refused — so without a retry a scan loses its last cards and nothing in the result says the
+    /// cause was quota rather than the photograph.
+    /// <para>
+    /// The retry reuses the thread and the already-uploaded image: only the run is new, so waiting
+    /// costs no extra tokens and the model sees exactly the same request. The wait is deliberately
+    /// long because the limit is measured over a rolling minute; a brisk retry would simply be
+    /// refused again and spend the remaining attempts without the budget ever having refilled.
+    /// </para>
+    /// </remarks>
+    private async Task RunToCompletionAsync(
+        string agentId, string threadId, string? approvedServerLabel, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            string status;
+            string? lastError;
+            string? errorCode;
+
+            try
+            {
+                using var run = await SendAsync(
+                    HttpMethod.Post,
+                    $"/threads/{threadId}/runs?api-version={_apiVersion}",
+                    new { assistant_id = agentId },
+                    ct);
+                var runId = RequireString(run, "id", "run id");
+
+                (status, lastError, errorCode) = await WaitForRunAsync(threadId, runId, approvedServerLabel, ct);
+                if (IsCompleted(status)) return;
+            }
+            catch (FoundryAccessException ex) when (ex.StatusCode == 429 && attempt <= _throttleRetries)
+            {
+                // The same limit, refused one step earlier: the service declined to start the run
+                // at all rather than starting it and failing it.
+                await DelayAfterThrottleAsync(agentId, ex.Message, attempt, ct);
+                continue;
+            }
+
+            if (IsThrottled(errorCode, lastError) && attempt <= _throttleRetries)
+            {
+                await DelayAfterThrottleAsync(agentId, lastError, attempt, ct);
+                continue;
+            }
+
+            // The job's Error field only carries ex.Message, so the reason has to travel with it.
+            var reason = string.IsNullOrEmpty(lastError) ? string.Empty : $": {lastError}";
+            var exhausted = IsThrottled(errorCode, lastError)
+                ? $" The model deployment is rate limited and {_throttleRetries} retries did not clear it; "
+                  + "the deployment's tokens-per-minute quota is shared by every project in the account."
+                : string.Empty;
+            throw new InvalidOperationException(
+                $"Agent '{agentId}' run ended with status '{status}'{reason}.{exhausted}");
+        }
+    }
+
+    private async Task DelayAfterThrottleAsync(string agentId, string? message, int attempt, CancellationToken ct)
+    {
+        var delay = RetryAfter(message) ?? TimeSpan.FromSeconds(_throttleBackoff.TotalSeconds * Math.Pow(2, attempt - 1));
+        _log.LogWarning(
+            "Agent '{AgentId}' was rate limited by its model deployment (attempt {Attempt} of {Max}); "
+            + "waiting {Delay} before trying again. {Message}",
+            agentId, attempt, _throttleRetries + 1, delay, AgentJson.Summarize(message));
+        await Task.Delay(delay, ct);
+    }
+
+    /// <summary>
+    /// Whether a failed run was refused for quota rather than for anything about the request.
+    /// Internal so the decision can be self-tested: retrying the wrong failure turns one bad card
+    /// into a minute of waiting, and not retrying this one loses the card.
+    /// </summary>
+    internal static bool IsThrottled(string? errorCode, string? message) =>
+        string.Equals(errorCode, "rate_limit_exceeded", StringComparison.OrdinalIgnoreCase)
+        || (errorCode is null
+            && message is not null
+            && message.Contains("rate limit", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Reads the wait the service asked for out of its own message, when it gave one.
+    /// </summary>
+    /// <remarks>
+    /// Azure OpenAI usually appends "Please retry after 37 seconds" to a throttling message, and
+    /// that figure is better than any backoff we could guess because it is the service's own view
+    /// of when the budget refills. It is not always present — the Foundry run's <c>last_error</c>
+    /// sometimes carries only the bare sentence — so it cannot be relied on, only preferred.
+    /// </remarks>
+    internal static TimeSpan? RetryAfter(string? message)
+    {
+        if (string.IsNullOrEmpty(message)) return null;
+        var match = System.Text.RegularExpressions.Regex.Match(
+            message,
+            @"retry\s+after\s+(\d+)\s*(seconds?|s\b|milliseconds?|ms\b)?",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!match.Success) return null;
+        if (!int.TryParse(match.Groups[1].Value, out var value) || value <= 0) return null;
+
+        var unit = match.Groups[2].Value;
+        var span = unit.StartsWith("ms", StringComparison.OrdinalIgnoreCase)
+            || unit.StartsWith("millisecond", StringComparison.OrdinalIgnoreCase)
+                ? TimeSpan.FromMilliseconds(value)
+                : TimeSpan.FromSeconds(value);
+
+        // A service that asks for an implausibly long wait would stall the whole job behind one
+        // card, so the figure is taken as advice and not as an instruction.
+        return span > MaxThrottleWait ? MaxThrottleWait : span;
+    }
+
+    /// <summary>Longest this client will wait on one throttled attempt, however long it is asked to.</summary>
+    private static readonly TimeSpan MaxThrottleWait = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// Uploads an image to the project and returns its file id.
@@ -213,7 +323,7 @@ public sealed class FoundryAgentClient
     /// independent places.
     /// </para>
     /// </summary>
-    private async Task<(string Status, string? LastError)> WaitForRunAsync(
+    private async Task<(string Status, string? LastError, string? ErrorCode)> WaitForRunAsync(
         string threadId, string runId, string? approvedServerLabel, CancellationToken ct)
     {
         var deadline = DateTimeOffset.UtcNow + _runTimeout;
@@ -235,12 +345,19 @@ public sealed class FoundryAgentClient
             if (IsTerminal(status))
             {
                 string? reason = null;
+                string? code = null;
                 if (!IsCompleted(status) && run.RootElement.TryGetProperty("last_error", out var lastError))
                 {
                     _log.LogError("Foundry run {RunId} failed: {Error}", runId, lastError.ToString());
                     reason = AgentJson.Summarize(lastError.ToString());
+                    if (lastError.ValueKind == JsonValueKind.Object
+                        && lastError.TryGetProperty("code", out var c)
+                        && c.ValueKind == JsonValueKind.String)
+                    {
+                        code = c.GetString();
+                    }
                 }
-                return (status, reason);
+                return (status, reason, code);
             }
 
             if (RequiresAction(status))
