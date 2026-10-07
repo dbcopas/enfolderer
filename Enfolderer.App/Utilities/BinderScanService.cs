@@ -24,7 +24,14 @@ public static class BinderScanService
     /// card and its English reprint share a name, a set and a number.
     /// </param>
     public record ScannedCard(string Set, string Number, string Name, string Language = "en");
-    public record ScanResult(int ImagesProcessed, int CardsFound, int LookupFailures, string OutputPath);
+    /// <param name="CardsWithoutNumber">
+    /// How many of <paramref name="CardsFound"/> were exported with an empty number column. Those
+    /// rows name a real card and are worth keeping, but the number is the one field nobody can
+    /// recover later without the photograph, so the count is surfaced rather than left to be
+    /// noticed in the file.
+    /// </param>
+    public record ScanResult(
+        int ImagesProcessed, int CardsFound, int LookupFailures, string OutputPath, int CardsWithoutNumber = 0);
 
     private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"];
 
@@ -86,6 +93,7 @@ public static class BinderScanService
 
         var allCards = new List<ScannedCard>();
         var unidentified = 0;
+        var withoutNumber = 0;
 
         for (var i = 0; i < imageFiles.Count; i++)
         {
@@ -102,11 +110,12 @@ public static class BinderScanService
 
             allCards.AddRange(AiScanClient.MapCards(result));
             unidentified += result.Cards.Count(c => !c.IsIdentified);
+            withoutNumber += result.Cards.Count(c => c.IsIdentified && !c.HasPrinting);
         }
 
         File.WriteAllLines(outputPath, allCards.Select(BuildCsvRow));
 
-        return new ScanResult(imageFiles.Count, allCards.Count, unidentified, outputPath);
+        return new ScanResult(imageFiles.Count, allCards.Count, unidentified, outputPath, withoutNumber);
     }
 
     /// <summary>

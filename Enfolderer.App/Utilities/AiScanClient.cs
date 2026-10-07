@@ -202,14 +202,21 @@ public sealed class AiScanClient
     };
 
     /// <summary>
-    /// Maps the result document onto the CSV rows the importer already understands. Only cards the
-    /// agents fully identified are exported; the rest are reported as failures.
-    /// Exposed for the self-tests.
+    /// Maps the result document onto the CSV rows the importer already understands. Cards the
+    /// agents identified are exported; the rest are reported as failures. Exposed for the
+    /// self-tests.
     /// </summary>
+    /// <remarks>
+    /// A card may be identified without its collector number having been settled, and that row is
+    /// still written — with the number column empty. The alternative is dropping the row, which
+    /// loses the name too, and the name is the field a person can actually check against the
+    /// binder. An empty number is a gap someone can fill; a missing row is one they have to find
+    /// first.
+    /// </remarks>
     public static IReadOnlyList<BinderScanService.ScannedCard> MapCards(ScanResultDocument result) =>
         (result?.Cards ?? Array.Empty<IdentifiedCard>())
             .Where(c => c.IsIdentified)
             .Select(c => new BinderScanService.ScannedCard(
-                c.Set!, c.CollectorNumber!, c.Name!, c.Language ?? "en"))
+                c.Set!, c.CollectorNumber ?? string.Empty, c.Name!, c.Language ?? "en"))
             .ToList();
 }

@@ -450,8 +450,14 @@ public partial class MainWindow : Window
                 var result = await scan(System.Threading.CancellationToken.None);
                 _vm?.FinishImportProgress();
                 _vm?.SetStatus($"Scan complete: {result.CardsFound} cards from {result.ImagesProcessed} images.");
+                // A row exported without its collector number is a real card and worth keeping,
+                // but it is the one gap that cannot be filled in later without the photograph, so
+                // it is said here rather than left to be found in the file.
+                var incomplete = result.CardsWithoutNumber > 0
+                    ? $"\n  of which without a collector number: {result.CardsWithoutNumber}"
+                    : string.Empty;
                 MessageBox.Show(this,
-                    $"Images processed: {result.ImagesProcessed}\nCards identified: {result.CardsFound}\nUnidentified cards: {result.LookupFailures}\n\nOutput: {result.OutputPath}",
+                    $"Images processed: {result.ImagesProcessed}\nCards identified: {result.CardsFound}{incomplete}\nUnidentified cards: {result.LookupFailures}\n\nOutput: {result.OutputPath}",
                     "Card Scan", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }

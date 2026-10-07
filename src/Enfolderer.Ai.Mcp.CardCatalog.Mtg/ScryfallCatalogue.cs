@@ -64,6 +64,19 @@ public static class Resolutions
     /// </summary>
     public const string Ambiguous = "ambiguous";
 
+    /// <summary>
+    /// The name was found, but not in the set code that was read — so the set and number in the
+    /// answer are the catalogue's, and only the name came off the card.
+    /// <para>
+    /// A set code is a symbol, not text: an expansion symbol is a few dozen pixels of engraved
+    /// glyph, and the three letters beside it are the smallest print on the card after the
+    /// copyright line. The name is the largest. So when the two disagree it is nearly always the
+    /// set that was misread, and a search confined to it finds nothing however well the name was
+    /// read. This is the answer that stops one unreadable symbol discarding a legible card.
+    /// </para>
+    /// </summary>
+    public const string Relocated = "relocated";
+
     /// <summary>Neither the name nor the number found a printing.</summary>
     public const string Unresolved = "unresolved";
 }
@@ -326,8 +339,21 @@ public sealed class ScryfallCatalogue
                 return new ResolvedPrinting(
                     await LocaliseAsync(approximate, language, ct), Resolutions.Fuzzy, collectorNumber);
 
-            // The name found nothing even approximately. Either the set code was misread too, or
-            // the name was past saving. Fall back to the number, now the only evidence there is.
+            // The name found nothing even approximately *inside this set*. Before giving up, try it
+            // without the set at all: the set code is the smallest print on the card and the name
+            // is the largest, so a disagreement between them is far more likely to be a misread
+            // symbol than a misread name. Doing this before the number matters, because the number
+            // is read from the same small print as the set code and would be looked up inside the
+            // very set that has already been shown not to hold this card.
+            var elsewhere = await ResolveWithoutSetAsync(name!, collectorNumber, language, ct);
+            if (elsewhere.Printing is not null)
+            {
+                // Answer, but say plainly that the set is the catalogue's and not the card's: only
+                // the name survived from what was read, so only the name has been corroborated.
+                return elsewhere with { Resolution = Resolutions.Relocated };
+            }
+
+            // The name was past saving. Fall back to the number, now the only evidence there is.
             if (hasNumber)
             {
                 var byNumber = await LookupBySetAndNumberAsync(setCode, collectorNumber!, language, ct);

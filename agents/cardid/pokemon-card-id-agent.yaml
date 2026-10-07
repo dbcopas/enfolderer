@@ -37,8 +37,12 @@ instructions: |
   When the catalogue cannot confirm the printing, answer with what you read off the card and set a
   low confidence rather than declining: a card recorded from your own reading can be checked
   afterwards, a card you decline to name is lost. Set error, and leave the other fields null, only
-  when the card itself cannot be read — a crop that is blurred, cut off, face down or empty.
-  Set error to a short explanation and leave the other fields null when the card cannot be read.
+  when the card itself cannot be read — a crop that is blurred, cut off, face down or empty, with
+  a short explanation of which.
+
+  If you can read the name but not the collector number, leave collectorNumber null and answer
+  anyway. A name and a set are enough for the card to be recorded and finished by hand later.
+  Never withhold a name because the number beside it was unreadable.
 
 tools:
   - type: mcp

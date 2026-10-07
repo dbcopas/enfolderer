@@ -31,7 +31,9 @@ public sealed class MtgCatalogueTools
         approximately, or no set code was read to place it in - the name is right, the printing
         is the uncertain part), assumed (no name was read, so nothing corroborated the number),
         ambiguous (the set holds this name more than once and no number separated them - the most
-        likely printing is returned and "candidates" lists the rest), unresolved (nothing matched).
+        likely printing is returned and "candidates" lists the rest), relocated (the name was
+        found, but not in the set code you gave - answer with the set and number in the reply,
+        because a set symbol is far easier to misread than a name), unresolved (nothing matched).
 
         Only "unresolved" has no answer in it. Everything else returns a printing you should use;
         the resolution says how much to trust the set and number, never the name.
