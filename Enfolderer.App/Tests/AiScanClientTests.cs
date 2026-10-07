@@ -141,17 +141,22 @@ public static class AiScanClientTests
 
         var mapped = AiScanClient.MapCards(result);
         int failures = 0;
-        failures += Check(mapped.Count == 3, "only fully identified cards are exported");
+        failures += Check(mapped.Count == 4, "a card with no name at all is the only one dropped");
         failures += Check(mapped[0].Set == "bro" && mapped[0].Number == "167" && mapped[0].Name == "Ancient Silver Dragon",
             "first mapped card matches the contract fields");
-        failures += Check(mapped[1].Name == "Lightning Bolt", "second mapped card preserves order");
+        failures += Check(mapped[2].Name == "Lightning Bolt", "mapping preserves order");
 
         var csv = mapped.Select(BinderScanService.BuildCsvRow).ToList();
         failures += Check(csv[0] == "bro;167;;en;Ancient Silver Dragon", "CSV row format is unchanged");
 
+        // A number that could not be read leaves the column empty rather than the row absent. The
+        // name is what a person can check against the binder, so it must survive the number.
+        failures += Check(csv[1] == "bro;;;en;Missing number",
+            "a card read without its number is exported with the column blank");
+
         // The name stays English on a Japanese card; only the language column says which printing
         // it was. Writing the printed name here would break the importer, which matches on name.
-        failures += Check(csv[2] == "neo;268;;ja;Boseiju, Who Endures",
+        failures += Check(csv[3] == "neo;268;;ja;Boseiju, Who Endures",
             "the printing's language reaches the CSV and the name stays English");
         failures += Check(
             BinderScanService.BuildCsvRow(new BinderScanService.ScannedCard("neo", "1", "X", "Japanese"))

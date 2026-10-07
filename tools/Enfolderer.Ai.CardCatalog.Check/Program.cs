@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Mcp.CardCatalog.Mtg;
 using Enfolderer.Ai.Worker.Agents;
 
@@ -31,6 +32,7 @@ internal static class Program
         ResolutionChecks().GetAwaiter().GetResult();
         PromptChecks();
         ThrottleChecks();
+        ExportGateChecks();
 
         Console.WriteLine(_failures == 0
             ? "\nAll checks passed."
@@ -163,6 +165,45 @@ internal static class Program
                 "a number with neither a name nor a set is nothing at all");
         }
 
+        Section("A set code that was read as the wrong set");
+
+        {
+            // The case this exists for: a name read perfectly and a set symbol read as the wrong
+            // three letters. Every rung is confined to that set, so all of them miss, and the card
+            // used to be dropped for the sake of the least legible thing on it.
+            var (catalogue, stub) = Build(url =>
+                url.Contains("set%3Admr") || url.Contains("set=dmr") ? null
+                : url.Contains("/cards/named") ? Card("dmu", "28", "Historian's Boon")
+                : null);
+            var resolved = await catalogue.ResolveAsync("Historian's Boon", "dmr", null, null, default);
+            Check(resolved.Resolution == "relocated",
+                "a name found outside the set code that was read is relocated, not unresolved");
+            Check(resolved.Printing?.Set == "dmu", "and the set in the answer is the catalogue's");
+            Check(resolved.Printing?.Name == "Historian's Boon", "the name survives the wrong set code");
+            Check(stub.Urls.Any(u => u.Contains("set%3Admr") || u.Contains("set=dmr")),
+                "the set code that was read is still tried first");
+        }
+
+        {
+            // The number is read from the same small print as the set code, so it must not be
+            // believed over a name once that set has been shown not to hold the card.
+            var (catalogue, _) = Build(url =>
+                url.Contains("set%3Admr") || url.Contains("set=dmr") ? null
+                : url.Contains("/cards/named") ? Card("dmu", "28", "Historian's Boon")
+                : url.Contains("/cards/dmr/28") ? Card("dmr", "28", "Shivan Dragon")
+                : null);
+            var resolved = await catalogue.ResolveAsync("Historian's Boon", "dmr", "28", null, default);
+            Check(resolved.Printing?.Name == "Historian's Boon",
+                "a number inside the disproved set does not out-rank the name");
+        }
+
+        {
+            // Relocating must not rescue a name that is simply not a card.
+            var (catalogue, _) = Build(_ => null);
+            var resolved = await catalogue.ResolveAsync("Nonesuch Card", "dmr", null, null, default);
+            Check(resolved.Resolution == "unresolved", "a name found nowhere at all is still unresolved");
+        }
+
         Section("One name, several printings");
 
         {
@@ -291,6 +332,32 @@ internal static class Program
         // One card must not be able to stall the whole page behind it.
         Check(FoundryAgentClient.RetryAfter("Please retry after 3600 seconds") == TimeSpan.FromMinutes(2),
             "an implausible wait is capped");
+    }
+
+    /// <summary>
+    /// What counts as identified enough to export. This is the last gate a card passes through and
+    /// the quietest place to lose one: a row that fails here is not an error anywhere, it simply
+    /// never appears, taking the name with it.
+    /// </summary>
+    private static void ExportGateChecks()
+    {
+        Section("What is worth exporting");
+
+        static IdentifiedCard Card(string? set, string? number, string? name) =>
+            new() { Set = set, CollectorNumber = number, Name = name };
+
+        Check(Card("dmu", "28", "Historian's Boon").IsIdentified, "a whole reading is identified");
+        Check(Card("dmu", "28", "Historian's Boon").HasPrinting, "and its printing is pinned down");
+
+        // The case that prompted this: a legible name, a legible set, an unreadable number.
+        Check(Card("dmr", null, "Historian's Boon").IsIdentified,
+            "a name and a set are enough without the number");
+        Check(!Card("dmr", null, "Historian's Boon").HasPrinting,
+            "but the missing number is still visible to the caller");
+
+        Check(!Card("dmr", "28", null).IsIdentified, "a set and a number without a name are not a card");
+        Check(!Card(null, "28", "Historian's Boon").IsIdentified, "nor is a name with nowhere to put it");
+        Check(!Card("   ", null, "  ").IsIdentified, "and whitespace is not a reading");
     }
 
     private static (ScryfallCatalogue Catalogue, StubScryfall Stub) Build(Func<string, string?> reply)

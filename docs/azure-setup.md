@@ -2292,8 +2292,9 @@ there is more than one. The reply says how it was settled:
 | `corrected` | The number read named a different card. `collectorNumber` is the catalogue's; `readCollectorNumber` is what the agent read. | Nothing — this is the mechanism working. Expect it often. |
 | `fuzzy` | The name matched only approximately, or no set code was read to place it in. | The set and the number. The card itself is right. |
 | `ambiguous` | The set prints that name more than once and nothing separated them. The likeliest printing is returned and `candidates` lists the rest. | The printing, never the name — every candidate carries it. |
+| `relocated` | The name was found, but not in the set code that was read. The set and number are the catalogue's; only the name came off the card. | The set, which was misread. The name is right. |
 | `assumed` | The name found no printing, so only the number was left. | Everything. The name was misread, so nothing checked the number. |
-| `unresolved` | Neither the name nor the number found a printing. | The set code, usually. |
+| `unresolved` | Neither the name nor the number found a printing. | Everything that was read. |
 
 Only `unresolved` comes back without a card in it. Everything else returns a printing that should
 be recorded, and the resolution says how much of it to trust. That is deliberate, and it is the
@@ -2307,6 +2308,14 @@ both require the name to have been transcribed character for character — one d
 "Juzám Djinn" and they match nothing at all. Scryfall's `named?fuzzy=` endpoint forgives that, and
 answers with a single card, so it can never produce an ambiguous result. It only knows English
 names, which is why it is the last rung rather than the first.
+
+`relocated` exists because of the same asymmetry seen from the other side. A set code is a
+*symbol*: an expansion glyph a few dozen pixels across, with three letters beside it in the
+smallest print on the card after the copyright line. The name is the largest print on the card. So
+when the two disagree, it is very nearly always the symbol that was misread — and until this was
+added, every rung of the ladder was confined to that misread set, so a name read perfectly found
+nothing and the card was dropped. Now the name is tried on its own before giving up, and the answer
+says plainly that the set came from the catalogue rather than from the card.
 
 `ambiguous` is the other one worth understanding. A set can carry the same name several times —
 basic lands, Secret Lairs, borderless and showcase variants — and when the number was unreadable
@@ -2405,6 +2414,62 @@ Japanese card object, and `printed_name` is the localised one; the agent is told
 first and never the second. The language is not thrown away — it travels in its own field and ends
 up in the CSV's language column, so `neo;268;;ja;Boseiju, Who Endures` is a Japanese card recorded
 under the name you can search for.
+
+### If a card with a correct name is still counted as unidentified
+
+```text
+Card 6 of job 66822a1c... was not identified by cardid/MtgCardIdAgent: Agent reply was missing
+set, collector number or name: {"set":"dmr","collectorNumber":null,"name":"Historian's Boon",...,
+"resolution":"unresolved"}
+```
+
+The agent read the card. The name in that reply is right, the set is plausible, and the row was
+dropped anyway — for the one field nobody could read. Two separate things conspired, and both are
+now fixed; this section is here because the symptom is so unlike the cause.
+
+**The collector number is no longer required.** A row needs a name and a set to be worth exporting,
+and that is now all it needs. The number is the smallest print on the card and the first thing lost
+to glare, a sleeve or an oblique angle, and a row carrying `dmr;;;en;Historian's Boon` is one you
+can finish by hand in seconds. A row that was never written is one you have to notice is missing
+first — and it takes the name with it, which is the only field you can check against the binder
+afterwards. The scan summary now says how many rows came out without a number, so the gap is
+stated rather than discovered.
+
+**A misread set code no longer discards the name.** Every rung of the search ladder was confined
+to the set code that was read, so if those three letters were wrong, a perfectly read name found
+nothing. Since a set code is an engraved symbol and the name is the largest text on the card, the
+set is far more often the thing misread. The ladder now tries the name on its own before giving
+up, and answers `relocated` — the card, with the set and number the catalogue puts it in, and a
+resolution saying that only the name came off the photograph.
+
+Both changes ship in images, and the agents' standing instructions changed too, so this needs a
+redeploy **and** a re-provision:
+
+```powershell
+git pull
+./scripts/deploy-images.ps1
+
+$id = az deployment sub show --name enfolderer-scan `
+        --query properties.outputs.identificationProjectEndpoint.value -o tsv
+
+$mcp = @{}
+foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
+  (az deployment sub show --name enfolderer-scan --query "properties.outputs.$o.value" -o json |
+     ConvertFrom-Json) | ForEach-Object { $mcp[$_.name] = $_.url }
+}
+
+./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid -McpServerUrl $mcp
+```
+
+Afterwards, a card that keeps its name but loses its printing logs at warning level rather than
+vanishing:
+
+```text
+Card 6 of job 66822a1c...: dmu 28 (Historian's Boon, en) resolved as relocated.
+```
+
+A card is only dropped now when the reply carries neither a name nor a set, and the log says so in
+those words.
 
 ### If the first few cards identify and the rest fail
 

@@ -182,6 +182,9 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             "name" is the catalogue's English name, whatever language the card is printed in, and
             "language" is the language the card itself is printed in.
 
+            If you can read the name but not the collector number, leave "collectorNumber" null and
+            answer anyway: a name and a set are enough for the card to be recorded.
+
             Return {"error":"why"} only when the card itself cannot be read — a crop that is blurred,
             cut off, face down or empty. Not being certain of the printing is not such a case.
             """;
@@ -238,8 +241,7 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             ? card
             : card with
             {
-                Error = "Agent reply was missing set, collector number or name: "
-                      + AgentJson.Summarize(reply)
+                Error = "Agent reply was missing the set or the name: " + AgentJson.Summarize(reply)
             };
     }
 

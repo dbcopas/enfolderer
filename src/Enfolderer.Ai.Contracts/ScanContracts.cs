@@ -108,7 +108,7 @@ public sealed record IdentifiedCard
 
     /// <summary>
     /// How the catalogue settled this printing: <c>confirmed</c>, <c>corrected</c>, <c>named</c>,
-    /// <c>assumed</c>, <c>ambiguous</c> or <c>unresolved</c>.
+    /// <c>assumed</c>, <c>fuzzy</c>, <c>relocated</c>, <c>ambiguous</c> or <c>unresolved</c>.
     /// <para>
     /// Null means the agent did not say, which is itself the useful signal: it is what a run looks
     /// like when the resolution tool was never called and the model answered from the crop alone.
@@ -136,10 +136,28 @@ public sealed record IdentifiedCard
     /// <summary>Populated when this specific card could not be identified.</summary>
     [JsonPropertyName("error")] public string? Error { get; init; }
 
-    /// <summary>True when the card has enough catalogue data to be exported.</summary>
+    /// <summary>
+    /// True when the card has enough catalogue data to be exported: a name and the set it is in.
+    /// <para>
+    /// The collector number is deliberately <em>not</em> required. It is the least legible thing on
+    /// a card and the first thing lost to glare, a sleeve or an oblique angle, and a row that has
+    /// the name and the set is one someone can look at and finish in seconds. A row that was
+    /// dropped is not: the name goes with it, and the name is both the most legible thing on the
+    /// card and the only field a person can check afterwards. The resolution is what says how much
+    /// of this came from the card and how much from the catalogue.
+    /// </para>
+    /// </summary>
     [JsonIgnore]
     public bool IsIdentified =>
-        !string.IsNullOrWhiteSpace(Set) && !string.IsNullOrWhiteSpace(CollectorNumber) && !string.IsNullOrWhiteSpace(Name);
+        !string.IsNullOrWhiteSpace(Set) && !string.IsNullOrWhiteSpace(Name);
+
+    /// <summary>
+    /// True when the printing is pinned down as well as the card: an identified card that also
+    /// carries a collector number. The difference is what the export warns about, because a blank
+    /// number in a CSV is otherwise a silent gap rather than a visible one.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasPrinting => IsIdentified && !string.IsNullOrWhiteSpace(CollectorNumber);
 }
 
 /// <summary>Versioned result document returned by <c>GET /jobs/{id}</c> once a job completes.</summary>

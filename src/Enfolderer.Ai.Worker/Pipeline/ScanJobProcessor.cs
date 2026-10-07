@@ -187,13 +187,16 @@ public sealed class ScanJobProcessor
             return;
         }
 
-        // The catalogue answered but the card was still dropped. Worth its own line: it says the
-        // tool ran, so the fix is in what was read off the crop, not in how the agent is wired.
+        // The catalogue answered and the card was still dropped, which now means the reply had no
+        // name or no set in it at all — the number alone is not enough to name a card. Worth its
+        // own line: it says the tool ran, so the fix is in what was read off the crop, not in how
+        // the agent is wired.
         if (!card.IsIdentified)
         {
             _log.LogWarning(
-                "Card {Index} of job {JobId} was dropped after the catalogue answered {Resolution}. "
-                + "The tool ran, so this is a reading problem rather than a wiring one.",
+                "Card {Index} of job {JobId} was dropped after the catalogue answered {Resolution}: the reply "
+                + "carried neither a name nor a set. The tool ran, so this is a reading problem rather than "
+                + "a wiring one.",
                 index, jobId, card.Resolution);
             return;
         }
@@ -201,13 +204,14 @@ public sealed class ScanJobProcessor
         var doubtful = card.Resolution is not null
                     && (card.Resolution.Equals("corrected", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("fuzzy", StringComparison.OrdinalIgnoreCase)
+                     || card.Resolution.Equals("relocated", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("ambiguous", StringComparison.OrdinalIgnoreCase));
 
         var corrected = string.Equals(card.Resolution, "corrected", StringComparison.OrdinalIgnoreCase);
 
-        _log.Log(doubtful ? LogLevel.Warning : LogLevel.Information,
+        _log.Log(doubtful || !card.HasPrinting ? LogLevel.Warning : LogLevel.Information,
             "Card {Index} of job {JobId}: {Set} {Number} ({Name}, {Language}) resolved as {Resolution}{Read}.",
-            index, jobId, card.Set, card.CollectorNumber, card.Name, card.Language, card.Resolution,
+            index, jobId, card.Set, card.CollectorNumber ?? "(no number)", card.Name, card.Language, card.Resolution,
             corrected && !string.IsNullOrWhiteSpace(card.ReadCollectorNumber)
                 ? $" — the number read off the card was '{card.ReadCollectorNumber}'"
                 : string.Empty);

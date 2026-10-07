@@ -55,12 +55,21 @@ instructions: |
                    The tool returns the most likely printing and lists the rest in "candidates".
                    Answer with the printing it returned and lower your confidence. Every candidate
                    carries the same name, so the name is not in doubt — only the printing is.
+  - "relocated"  — the name was found, but not in the set code you gave. Answer with the set and
+                   the number the tool returned, not the ones you read. A set symbol is a tiny
+                   engraved glyph and the letters beside it are the smallest print on the card,
+                   while the name is the largest: when they disagree it is the symbol that was
+                   misread. Lower your confidence a little and do not re-report your own set code.
   - "unresolved" — neither the name nor the number found a printing.
 
   Only "unresolved" leaves you without an answer from the tool. In that case, and if the tool
   cannot be called at all, answer with what you read off the card yourself and set a low
   confidence. A card recorded from your own reading can be checked afterwards; a card you decline
   to name is lost outright, and the name is the thing you read most reliably.
+
+  If you can read the name but not the collector number, leave collectorNumber null and answer
+  anyway. A name and a set are enough for the card to be recorded and finished by hand later.
+  Never withhold a name because the number beside it was unreadable.
 
   The lookup tools remain for the awkward cases — a card whose name you cannot read at all, or one
   you want to check against another set — but resolve_printing is the one to reach for first.
