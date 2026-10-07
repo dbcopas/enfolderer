@@ -158,15 +158,27 @@ public sealed class ScanJobProcessor
     }
 
     /// <summary>
-    /// Records how one card's printing was settled. <c>corrected</c> and <c>ambiguous</c> are
-    /// warnings rather than information: the first means a number was misread, and a photograph
-    /// that misreads one is likely misreading others; the second means two real printings could
-    /// not be told apart, which no amount of re-running will fix on its own.
+    /// Records how one card's printing was settled, identified or not.
+    /// <para>
+    /// <c>corrected</c>, <c>fuzzy</c> and <c>ambiguous</c> are warnings rather than information:
+    /// the first means a number was misread, and a photograph that misreads one is likely
+    /// misreading others; the second means the name itself only matched approximately; the third
+    /// means two real printings could not be told apart, so the printing named is the likeliest
+    /// rather than the known one.
+    /// </para>
+    /// <para>
+    /// A card with no resolution at all is the one worth acting on, because it means no catalogue
+    /// was consulted — the agent answered from the crop alone, or never called the tool.
+    /// </para>
     /// </summary>
     private void LogResolution(int index, string jobId, string agentId, IdentifiedCard card)
     {
         if (string.IsNullOrWhiteSpace(card.Resolution))
         {
+            // Nothing to say about an unidentified card that the warning above has not said: with
+            // no resolution and no printing there is no catalogue answer to report.
+            if (!card.IsIdentified) return;
+
             _log.LogWarning(
                 "Card {Index} of job {JobId} was identified by {Agent} as {Set} {Number} ({Name}) but said "
                 + "nothing about how it was settled, which is what a reply looks like when the catalogue was "
@@ -175,10 +187,25 @@ public sealed class ScanJobProcessor
             return;
         }
 
-        var corrected = string.Equals(card.Resolution, "corrected", StringComparison.OrdinalIgnoreCase);
-        var level = corrected ? LogLevel.Warning : LogLevel.Information;
+        // The catalogue answered but the card was still dropped. Worth its own line: it says the
+        // tool ran, so the fix is in what was read off the crop, not in how the agent is wired.
+        if (!card.IsIdentified)
+        {
+            _log.LogWarning(
+                "Card {Index} of job {JobId} was dropped after the catalogue answered {Resolution}. "
+                + "The tool ran, so this is a reading problem rather than a wiring one.",
+                index, jobId, card.Resolution);
+            return;
+        }
 
-        _log.Log(level,
+        var doubtful = card.Resolution is not null
+                    && (card.Resolution.Equals("corrected", StringComparison.OrdinalIgnoreCase)
+                     || card.Resolution.Equals("fuzzy", StringComparison.OrdinalIgnoreCase)
+                     || card.Resolution.Equals("ambiguous", StringComparison.OrdinalIgnoreCase));
+
+        var corrected = string.Equals(card.Resolution, "corrected", StringComparison.OrdinalIgnoreCase);
+
+        _log.Log(doubtful ? LogLevel.Warning : LogLevel.Information,
             "Card {Index} of job {JobId}: {Set} {Number} ({Name}, {Language}) resolved as {Resolution}{Read}.",
             index, jobId, card.Set, card.CollectorNumber, card.Name, card.Language, card.Resolution,
             corrected && !string.IsNullOrWhiteSpace(card.ReadCollectorNumber)
@@ -238,15 +265,12 @@ public sealed class ScanJobProcessor
                         "Card {Index} of job {JobId} was not identified by {Agent}: {Error}",
                         index, job.JobId, agent.AgentId, card.Error ?? "(no reason given)");
                 }
-                else
-                {
-                    // How the printing was settled, logged for every card and not only the odd
-                    // ones. A wrong collector number is the failure that looks like success, so
-                    // the only way to tell a scan that resolved its cards from one that read them
-                    // off the crop and never asked is to say so per card. A missing resolution
-                    // means the agent never called the tool at all.
-                    LogResolution(index, job.JobId, agent.AgentId, card);
-                }
+
+                // How the printing was settled, logged for every card — including the ones that
+                // were dropped, which is the case that matters most. A row lost without a
+                // resolution beside it leaves nothing to tell "the catalogue was never asked"
+                // from "it was asked and found nothing", and those have opposite fixes.
+                LogResolution(index, job.JobId, agent.AgentId, card);
 
                 // Geometry always comes from Team A, whatever the identification agent echoed back.
                 cards.Add(card with { Index = index, Quad = boundary.Quad, Game = game });

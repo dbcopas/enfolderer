@@ -27,9 +27,14 @@ public sealed class MtgCatalogueTools
         catalogue's and is the one to answer with.
 
         Read "resolution" in the reply: confirmed (name and number agreed), corrected (they did
-        not, and the name won), named (no number was read), assumed (no name was read, so nothing
-        corroborated the number), ambiguous (the set holds this name more than once and no number
-        separated them - the candidates are listed, do not pick one at random), unresolved.
+        not, and the name won), named (no number was read), fuzzy (the name matched only
+        approximately, or no set code was read to place it in - the name is right, the printing
+        is the uncertain part), assumed (no name was read, so nothing corroborated the number),
+        ambiguous (the set holds this name more than once and no number separated them - the most
+        likely printing is returned and "candidates" lists the rest), unresolved (nothing matched).
+
+        Only "unresolved" has no answer in it. Everything else returns a printing you should use;
+        the resolution says how much to trust the set and number, never the name.
         """)]
     public async Task<string> ResolvePrintingAsync(
         [Description("Card name exactly as printed on the card, in whatever language it is printed in.")] string name,
@@ -45,17 +50,7 @@ public sealed class MtgCatalogueTools
             {
                 found = false,
                 resolution = resolved.Resolution,
-                readCollectorNumber = resolved.ReadCollectorNumber,
-                // Listed rather than chosen between: whichever is picked here would look exactly
-                // like an answer, and the caller is the only one that can see the card.
-                candidates = (resolved.Candidates ?? []).Select(c => new
-                {
-                    set = c.Set,
-                    collectorNumber = c.CollectorNumber,
-                    name = c.Name,
-                    printedName = c.PrintedName,
-                    language = c.Language
-                })
+                readCollectorNumber = resolved.ReadCollectorNumber
             });
 
         return JsonSerializer.Serialize(new
@@ -70,7 +65,17 @@ public sealed class MtgCatalogueTools
             // the localised one and is here only so the reading can be checked against the card.
             name = resolved.Printing.Name,
             printedName = resolved.Printing.PrintedName,
-            language = resolved.Printing.Language
+            language = resolved.Printing.Language,
+            // Present only when the printing above could not be told from these. They all carry
+            // the same name, so this says which printing is uncertain, never which card.
+            candidates = (resolved.Candidates ?? []).Select(c => new
+            {
+                set = c.Set,
+                collectorNumber = c.CollectorNumber,
+                name = c.Name,
+                printedName = c.PrintedName,
+                language = c.Language
+            })
         });
     }
 
