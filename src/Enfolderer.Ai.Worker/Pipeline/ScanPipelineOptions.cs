@@ -48,6 +48,18 @@ public sealed class ScanPipelineOptions
     /// <summary>Interval between Foundry run status polls.</summary>
     public TimeSpan AgentPollInterval { get; set; } = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// How many extra attempts a single agent run gets when the model deployment refuses it for
+    /// quota. Zero fails the card on the first refusal.
+    /// </summary>
+    public int AgentThrottleRetries { get; set; } = 3;
+
+    /// <summary>
+    /// First wait after a throttled run, doubled on each further attempt. The limit is measured
+    /// over a rolling minute, so this is seconds rather than milliseconds on purpose.
+    /// </summary>
+    public TimeSpan AgentThrottleBackoff { get; set; } = TimeSpan.FromSeconds(10);
+
     /// <summary>Interval between queue polls.</summary>
     public TimeSpan QueuePollInterval { get; set; } = TimeSpan.FromSeconds(2);
 

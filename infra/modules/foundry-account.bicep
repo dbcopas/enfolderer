@@ -21,7 +21,13 @@ param modelDeployments array = [
     name: 'gpt-4o'
     model: 'gpt-4o'
     version: '2024-11-20'
-    capacity: 10
+    // Capacity is thousands of tokens per minute, and it is spent per card: a page of nine crops
+    // sent at high detail is tens of thousands of tokens in under a minute. At 10 the first few
+    // cards of a page identify and the rest come back 'rate_limit_exceeded', which reads as the
+    // photograph being at fault when it is the quota. This is also the sharpest illustration of
+    // the account being the outer isolation tier — Team A and Team B draw on this one number, so
+    // a boundary demo running both projects at once needs headroom for both.
+    capacity: 100
   }
 ]
 

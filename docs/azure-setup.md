@@ -2406,6 +2406,87 @@ first and never the second. The language is not thrown away — it travels in it
 up in the CSV's language column, so `neo;268;;ja;Boseiju, Who Endures` is a Japanese card recorded
 under the name you can search for.
 
+### If the first few cards identify and the rest fail
+
+```text
+Foundry run run_TYM4Y9jq8I8nnsc6wshJZkNi failed: {
+    "code": "rate_limit_exceeded",
+    "message": "Your requests to gpt-4o for gpt-4o in swedencentral have exceeded token rate limit."
+  }
+Job 1e7b8c34914946a39be1676536f6fb23 completed: 7 card(s) detected, 3 identified.
+```
+
+The shape of this one is the giveaway: it is never the first card, and the cards that fail are the
+later ones. Nothing about the fourth card is worse than the first — it is simply the one that
+arrived after the minute's token budget had been spent.
+
+A model deployment has a **tokens-per-minute** quota, and this pipeline spends it per card. Each
+crop is sent at `detail: "high"` — necessary, because a collector number is small print and the
+default downsampling erases it — and that is a few thousand tokens before the model has said
+anything. A page of nine, run back to back, is tens of thousands of tokens inside one minute. The
+quota is the number you set as the deployment's `capacity`, in thousands of tokens per minute, and
+it is **shared by every project in the account**. This is the clearest demonstration in the whole
+demo that the account is the outer isolation tier: Team A's boundary agent and Team B's
+identification agents draw down the same budget, and either can starve the other.
+
+There are two halves to the fix, and you want both.
+
+**The worker now waits and tries again.** A card refused for quota is retried on the same thread
+with the image already uploaded, so the retry costs no extra tokens, and it waits in seconds rather
+than milliseconds because the limit is measured over a rolling minute — a brisk retry is simply
+refused again. If the service says how long to wait, that figure is used in preference to the
+backoff. The log says so plainly:
+
+```text
+Agent 'asst_KSaUXA3LtyFb9eaMn3D0kg6A' was rate limited by its model deployment (attempt 1 of 4);
+waiting 00:00:10 before trying again.
+```
+
+Seeing that line occasionally is fine. Seeing it on every card means the quota is genuinely too
+small, and retrying is only hiding it — a nine-card page will take several minutes.
+
+**Raise the quota.** Check what you have now:
+
+```powershell
+az cognitiveservices account deployment show `
+  -g enf-demo-platform -n enf-demo-ai --deployment-name gpt-4o `
+  --query "{sku:sku.name, capacity:sku.capacity}" -o table
+```
+
+`capacity: 10` is 10,000 tokens per minute, which is the template's old default and is too small
+for a full page. Before raising it, see how much the subscription will actually let you have in
+that region — quota is per subscription, per region, per model, and asking for more than you have
+fails the deployment rather than clamping it:
+
+```powershell
+az cognitiveservices usage list -l swedencentral `
+  --query "[?contains(name.value, 'gpt-4o')].{name:name.value, used:currentValue, limit:limit}" -o table
+```
+
+Then set the new capacity. This is an in-place change to the existing deployment; it takes a few
+seconds and does not disturb the agents or their ids:
+
+```powershell
+az cognitiveservices account deployment create `
+  -g enf-demo-platform -n enf-demo-ai `
+  --deployment-name gpt-4o `
+  --model-name gpt-4o --model-version 2024-11-20 --model-format OpenAI `
+  --sku-name GlobalStandard --sku-capacity 100
+```
+
+The template now asks for 100 by default, so a fresh deployment gets this without the manual step.
+If `az cognitiveservices usage list` shows you cannot have 100 in `swedencentral`, either request
+more through **Azure AI Foundry → Management center → Quota** in the portal, or set the capacity to
+whatever the subscription does allow and accept the waiting.
+
+If you are stuck with a small quota and want the page to finish rather than finish quickly, give
+the worker more patience instead:
+
+```powershell
+az containerapp update -g enf-demo-platform -n enf-demo-worker `
+  --set-env-vars ScanPipeline__AgentThrottleRetries=6 ScanPipeline__AgentThrottleBackoff=00:00:20
+```
+
 ### If a job completes with nothing identified
 
 ```text
