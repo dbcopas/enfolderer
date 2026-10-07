@@ -2290,28 +2290,50 @@ there is more than one. The reply says how it was settled:
 | `confirmed` | One printing of that name in that set, and the number read matches it. | Nothing. |
 | `named` | One printing of that name, and no number was read. Just as good. | Nothing. |
 | `corrected` | The number read named a different card. `collectorNumber` is the catalogue's; `readCollectorNumber` is what the agent read. | Nothing — this is the mechanism working. Expect it often. |
+| `fuzzy` | The name matched only approximately, or no set code was read to place it in. | The set and the number. The card itself is right. |
+| `ambiguous` | The set prints that name more than once and nothing separated them. The likeliest printing is returned and `candidates` lists the rest. | The printing, never the name — every candidate carries it. |
 | `assumed` | The name found no printing, so only the number was left. | Everything. The name was misread, so nothing checked the number. |
-| `ambiguous` | The set prints that name more than once and nothing separates them. No printing is returned; `candidates` lists them. | Not a failure — a question. Pick by hand. |
 | `unresolved` | Neither the name nor the number found a printing. | The set code, usually. |
 
-`ambiguous` is the one to understand, because it is a deliberate refusal rather than a miss. A set
-can carry the same name several times — basic lands, Secret Lairs, borderless and showcase
-variants — and when the number was unreadable there is nothing left to tell them apart. Guessing
-between two real printings produces an answer indistinguishable from a right one, so the tool
-declines and hands back the list instead.
+Only `unresolved` comes back without a card in it. Everything else returns a printing that should
+be recorded, and the resolution says how much of it to trust. That is deliberate, and it is the
+correction to a mistake this code made once already: a row dropped for want of a *certain* printing
+loses the **name** as well, and the name is the part that was read reliably. A card filed under the
+right name with a doubtful set is worth something; a card not filed at all is worth nothing.
 
-Every identified card is now logged with how it was settled, which is what makes this diagnosable
-at all:
+`fuzzy` is the rung that does most of the work, and removing it once took the scan from "some
+numbers are wrong" to "almost nothing is identified". The exact and substring searches above it
+both require the name to have been transcribed character for character — one dropped accent in
+"Juzám Djinn" and they match nothing at all. Scryfall's `named?fuzzy=` endpoint forgives that, and
+answers with a single card, so it can never produce an ambiguous result. It only knows English
+names, which is why it is the last rung rather than the first.
+
+`ambiguous` is the other one worth understanding. A set can carry the same name several times —
+basic lands, Secret Lairs, borderless and showcase variants — and when the number was unreadable
+there is nothing left to tell them apart. The tool returns the lowest-numbered of them, which is
+the ordinary printing far more often than it is a variant, and lists the others so you can correct
+it by hand. It is a question about the printing, never about the card.
+
+Every card is logged with how it was settled — including the ones that were dropped, which is the
+case that matters most — and that is what makes this diagnosable at all:
 
 ```text
-mh3 438 Flare of Denial resolved as corrected (read 436 off the card)
+mh3 438 Flare of Denial resolved as corrected — the number read off the card was '436'
 neo 268 Boseiju, Who Endures resolved as named
 sld 1501 Lightning Bolt resolved as confirmed
+arn 27 Juzám Djinn resolved as fuzzy
 ```
 
-A card logged as **saying nothing about how it was settled** is the important case: it means the
-agent never called `resolve_printing`, so no catalogue was consulted and the numbers are whatever
-the model read off the crop. That is a provisioning problem, not a reading one — see below.
+Two cases read differently from the rest:
+
+- A card logged as **saying nothing about how it was settled** means the agent never called
+  `resolve_printing`. No catalogue was consulted and the numbers are whatever the model read off
+  the crop. That is a provisioning problem, not a reading one — see below.
+- A card **dropped after the catalogue answered** means the tool did run and found nothing. That
+  is a reading problem: the crop, the angle or the glare, not the wiring.
+
+Telling those apart from the log is the whole reason the resolution is carried through. Without
+it, both look identical from the outside — a job that completes with fewer rows than cards.
 
 Two things are needed for this to be in play, and a demo environment built before it will have
 neither. First, the catalogue server and the worker both have to be the current image — the worker
@@ -2343,6 +2365,20 @@ foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
 Take the URLs from the deployment rather than typing them: see
 [If a run fails with tool_server_error](#if-a-run-fails-with-tool_server_error) for what a
 hand-written hostname costs.
+
+Before building an image, the resolution ladder itself can be checked without Azure and without
+Scryfall:
+
+```powershell
+dotnet run --project tools/Enfolderer.Ai.CardCatalog.Check
+```
+
+It answers a stubbed Scryfall by URL, so it checks not only what comes back but what was *asked* —
+that a non-English search requests multilingual results, that no query is sent twice, that a name
+with no set code does not become a search of every set at once. It exits non-zero on a failure. It
+exists because this ladder has been broken twice by changes that read as obviously correct, and
+because `api.scryfall.com` is not reachable from every environment the code is built in, so a
+check that needed the real API would simply never be run.
 
 To watch it work, turn the agent conversation up to `Debug` and look for the tool call:
 
