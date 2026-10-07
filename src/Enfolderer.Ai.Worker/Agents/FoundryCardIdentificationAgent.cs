@@ -164,6 +164,10 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
                name and set code you read, and the collector number only if you could read it. Answer with the
                set, collector number and name it gives back, never with the number you read, and copy its
                "resolution" and "readCollectorNumber" into your reply.
+
+               If the tool answers "unresolved", or you cannot call it, answer with what you read off the card
+               and lower "confidence" to say so. A card recorded from your own reading can be checked later; a
+               card you decline to name is simply lost, and the name is the part you read most reliably.
                """;
 
         return $$"""
@@ -178,7 +182,8 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             "name" is the catalogue's English name, whatever language the card is printed in, and
             "language" is the language the card itself is printed in.
 
-            If you cannot identify the card, return {"error":"why"} instead.
+            Return {"error":"why"} only when the card itself cannot be read — a crop that is blurred,
+            cut off, face down or empty. Not being certain of the printing is not such a case.
             """;
     }
 

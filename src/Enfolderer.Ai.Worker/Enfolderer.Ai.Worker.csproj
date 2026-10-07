@@ -12,4 +12,10 @@
     <ProjectReference Include="..\Enfolderer.Ai.Infrastructure\Enfolderer.Ai.Infrastructure.csproj" />
     <ProjectReference Include="..\Enfolderer.Ai.Imaging\Enfolderer.Ai.Imaging.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- So the per-run prompt can be asserted on: it is the copy that overrides the agent YAML,
+         and a second set of instructions creeping back into it is a silent failure. -->
+    <InternalsVisibleTo Include="Enfolderer.Ai.CardCatalog.Check" />
+  </ItemGroup>
 </Project>

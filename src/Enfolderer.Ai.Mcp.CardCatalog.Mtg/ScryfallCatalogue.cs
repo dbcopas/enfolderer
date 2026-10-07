@@ -44,8 +44,23 @@ public static class Resolutions
     public const string Assumed = "assumed";
 
     /// <summary>
-    /// The set holds this name more than once and no number separated them. Nothing is returned
-    /// but the candidates: a guess between two real printings cannot be told from an answer.
+    /// The name matched only approximately — a letter slipped, an accent was dropped, a comma
+    /// landed somewhere else — or it matched exactly but no set code was read to place it in.
+    /// The name is right; which printing it is deserves less trust than the rest.
+    /// </summary>
+    public const string Fuzzy = "fuzzy";
+
+    /// <summary>
+    /// The set holds this name more than once and no number separated them. The printing returned
+    /// is the lowest-numbered of them, which is the ordinary printing rather than a variant far
+    /// more often than not — but <c>Candidates</c> lists the others, and the caller is the only
+    /// one that can see the card.
+    /// <para>
+    /// This is not a failure. Every candidate carries the same name — that is what made them
+    /// candidates — so the name, which is the most legible thing on a card, is certain here even
+    /// though the printing is not. Discarding the whole answer throws away the one field that was
+    /// never in doubt.
+    /// </para>
     /// </summary>
     public const string Ambiguous = "ambiguous";
 
@@ -59,7 +74,8 @@ public static class Resolutions
 /// <param name="ReadCollectorNumber">The number as it was read, kept so a correction is visible.</param>
 /// <param name="Candidates">
 /// The printings that matched when the answer is <see cref="Resolutions.Ambiguous"/>, so the caller
-/// can say what it could not choose between instead of choosing.
+/// can say what it could not choose between. <c>Printing</c> is still populated with the most
+/// likely of them: they all share the name, so the name is certain either way.
 /// </param>
 public sealed record ResolvedPrinting(
     CataloguePrinting? Printing,
@@ -132,6 +148,27 @@ public sealed class ScryfallCatalogue
 
     public Task<CataloguePrinting?> LookupByNameAsync(string name, CancellationToken ct) =>
         GetPrintingAsync($"{ApiRoot}/cards/named?fuzzy={Uri.EscapeDataString(name)}", ct);
+
+    /// <summary>
+    /// One printing from a name that may not have been transcribed perfectly.
+    /// <para>
+    /// This is the rung that absorbs a reader's slips, and the reason it exists is that everything
+    /// above it demands the name was read character for character. Scryfall's <c>named</c>
+    /// endpoint forgives a wrong letter, a dropped accent, a comma in the wrong place or a
+    /// half-read second word — which is exactly what a name transcribed from a photograph by a
+    /// vision model looks like. Removing it is what turned "the numbers are sometimes wrong" into
+    /// "nothing is identified": one slipped character stopped matching anything at all.
+    /// </para>
+    /// <para>
+    /// It answers with a single card however many printings share the name, so it can never
+    /// produce an ambiguous result — and it knows English names only, so a correctly read Japanese
+    /// name will not find itself here. Both are why it is the last rung and not the first.
+    /// </para>
+    /// </summary>
+    private Task<CataloguePrinting?> FuzzyAsync(string name, string? setCode, CancellationToken ct) =>
+        string.IsNullOrWhiteSpace(setCode)
+            ? LookupByNameAsync(name, ct)
+            : LookupByNameAndSetAsync(name, setCode.Trim(), ct);
 
     /// <summary>
     /// Every printing in <paramref name="setCode"/> whose name is <paramref name="name"/>, as the
@@ -241,9 +278,14 @@ public sealed class ScryfallCatalogue
     /// The number does still earn its keep, in the one case where the name is not enough: a set
     /// can print the same name more than once — basic lands, Secret Lairs, borderless and showcase
     /// variants — and then the number is the only thing that separates them. When it separates
-    /// them, that is <c>confirmed</c>; when nothing does, the answer is <c>ambiguous</c> and
-    /// carries the candidates, because a guess between two real printings is indistinguishable
-    /// from an answer.
+    /// them, that is <c>confirmed</c>; when nothing does, the answer is <c>ambiguous</c>, which
+    /// returns the most likely printing and lists the rest. The name is not in doubt there: every
+    /// candidate carries it, which is what made them candidates.
+    /// </para>
+    /// <para>
+    /// Every path ends in a printing wherever one can honestly be named, because the caller cannot
+    /// use what it is not given: a row dropped for want of a certain printing loses the name too,
+    /// and the name was the part that was read reliably. The resolution is what carries the doubt.
     /// </para>
     /// </summary>
     public async Task<ResolvedPrinting> ResolveAsync(
@@ -251,25 +293,41 @@ public sealed class ScryfallCatalogue
     {
         var hasName = !string.IsNullOrWhiteSpace(name);
         var hasNumber = !string.IsNullOrWhiteSpace(collectorNumber);
+        var hasSet = !string.IsNullOrWhiteSpace(setCode);
 
         if (!hasName)
         {
             // Nothing to check the number against. Worth answering anyway — a card whose name is
             // obscured by a sleeve's glare still has a number — but the resolution says plainly
-            // that nothing corroborated it.
-            if (!hasNumber) return new ResolvedPrinting(null, Resolutions.Unresolved, collectorNumber);
+            // that nothing corroborated it. A number without a set cannot be looked up at all:
+            // every set has a card at that number.
+            if (!hasNumber || !hasSet) return new ResolvedPrinting(null, Resolutions.Unresolved, collectorNumber);
             var only = await LookupBySetAndNumberAsync(setCode, collectorNumber!, language, ct);
             return only is null
                 ? new ResolvedPrinting(null, Resolutions.Unresolved, collectorNumber)
                 : new ResolvedPrinting(only, Resolutions.Assumed, collectorNumber);
         }
 
+        // A name with no set code behind it must not become a search of all 573 sets at once.
+        // Most cards in a binder are reprints, so that search returns a dozen printings of the
+        // right name and nothing to choose between them — which used to mean the card was dropped
+        // for having been read *too* well. One fuzzy lookup answers with a single card instead.
+        if (!hasSet) return await ResolveWithoutSetAsync(name!, collectorNumber, language, ct);
+
         var candidates = await SearchPrintingsAsync(name!, setCode, language, ct);
 
         if (candidates.Count == 0)
         {
-            // The name found nothing in this set. Either the set code was misread too, or the name
-            // was. Fall back to the number, which is now the only evidence there is.
+            // Nothing matched the name as transcribed. Before believing the number — the least
+            // legible thing on the card — ask whether the name was merely read imperfectly, which
+            // is far likelier and is what fuzzy matching is for.
+            var approximate = await FuzzyAsync(name!, setCode, ct);
+            if (approximate is not null)
+                return new ResolvedPrinting(
+                    await LocaliseAsync(approximate, language, ct), Resolutions.Fuzzy, collectorNumber);
+
+            // The name found nothing even approximately. Either the set code was misread too, or
+            // the name was past saving. Fall back to the number, now the only evidence there is.
             if (hasNumber)
             {
                 var byNumber = await LookupBySetAndNumberAsync(setCode, collectorNumber!, language, ct);
@@ -297,7 +355,42 @@ public sealed class ScryfallCatalogue
                     await LocaliseAsync(picked, language, ct), Resolutions.Confirmed, collectorNumber);
         }
 
-        return new ResolvedPrinting(null, Resolutions.Ambiguous, collectorNumber, candidates);
+        // Nothing separated them, so say so — but still answer. The candidates are ordered by
+        // collector number, and the lowest-numbered printing of a name is the ordinary one far
+        // more often than it is a showcase or borderless variant. The caller gets that, plus the
+        // list, plus a resolution telling it the printing is the doubtful part and the name is not.
+        return new ResolvedPrinting(
+            await LocaliseAsync(candidates[0], language, ct), Resolutions.Ambiguous, collectorNumber, candidates);
+    }
+
+    /// <summary>
+    /// Settles a card whose set code could not be read, from the name alone.
+    /// <para>
+    /// The number cannot lead here: it only means anything inside a set, and every set has a card
+    /// at almost every number. So the name finds the card, and the number — if one was read — is
+    /// then used to pick the printing within the set the name landed in, which is the one place a
+    /// number is worth something without a set code of its own.
+    /// </para>
+    /// </summary>
+    private async Task<ResolvedPrinting> ResolveWithoutSetAsync(
+        string name, string? collectorNumber, string? language, CancellationToken ct)
+    {
+        var found = await FuzzyAsync(name, null, ct);
+        if (found is null) return new ResolvedPrinting(null, Resolutions.Unresolved, collectorNumber);
+
+        if (!string.IsNullOrWhiteSpace(collectorNumber) && !string.IsNullOrWhiteSpace(found.Set))
+        {
+            var inThatSet = await LookupBySetAndNumberAsync(found.Set, collectorNumber, language, ct);
+            // Only when it is the same card: a number that lands on a different name has told us
+            // the set was wrong, not the name, and the name is the evidence worth keeping.
+            if (inThatSet is not null && NameMatches(name, inThatSet))
+                return new ResolvedPrinting(inThatSet, Resolutions.Confirmed, collectorNumber);
+        }
+
+        // Named with no set code to place it in: the right card, but which printing of it is a
+        // guess, so it is reported with the same doubt as an approximate name match.
+        return new ResolvedPrinting(
+            await LocaliseAsync(found, language, ct), Resolutions.Fuzzy, collectorNumber);
     }
 
     /// <summary>

@@ -34,6 +34,10 @@ instructions: |
   Return ONLY a JSON object:
   {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
    "confidence":0.0,"resolution":null,"readCollectorNumber":null,"error":null}
+  When the catalogue cannot confirm the printing, answer with what you read off the card and set a
+  low confidence rather than declining: a card recorded from your own reading can be checked
+  afterwards, a card you decline to name is lost. Set error, and leave the other fields null, only
+  when the card itself cannot be read — a crop that is blurred, cut off, face down or empty.
   Set error to a short explanation and leave the other fields null when the card cannot be read.
 
 tools:
