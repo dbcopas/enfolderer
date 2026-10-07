@@ -50,23 +50,37 @@ public static class IdentityDiagnostics
     /// from the credential and is used only to describe it, so there is nothing to validate
     /// against: this is a diagnostic, never an authorisation decision.
     /// </summary>
+    /// <remarks>
+    /// Returns null for anything that is not a readable JWT rather than throwing. A token that
+    /// cannot be decoded is still a token that was successfully acquired, and saying the identity
+    /// "could not be determined" would point the reader at the credential — which is the one part
+    /// that demonstrably worked.
+    /// </remarks>
     private static Dictionary<string, string>? ReadClaims(string jwt)
     {
         var parts = jwt.Split('.');
         if (parts.Length < 2) return null;
 
-        var payload = parts[1].Replace('-', '+').Replace('_', '/');
-        payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
-
-        using var document = JsonDocument.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(payload)));
-
-        var claims = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var property in document.RootElement.EnumerateObject())
+        try
         {
-            if (property.Value.ValueKind == JsonValueKind.String)
-                claims[property.Name] = property.Value.GetString()!;
-        }
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
 
-        return claims;
+            using var document = JsonDocument.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(payload)));
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
+
+            var claims = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.String)
+                    claims[property.Name] = property.Value.GetString()!;
+            }
+
+            return claims;
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException or DecoderFallbackException)
+        {
+            return null;
+        }
     }
 }
