@@ -364,10 +364,6 @@ public static class CardDetector
     }
 
     /// <summary>
-    /// Floods the non-edge space inward from the image border and returns everything it could not
-    /// reach. Holes inside a card are unreachable, so they are filled without a separate pass.
-    /// </summary>
-    /// <summary>
     /// Erases anything narrower than a card from the object mask, then restores what is left to its
     /// original size.
     /// <para>
@@ -543,6 +539,10 @@ public static class CardDetector
             (((r >> Shift) * Levels) + (g >> Shift)) * Levels + (b >> Shift);
     }
 
+    /// <summary>
+    /// Floods the non-edge space inward from the image border and returns everything it could not
+    /// reach. Holes inside a card are unreachable, so they are filled without a separate pass.
+    /// </summary>
     private static bool[] FloodBackground(bool[] edges, bool[] backgroundLike, int width, int height)
     {
         var background = new bool[width * height];
