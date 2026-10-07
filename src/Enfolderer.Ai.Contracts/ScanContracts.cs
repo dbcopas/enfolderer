@@ -119,8 +119,10 @@ public sealed record IdentifiedCard
     [JsonPropertyName("resolution")] public string? Resolution { get; init; }
 
     /// <summary>
-    /// The collector number as the agent read it off the card, when the catalogue replaced it.
-    /// Kept beside the corrected number so a correction can be seen rather than inferred.
+    /// The collector number as the agent read it off the card, whenever one was read — not only
+    /// when the catalogue replaced it. Kept beside the settled number so that a correction can be
+    /// seen rather than inferred, and so that agreement is visible too: under <c>relocated</c> a
+    /// number matching the printing found in another set is the corroboration for the move.
     /// </summary>
     [JsonPropertyName("readCollectorNumber")] public string? ReadCollectorNumber { get; init; }
 
