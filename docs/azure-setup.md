@@ -2440,7 +2440,10 @@ to the set code that was read, so if those three letters were wrong, a perfectly
 nothing. Since a set code is an engraved symbol and the name is the largest text on the card, the
 set is far more often the thing misread. The ladder now tries the name on its own before giving
 up, and answers `relocated` — the card, with the set and number the catalogue puts it in, and a
-resolution saying that only the name came off the photograph.
+resolution saying that only the name came off the photograph. It stays `relocated` even when the
+number that was read happens to agree with the printing found elsewhere; that agreement is worth
+having and shows up in `readCollectorNumber`, but the headline has to remain that the set in the
+answer is not the set on the card.
 
 Both changes ship in images, and the agents' standing instructions changed too, so this needs a
 redeploy **and** a re-provision:

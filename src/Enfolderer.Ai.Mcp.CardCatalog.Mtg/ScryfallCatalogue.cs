@@ -74,6 +74,13 @@ public static class Resolutions
     /// set that was misread, and a search confined to it finds nothing however well the name was
     /// read. This is the answer that stops one unreadable symbol discarding a legible card.
     /// </para>
+    /// <para>
+    /// It stays the answer even when the number that was read happens to match the printing found
+    /// elsewhere, which is real corroboration and is visible in <c>ReadCollectorNumber</c>. The
+    /// headline has to remain that the set in the reply is not the set on the card: a reader who
+    /// is told <c>confirmed</c> has no reason to look at the set again, and that is the one field
+    /// here that was definitely misread.
+    /// </para>
     /// </summary>
     public const string Relocated = "relocated";
 
@@ -345,11 +352,17 @@ public sealed class ScryfallCatalogue
             // symbol than a misread name. Doing this before the number matters, because the number
             // is read from the same small print as the set code and would be looked up inside the
             // very set that has already been shown not to hold this card.
+            // This costs two or three further Scryfall calls on a card whose set was misread, on
+            // top of the rungs already spent inside it. That is the right trade: it is paid only
+            // on cards that would otherwise have been dropped outright, and the rate limiter in
+            // front of the client keeps it polite.
             var elsewhere = await ResolveWithoutSetAsync(name!, collectorNumber, language, ct);
             if (elsewhere.Printing is not null)
             {
-                // Answer, but say plainly that the set is the catalogue's and not the card's: only
-                // the name survived from what was read, so only the name has been corroborated.
+                // Answer, but say plainly that the set is the catalogue's and not the card's. This
+                // overrides even a 'confirmed' from the lookup above: the number agreeing is worth
+                // knowing, and it survives in ReadCollectorNumber, but the set code having been
+                // misread is the more important thing to report and the easier one to hide.
                 return elsewhere with { Resolution = Resolutions.Relocated };
             }
 

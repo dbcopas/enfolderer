@@ -199,6 +199,12 @@ public sealed record ScanJobDocument
 
     [JsonPropertyName("cardsDetected")] public int CardsDetected { get; init; }
 
+    /// <summary>
+    /// How many detected cards were identified well enough to export, by the same rule as
+    /// <see cref="IdentifiedCard.IsIdentified"/>: a name and a set. Some of these may have no
+    /// collector number, so this is a count of cards named, not of printings pinned down — see
+    /// <see cref="IdentifiedCard.HasPrinting"/> on the individual cards for that distinction.
+    /// </summary>
     [JsonPropertyName("cardsIdentified")] public int CardsIdentified { get; init; }
 
     [JsonPropertyName("createdAt")] public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -249,6 +255,12 @@ public sealed record JobStatusResponse
 
     [JsonPropertyName("cardsDetected")] public int CardsDetected { get; init; }
 
+    /// <summary>
+    /// How many detected cards were identified well enough to export, by the same rule as
+    /// <see cref="IdentifiedCard.IsIdentified"/>: a name and a set. Some of these may have no
+    /// collector number, so this is a count of cards named, not of printings pinned down — see
+    /// <see cref="IdentifiedCard.HasPrinting"/> on the individual cards for that distinction.
+    /// </summary>
     [JsonPropertyName("cardsIdentified")] public int CardsIdentified { get; init; }
 
     [JsonPropertyName("error")] public string? Error { get; init; }
