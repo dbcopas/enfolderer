@@ -198,6 +198,21 @@ internal static class Program
         }
 
         {
+            // A number that agrees with the printing found elsewhere corroborates the move, but
+            // the answer must still say the set was not the one read: 'confirmed' would invite a
+            // reader to stop looking at the one field that is known to be wrong.
+            var (catalogue, _) = Build(url =>
+                url.Contains("set%3Admr") || url.Contains("set=dmr") ? null
+                : url.Contains("/cards/named") ? Card("dmu", "28", "Historian's Boon")
+                : url.Contains("/cards/dmu/28") ? Card("dmu", "28", "Historian's Boon")
+                : null);
+            var resolved = await catalogue.ResolveAsync("Historian's Boon", "dmr", "28", null, default);
+            Check(resolved.Resolution == "relocated",
+                "a corroborating number does not downgrade the warning about the set");
+            Check(resolved.ReadCollectorNumber == "28", "and the number that was read is still carried");
+        }
+
+        {
             // Relocating must not rescue a name that is simply not a card.
             var (catalogue, _) = Build(_ => null);
             var resolved = await catalogue.ResolveAsync("Nonesuch Card", "dmr", null, null, default);
