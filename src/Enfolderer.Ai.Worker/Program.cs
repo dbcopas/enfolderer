@@ -70,6 +70,17 @@ foreach (var profile in GameAgentProfile.Live)
     });
 }
 
+// Built from the factory, like the Foundry clients above, so that a singleton processor does not
+// pin one message handler for the life of the worker.
+builder.Services.AddSingleton(sp =>
+{
+    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(CardArtVerifier));
+    // Short, because the comparison is a check on an answer the pipeline already has: a catalogue
+    // image that is slow to arrive must never hold up a scan.
+    http.Timeout = TimeSpan.FromSeconds(20);
+    return new CardArtVerifier(http, sp.GetRequiredService<ILogger<CardArtVerifier>>());
+});
+
 builder.Services.AddSingleton<ScanJobProcessor>();
 builder.Services.AddHostedService<ScanJobWorker>();
 

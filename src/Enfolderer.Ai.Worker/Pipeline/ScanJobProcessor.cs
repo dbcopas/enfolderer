@@ -26,6 +26,7 @@ public sealed class ScanJobProcessor
     private readonly ScanPipelineOptions _options;
     private readonly TokenCredential _credential;
     private readonly ScanPlatformOptions _platform;
+    private readonly CardArtVerifier? _artVerifier;
     private readonly ILogger<ScanJobProcessor> _log;
 
     public ScanJobProcessor(
@@ -36,7 +37,8 @@ public sealed class ScanJobProcessor
         ScanPipelineOptions options,
         TokenCredential credential,
         ScanPlatformOptions platform,
-        ILogger<ScanJobProcessor> log)
+        ILogger<ScanJobProcessor> log,
+        CardArtVerifier? artVerifier = null)
     {
         _jobs = jobs;
         _images = images;
@@ -45,6 +47,9 @@ public sealed class ScanJobProcessor
         _options = options;
         _credential = credential;
         _platform = platform;
+        // Optional so the offline pipeline, which has no network, runs unchanged: with no verifier
+        // every card simply goes unchecked, which is what an unreachable catalogue would do too.
+        _artVerifier = artVerifier;
         _log = log;
     }
 
@@ -211,8 +216,10 @@ public sealed class ScanJobProcessor
 
         var corrected = string.Equals(card.Resolution, "corrected", StringComparison.OrdinalIgnoreCase);
 
-        _log.Log(doubtful || !card.HasPrinting ? LogLevel.Warning : LogLevel.Information,
-            "Card {Index} of job {JobId}: {Set} {Number} ({Name}, {Language}) resolved as {Resolution}{Read}.",
+        var moved = string.Equals(card.ArtVerdict, "moved", StringComparison.OrdinalIgnoreCase);
+
+        _log.Log(doubtful || moved || !card.HasPrinting ? LogLevel.Warning : LogLevel.Information,
+            "Card {Index} of job {JobId}: {Set} {Number} ({Name}, {Language}) resolved as {Resolution}{Read}{Art}.",
             index, jobId, card.Set, card.CollectorNumber ?? "(no number)", card.Name, card.Language, card.Resolution,
             corrected && !string.IsNullOrWhiteSpace(card.ReadCollectorNumber)
                 ? $" — the number read off the card was '{card.ReadCollectorNumber}'"
@@ -220,8 +227,34 @@ public sealed class ScanJobProcessor
                     ? " — no set code was read off the card and no number matched one, so that set and "
                       + "number are the catalogue's default printing of the name, not this card's. "
                       + "Check the art before believing them."
-                    : string.Empty);
+                    : string.Empty,
+            DescribeArt(card));
     }
+
+    /// <summary>
+    /// What the picture comparison added to this card, as a clause for the resolution line.
+    /// <para>
+    /// The margin is what is reported, not the distance. A photograph through a sleeve is never
+    /// close to a catalogue scan in absolute terms, so the distance alone would read as alarming
+    /// on cards that are perfectly right; being clearly nearer one printing than every other is
+    /// the entire claim being made, and the number that carries it.
+    /// </para>
+    /// <para>
+    /// Silence where nothing was compared is deliberate. "Inconclusive" is said out loud because
+    /// it means the check ran and declined — the usual outcome for a reprint that shares its
+    /// illustration — and that is different from a check that never happened.
+    /// </para>
+    /// </summary>
+    private static string DescribeArt(IdentifiedCard card) => card.ArtVerdict?.ToLowerInvariant() switch
+    {
+        "agrees" => $", and the art matches that printing (clearer than the next by {card.ArtMargin:0.00})",
+        "moved" => $", then moved to {card.Set} {card.CollectorNumber} because the art matches it and not "
+                 + $"{card.ArtMovedFrom} (clearer by {card.ArtMargin:0.00}). The set or number read off the "
+                 + "card belongs to a different printing of it",
+        "inconclusive" => ", and the art could not separate its printings, which is what a shared "
+                        + "illustration looks like and is not a fault",
+        _ => string.Empty
+    };
 
     private async Task<List<IdentifiedCard>> IdentifyAllAsync(
         ScanJobDocument job,
@@ -265,6 +298,15 @@ public sealed class ScanJobProcessor
                 var image = new AgentImage(cropBytes, Path.GetFileName(cropPath), "image/png");
                 var crop = new CardCrop(index, image, boundary.Quad, boundary.GameHint);
                 var card = await agent.IdentifyAsync(crop, ct);
+
+                // After the agent, not instead of it. The agent reads the card; this asks whether
+                // the printing it settled on looks like the thing photographed, which is the one
+                // question the text cannot answer — a name, a set and a number can all be real and
+                // all agree, and still describe a different printing of the same card.
+                if (_artVerifier is not null)
+                {
+                    card = await _artVerifier.VerifyAsync(card, cropBytes, job.JobId, ct);
+                }
 
                 // A card the agent declines to identify is not an exception: the run succeeded and
                 // the JSON parsed. Logged here because otherwise the only trace is the final count,
