@@ -179,7 +179,14 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
 
             Return ONLY a JSON object, with no prose and no markdown fences:
             {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
-             "confidence":0.0,"resolution":"","readCollectorNumber":"","readSet":""}
+             "confidence":0.0,"resolution":"","readCollectorNumber":"","readSet":"","alternates":[]}
+
+            "alternates" is the list of that name under the same key in the tool's reply. Copy it
+            across unchanged — every entry, every field, the URLs character for character — and
+            leave it empty only if the tool gave you none. Do not look at the pictures, do not
+            shorten the list and do not choose between them: that is done elsewhere, by whoever
+            holds the photograph, and it is the only check there is on a reading whose every field
+            is plausible and whose printing is still the wrong one.
 
             "name" is the catalogue's English name, whatever language the card is printed in, and
             "language" is the language the card itself is printed in.
@@ -234,7 +241,8 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             ReadCollectorNumber = Read("readCollectorNumber"),
             ReadSet = Read("readSet"),
             Confidence = confidence,
-            Agent = agentId
+            Agent = agentId,
+            ArtReferences = ReadArtReferences(root)
         };
 
         // The reply goes into the error because this is the case that looks like success from the
@@ -246,6 +254,42 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             {
                 Error = "Agent reply was missing the set or the name: " + AgentJson.Summarize(reply)
             };
+    }
+
+    /// <summary>
+    /// The printings the catalogue offered pictures of, copied through by the agent.
+    /// <para>
+    /// Every failure here is silent on purpose. The list is the model repeating a tool's output,
+    /// so it can arrive truncated, reshaped, renamed or not at all, and none of that is a reason
+    /// to reject a card whose name and set were read correctly. A missing list means the art
+    /// cannot be checked; it does not mean the reading is wrong.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<CardArtReference> ReadArtReferences(JsonElement root)
+    {
+        if (!root.TryGetProperty("alternates", out var alternates)) return [];
+        if (alternates.ValueKind != JsonValueKind.Array) return [];
+
+        var references = new List<CardArtReference>();
+        foreach (var entry in alternates.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.Object) continue;
+
+            var url = Text(entry, "imageUrl");
+            if (string.IsNullOrWhiteSpace(url)) continue;
+
+            references.Add(new CardArtReference(
+                Text(entry, "set") ?? string.Empty,
+                Text(entry, "collectorNumber") ?? string.Empty,
+                url));
+        }
+
+        return references;
+
+        static string? Text(JsonElement element, string property) =>
+            element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
     }
 
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

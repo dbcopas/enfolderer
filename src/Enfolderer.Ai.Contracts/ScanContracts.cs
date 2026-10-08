@@ -151,6 +151,53 @@ public sealed record IdentifiedCard
     [JsonPropertyName("error")] public string? Error { get; init; }
 
     /// <summary>
+    /// What comparing the photograph against this card's catalogue pictures showed:
+    /// <c>agrees</c>, <c>moved</c>, <c>inconclusive</c>, or null when no comparison was made.
+    /// <para>
+    /// This is the only check on the identification that does not consult the text. Every other
+    /// field can be self-consistent and still wrong — a real name, a real set, and that set's real
+    /// number for that name describe a card that exists but may not be the card in the
+    /// photograph — and that is precisely what an alternate-art reprint looks like.
+    /// </para>
+    /// <para>
+    /// <c>inconclusive</c> is the ordinary case, not a failure: most reprints share one
+    /// illustration, and where they do the pictures cannot separate them. It means the comparison
+    /// was made and declined to speak, which is different from it never having run.
+    /// </para>
+    /// </summary>
+    [JsonPropertyName("artVerdict")] public string? ArtVerdict { get; init; }
+
+    /// <summary>
+    /// How far the closest catalogue picture was ahead of the next closest, 0..1.
+    /// <para>
+    /// The margin, not the distance, is what makes the verdict worth anything. A photograph
+    /// through a sleeve is never close to a catalogue scan in absolute terms, so the distance on
+    /// its own says little; being clearly nearer one printing than all the others is the whole
+    /// claim.
+    /// </para>
+    /// </summary>
+    [JsonPropertyName("artMargin")] public double? ArtMargin { get; init; }
+
+    /// <summary>
+    /// Where the card was before the pictures moved it, as <c>set number</c>, and null when
+    /// nothing moved. Kept so a move can be seen rather than inferred, exactly as
+    /// <see cref="ReadCollectorNumber"/> is.
+    /// </summary>
+    [JsonPropertyName("artMovedFrom")] public string? ArtMovedFrom { get; init; }
+
+    /// <summary>
+    /// The printings the catalogue offered for comparison, carried from the agent's reply to the
+    /// orchestrator and no further.
+    /// <para>
+    /// Not serialised: these are addresses of catalogue images, useful only while the photograph
+    /// is still in hand. By the time the result reaches the desktop the comparison has been made
+    /// and <see cref="ArtVerdict"/> is what survives of it.
+    /// </para>
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<CardArtReference> ArtReferences { get; init; } = [];
+
+    /// <summary>
     /// True when the card has enough catalogue data to be exported: a name and the set it is in.
     /// <para>
     /// The collector number is deliberately <em>not</em> required. It is the least legible thing on
@@ -305,3 +352,14 @@ public static class ScanJson
         PropertyNameCaseInsensitive = true
     };
 }
+
+/// <summary>
+/// One printing of a card and where the catalogue's picture of it lives, as reported by the
+/// identification agent.
+/// </summary>
+/// <param name="ImageUrl">
+/// Never trusted as given. The orchestrator fetches it, so it is a caller-supplied address for an
+/// outbound request, and the only thing standing between a mangled or invented URL and the
+/// worker's network is the host check applied before the fetch.
+/// </param>
+public sealed record CardArtReference(string Set, string CollectorNumber, string ImageUrl);
