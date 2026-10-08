@@ -39,7 +39,10 @@ public sealed class MtgCatalogueTools
         field small enough that it picks the card out rather than landing on a stranger.
 
         Read "resolution" in the reply: confirmed (name and number agreed), corrected (they did
-        not, and the name won), named (no number was read), fuzzy (the name matched only
+        not, and the name won), named (no number was read, and the name is printed in that set
+        only, so the set code had nothing to get wrong), unverified (no number was read, the name
+        is printed in other sets too, and the set code you gave is the only thing that chose this
+        printing - nothing read off the card agreed with it), fuzzy (the name matched only
         approximately), unplaced (the name is certain but nothing placed it - no set code was read
         and no number matched one, so the set and number in the reply are the catalogue's default
         printing and are a guess), assumed (no name was read, so nothing corroborated the number),

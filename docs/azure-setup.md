@@ -2288,7 +2288,8 @@ there is more than one. The reply says how it was settled:
 | `resolution` | What it means | What to doubt |
 | --- | --- | --- |
 | `confirmed` | One printing of that name in that set, and the number read matches it. | Nothing. |
-| `named` | One printing of that name, and no number was read. Just as good. | Nothing. |
+| `named` | No number was read, but that name is printed in that set and nowhere else, so the set code had nothing to choose between. Just as good. | Nothing. |
+| `unverified` | No number was read, the name is printed in several sets, and the set code alone picked this one. | The printing. Not because the set code looks wrong, but because nothing corroborated it. |
 | `corrected` | The number read named a different card. `collectorNumber` is the catalogue's; `readCollectorNumber` is what the agent read. | Nothing — this is the mechanism working. Expect it often. |
 | `fuzzy` | The name matched only approximately. | The set and the number. The card itself is right. |
 | `unplaced` | The name is certain, but no set code was read and no number matched one of that name's printings. The set and number are the catalogue's default printing. | The set and the number, entirely. They are a guess that looks like a reading. |
@@ -2576,6 +2577,39 @@ foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
 
 ./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid -McpServerUrl $mcp
 ```
+
+### Why a wrong set code is the one mistake nothing catches
+
+Every other misreading leaves a mark. A misread name finds no card. A misread number lands on a
+different card and gets corrected, or on no card at all. A set code is the exception, and it is the
+exception in the worst possible way.
+
+If the agent sends a set code it did not read off the card — because it recognised the card and
+remembered where the card "is from" — the lookup does not fail. That set is real, it really does
+print that card, and the catalogue hands back a real printing of the right card. The name is right,
+the set exists, the number is a genuine number in it. There is nothing in the answer to be
+suspicious of.
+
+This is why the two most famous cards in a photograph are the ones that come back wrong. Recognition
+is what produces the remembered set code, and the cards with the most printings are the ones most
+likely to be recognised — so the remembered printing is least likely to be the one in the binder
+exactly where the recall is most confident. A card printed once cannot go wrong this way at all.
+
+Two things in the pipeline exist because of this, and neither is a check on the set code itself,
+because no such check is possible:
+
+- **`unverified`.** When no number was read and the name has printings in other sets, the set code
+  chose the printing unaided. The answer is still the best one available, but it is reported as
+  unverified rather than settled, and the desktop app lists it under *Printing not placed* for a
+  human to glance at.
+- **The art check.** When the set code *and* a number are both supplied from memory they agree with
+  each other, and text has nothing left to object with. Only comparing the photograph against each
+  candidate printing's picture can catch that one. See *Checking a printing against its own
+  picture* above.
+
+The useful habit when reading the export: a set code is only as good as the number next to it. If
+`readCollectorNumber` is empty and the card is a staple, treat the set as unconfirmed no matter how
+plausible it looks.
 
 ### If a card is named correctly but exported as the wrong printing
 
