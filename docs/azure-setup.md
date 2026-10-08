@@ -2293,7 +2293,7 @@ there is more than one. The reply says how it was settled:
 | `fuzzy` | The name matched only approximately. | The set and the number. The card itself is right. |
 | `unplaced` | The name is certain, but no set code was read and no number matched one of that name's printings. The set and number are the catalogue's default printing. | The set and the number, entirely. They are a guess that looks like a reading. |
 | `ambiguous` | The set prints that name more than once and nothing separated them. The likeliest printing is returned and `candidates` lists the rest. | The printing, never the name — every candidate carries it. |
-| `relocated` | The name was found, but not in the set code that was read. The set and number are the catalogue's; only the name came off the card. | The set, which was misread. The name is right. |
+| `relocated` | The card was found somewhere other than the set code that was read — either the name was not in that set at all, or the number read off the card belongs to a different printing of that name. | The set, which was misread. |
 | `assumed` | The name found no printing, so only the number was left. | Everything. The name was misread, so nothing checked the number. |
 | `unresolved` | Neither the name nor the number found a printing. | Everything that was read. |
 
@@ -2317,6 +2317,23 @@ when the two disagree, it is very nearly always the symbol that was misread — 
 added, every rung of the ladder was confined to that misread set, so a name read perfectly found
 nothing and the card was dropped. Now the name is tried on its own before giving up, and the answer
 says plainly that the set came from the catalogue rather than from the card.
+
+`relocated` is also the answer when the name *was* in the read set but the collector number was
+not. That disagreement has two explanations and the ladder used to consider only one of them. The
+number may have been misread, which is common — it is six-point type in a corner. Or the set may be
+wrong and the number right, which is what happens when a model recognises a famous card and
+supplies the set it remembers rather than the one on the card.
+
+What separates them is where the number lands. A misread digit lands on a *different card*: a set
+has something at nearly every number, so being wrong costs nothing to arrange. For it to land on
+another printing of the *same name* is a different matter — a name has a handful of printings
+scattered across tens of thousands of numbers — so the far likelier reading is that the number was
+right and the set was not, and the card is moved to the printing the number names. If two printings
+of the name share that number there is nothing to choose between them, and the move is not made.
+
+This is the half of the recognition problem that does not depend on the agent behaving. The
+`unplaced` rule below asks the model not to supply a set code it did not read; this one catches it
+when it does so anyway, provided it read the number.
 
 `unplaced` is the answer for a card the model **recognised** rather than read, and it is the one to
 read carefully. A vision model knows these cards. Shown a famous staple it will name the set from

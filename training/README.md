@@ -9,6 +9,12 @@ Each subdirectory holds one photograph and the ground truth for it:
   location;name;edition;collector number;foil yes no;language
   ```
 
+Every field is checked for shape, not just the first: a line must have all six, and the `edition`
+and `number` columns are the pair that get written the wrong way round, so the check insists an
+edition has a letter in it and a collector number has a digit. The listing is read by people as
+well as by the tool — it is what a scan's output gets compared against by hand — and a line in the
+wrong order makes a correct reading look wrong.
+
 `location` is `row,column`, counting from zero at the top left: `0,0` is top left, `0,2` is top
 right, `2,0` is bottom left and `2,2` is bottom right of a nine-pocket page. Pockets with no card in
 them are simply absent from the file.

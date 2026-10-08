@@ -258,6 +258,65 @@ internal static class Program
             Check(resolved.Resolution == "unresolved", "a name found nowhere at all is still unresolved");
         }
 
+        Section("A number that disagrees with the set it was read beside");
+
+        {
+            // The case from image 1: an alternate-art Sword of Hearth and Home, whose number was
+            // read correctly and whose set was supplied from memory of the original printing. The
+            // name and that set find exactly one card, its number is not the one on the photo, and
+            // the ladder used to blame the number and hand back the wrong art under 'corrected'.
+            var (catalogue, _) = Build(url =>
+                !url.Contains("/cards/search") ? null
+                : url.Contains("set%3Amh2") || url.Contains("set=mh2")
+                    ? $$"""{"data":[{{Card("mh2", "238", "Sword of Hearth and Home")}}]}"""
+                    : $$"""{"data":[{{Card("mh2", "238", "Sword of Hearth and Home")}},{{Card("tmc", "136", "Sword of Hearth and Home")}}]}""");
+            var resolved = await catalogue.ResolveAsync("Sword of Hearth and Home", "mh2", "136", null, default);
+            Check(resolved.Resolution == "relocated",
+                "a number landing on another printing of the same name moves the card");
+            Check(resolved.Printing?.Set == "tmc" && resolved.Printing?.CollectorNumber == "136",
+                "and the printing returned is the one the number picked out");
+        }
+
+        {
+            // The ordinary misreading, which must keep its ordinary answer. A wrong digit lands on
+            // a different card, not on another printing of this one, so nothing corroborates it
+            // and the set stands.
+            var (catalogue, _) = Build(url =>
+                !url.Contains("/cards/search") ? null
+                : $$"""{"data":[{{Card("mh2", "238", "Sword of Hearth and Home")}}]}""");
+            var resolved = await catalogue.ResolveAsync("Sword of Hearth and Home", "mh2", "236", null, default);
+            Check(resolved.Resolution == "corrected",
+                "a number matching no printing of the name is still a misread number");
+            Check(resolved.Printing?.CollectorNumber == "238", "and the set's printing is still the answer");
+        }
+
+        {
+            // Two printings of one name sharing a number give nothing to choose between, so the
+            // move is not made: a coincidence that happens twice is no longer evidence.
+            var (catalogue, _) = Build(url =>
+                !url.Contains("/cards/search") ? null
+                : url.Contains("set%3A2x2") || url.Contains("set=2x2")
+                    ? $$"""{"data":[{{Card("2x2", "147", "Food Chain")}}]}"""
+                    : $$"""{"data":[{{Card("2x2", "147", "Food Chain")}},{{Card("tmc", "133", "Food Chain")}},{{Card("plst", "133", "Food Chain")}}]}""");
+            var resolved = await catalogue.ResolveAsync("Food Chain", "2x2", "133", null, default);
+            Check(resolved.Resolution == "corrected",
+                "a number matching two printings of the name moves nothing");
+        }
+
+        {
+            // The same question arises when the read set holds several printings and the number
+            // matches none of them, and it must be asked there too.
+            var (catalogue, _) = Build(url =>
+                !url.Contains("/cards/search") ? null
+                : url.Contains("set%3Amh2") || url.Contains("set=mh2")
+                    ? $$"""{"data":[{{Card("mh2", "238", "Sword of Hearth and Home")}},{{Card("mh2", "441", "Sword of Hearth and Home")}}]}"""
+                    : $$"""{"data":[{{Card("mh2", "238", "Sword of Hearth and Home")}},{{Card("mh2", "441", "Sword of Hearth and Home")}},{{Card("tmc", "136", "Sword of Hearth and Home")}}]}""");
+            var resolved = await catalogue.ResolveAsync("Sword of Hearth and Home", "mh2", "136", null, default);
+            Check(resolved.Resolution == "relocated",
+                "several printings in the read set do not stop the number moving the card");
+            Check(resolved.Printing?.Set == "tmc", "and it still lands on the printing the number names");
+        }
+
         Section("One name, several printings");
 
         {
