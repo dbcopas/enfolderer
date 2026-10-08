@@ -2,7 +2,11 @@ using System.Net;
 using System.Text;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Mcp.CardCatalog.Mtg;
+using Enfolderer.Ai.Imaging;
 using Enfolderer.Ai.Worker.Agents;
+using Enfolderer.Ai.Worker.Pipeline;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace Enfolderer.Ai.CardCatalog.Check;
 
@@ -33,6 +37,10 @@ internal static class Program
         PromptChecks();
         ThrottleChecks();
         ExportGateChecks();
+        ArtImageUrlChecks().GetAwaiter().GetResult();
+        ArtHashChecks();
+        ArtAdjudicationChecks();
+        ArtFetchChecks();
 
         Console.WriteLine(_failures == 0
             ? "\nAll checks passed."
@@ -544,6 +552,272 @@ internal static class Program
     {
         var stub = new StubScryfall(reply);
         return (new ScryfallCatalogue(new HttpClient(stub)), stub);
+    }
+
+
+    /// <summary>
+    /// The address of each printing's picture, which is the only field the catalogue carries that
+    /// a reader cannot check against the card — and so the only one that can contradict a reading
+    /// whose every other field agrees with itself.
+    /// </summary>
+    private static async Task ArtImageUrlChecks()
+    {
+        Section("Carrying each printing's picture");
+
+        {
+            var printing = ScryfallCatalogue.Parse(System.Text.Json.JsonDocument.Parse(
+                """
+                {"set":"mh3","collector_number":"438","name":"Flare of Denial","lang":"en",
+                 "image_uris":{"small":"https://cards.scryfall.io/small/a.jpg",
+                               "normal":"https://cards.scryfall.io/normal/a.jpg"}}
+                """).RootElement);
+
+            Check(printing?.ImageUrl == "https://cards.scryfall.io/normal/a.jpg",
+                "a card's picture is taken at normal size, not small");
+        }
+
+        {
+            // A double-faced card carries no image_uris of its own: each face has its own set.
+            var printing = ScryfallCatalogue.Parse(System.Text.Json.JsonDocument.Parse(
+                """
+                {"set":"mid","collector_number":"49","name":"Delver // Insectile","lang":"en",
+                 "card_faces":[{"image_uris":{"normal":"https://cards.scryfall.io/normal/front.jpg"}},
+                               {"image_uris":{"normal":"https://cards.scryfall.io/normal/back.jpg"}}]}
+                """).RootElement);
+
+            Check(printing?.ImageUrl == "https://cards.scryfall.io/normal/front.jpg",
+                "a double-faced card is compared by its front, which is the side a binder shows");
+        }
+
+        {
+            var printing = ScryfallCatalogue.Parse(System.Text.Json.JsonDocument.Parse(
+                """{"set":"lea","collector_number":"1","name":"Animate Wall","lang":"en"}""").RootElement);
+
+            Check(printing is not null && printing.ImageUrl.Length == 0,
+                "a printing with no picture resolves anyway, with an empty address");
+        }
+
+        {
+            // Every printing of the name, so an alternate-art reprint can be caught: the resolved
+            // printing alone would only ever confirm itself.
+            var (catalogue, _) = Build(Searches(
+                CardWithArt("mh2", "238", "Ragavan", "https://cards.scryfall.io/normal/a.jpg"),
+                CardWithArt("sld", "1289", "Ragavan", "https://cards.scryfall.io/normal/b.jpg")));
+
+            var all = await catalogue.SearchPrintingsAsync("Ragavan", null, "en", default);
+            Check(all.Count == 2 && all.All(p => p.ImageUrl.Length > 0),
+                "every printing of a name carries its own picture");
+        }
+    }
+
+    /// <summary>
+    /// The hash, checked on pictures built here rather than on cards. Card art cannot be committed
+    /// to a public repository, and these properties — that the hash follows structure and ignores
+    /// exposure — are exactly what makes it survive the trip from a catalogue scan to a photograph
+    /// through a sleeve, so they can be checked without any card at all.
+    /// </summary>
+    private static void ArtHashChecks()
+    {
+        Section("A perceptual hash of a card face");
+
+        using var original = Gradient(240, 336, seed: 7);
+        using var brighter = Gradient(240, 336, seed: 7, brightness: 25);
+        using var smaller = Gradient(120, 168, seed: 7);
+        using var different = Gradient(240, 336, seed: 19);
+
+        var hash = CardArtHash.Compute(original);
+
+        Check(CardArtHash.Distance(hash, hash) == 0, "a picture is identical to itself");
+
+        Check(CardArtHash.NormalisedDistance(hash, CardArtHash.Compute(brighter)) < 0.02,
+            "a picture photographed under brighter light is still the same picture");
+
+        Check(CardArtHash.NormalisedDistance(hash, CardArtHash.Compute(smaller)) < 0.12,
+            "and so is one at half the resolution, which is the difference between a scan and a crop");
+
+        Check(CardArtHash.NormalisedDistance(hash, CardArtHash.Compute(different)) > 0.25,
+            "a different picture is far away, which is what makes closeness mean anything");
+
+        Check(CardArtHash.BitCount == CardArtHash.Size * CardArtHash.Size,
+            "the hash is one bit per cell of the grid");
+    }
+
+    /// <summary>
+    /// What the comparison is allowed to conclude. The case that matters most is the one where it
+    /// must say nothing: most reprints share an illustration, and there the closest candidate is
+    /// closest by noise.
+    /// </summary>
+    private static void ArtAdjudicationChecks()
+    {
+        Section("Deciding which printing a photograph shows");
+
+        {
+            var verdict = ArtAdjudicator.Adjudicate(("mh2", "238"), []);
+            Check(verdict.Verdict == ArtVerdict.NotChecked,
+                "with no pictures to compare, nothing is concluded");
+        }
+
+        {
+            // The shared-art case: four printings of one illustration, separated only by noise.
+            var verdict = ArtAdjudicator.Adjudicate(("mh2", "238"), [
+                new ArtCandidate("mh2", "238", 0.17),
+                new ArtCandidate("sld", "1289", 0.18),
+                new ArtCandidate("mul", "40", 0.18),
+                new ArtCandidate("plst", "MH2-238", 0.19)]);
+
+            Check(verdict.Verdict == ArtVerdict.Inconclusive,
+                "printings sharing one illustration cannot be told apart, and the art declines to try");
+        }
+
+        {
+            var verdict = ArtAdjudicator.Adjudicate(("mh2", "238"), [
+                new ArtCandidate("mh2", "238", 0.08),
+                new ArtCandidate("sld", "1289", 0.34)]);
+
+            Check(verdict.Verdict == ArtVerdict.Agrees && verdict.Best!.Set == "mh2",
+                "a printing whose art plainly matches is confirmed");
+        }
+
+        {
+            // The failure this exists for: every field self-consistent, wrong printing.
+            var verdict = ArtAdjudicator.Adjudicate(("mh2", "238"), [
+                new ArtCandidate("mh2", "238", 0.33),
+                new ArtCandidate("sld", "1289", 0.07)]);
+
+            Check(verdict.Verdict == ArtVerdict.Moved && verdict.Best!.Set == "sld",
+                "an alternate-art printing that matches instead takes the card");
+        }
+
+        {
+            var verdict = ArtAdjudicator.Adjudicate(("mh2", "238"), [
+                new ArtCandidate("mh2", "238", 0.44),
+                new ArtCandidate("sld", "1289", 0.47)]);
+
+            Check(verdict.Verdict == ArtVerdict.Inconclusive,
+                "a field where nothing matches says the card was misnamed, not which printing it is");
+        }
+
+        {
+            var verdict = ArtAdjudicator.Adjudicate(("lea", "1"), [new ArtCandidate("lea", "1", 0.11)]);
+            Check(verdict.Verdict == ArtVerdict.Agrees,
+                "a card printed only once has nothing to be confused with");
+        }
+
+        {
+            var verdict = ArtAdjudicator.Adjudicate(("mh2", "238"), [
+                new ArtCandidate("mh2", "238", 0.30),
+                new ArtCandidate("sld", "1289", 0.05)]);
+
+            Check(verdict.Separation > 0 && verdict.Ranked[0].Set == "sld",
+                "the margin over the runner-up is reported, because that is the whole claim");
+        }
+    }
+
+    /// <summary>
+    /// Which addresses the orchestrator will fetch, and how the list reaches it. The URLs arrive
+    /// by way of a language model repeating a tool's output, so they are caller-supplied input to
+    /// an outbound request and the host check is the whole of the protection around it.
+    /// </summary>
+    private static void ArtFetchChecks()
+    {
+        Section("Fetching a catalogue picture safely");
+
+        Check(CardArtVerifier.IsFetchable("https://cards.scryfall.io/normal/a.jpg"),
+            "the catalogue's own image host is fetched");
+        Check(!CardArtVerifier.IsFetchable("http://cards.scryfall.io/normal/a.jpg"),
+            "plain http is not, whatever the host");
+        Check(!CardArtVerifier.IsFetchable("https://cards.scryfall.io.evil.test/normal/a.jpg"),
+            "a host that merely contains the allowed name is refused");
+        Check(!CardArtVerifier.IsFetchable("https://169.254.169.254/metadata"),
+            "and so is the instance metadata address, which is what an invented URL would reach for");
+        Check(!CardArtVerifier.IsFetchable("not a url"), "so is anything that will not parse");
+        Check(!CardArtVerifier.IsFetchable(""), "and nothing at all");
+
+        {
+            var card = FoundryCardIdentificationAgent.ParseIdentification(
+                """
+                {"set":"mh2","collectorNumber":"238","name":"Ragavan","resolution":"confirmed",
+                 "alternates":[{"set":"mh2","collectorNumber":"238","imageUrl":"https://cards.scryfall.io/normal/a.jpg"},
+                               {"set":"sld","collectorNumber":"1289","imageUrl":"https://cards.scryfall.io/normal/b.jpg"}]}
+                """,
+                StubCrop(), CardGames.Magic, "cardid/MtgCardIdAgent");
+
+            Check(card.ArtReferences.Count == 2 && card.ArtReferences[1].Set == "sld",
+                "the printings the agent copied through reach the orchestrator");
+        }
+
+        {
+            // An agent that drops the list is not an agent that read the card wrongly.
+            var card = FoundryCardIdentificationAgent.ParseIdentification(
+                """{"set":"mh2","collectorNumber":"238","name":"Ragavan","resolution":"confirmed"}""",
+                StubCrop(), CardGames.Magic, "cardid/MtgCardIdAgent");
+
+            Check(card.IsIdentified && card.ArtReferences.Count == 0,
+                "a reply with no pictures in it is still a good identification");
+        }
+
+        {
+            var card = FoundryCardIdentificationAgent.ParseIdentification(
+                """
+                {"set":"mh2","collectorNumber":"238","name":"Ragavan","alternates":[{"set":"mh2"},"rubbish",
+                 {"set":"sld","collectorNumber":"1289","imageUrl":"https://cards.scryfall.io/normal/b.jpg"}]}
+                """,
+                StubCrop(), CardGames.Magic, "cardid/MtgCardIdAgent");
+
+            Check(card.ArtReferences.Count == 1 && card.ArtReferences[0].Set == "sld",
+                "entries the model mangled are dropped one by one, not all at once");
+        }
+
+        Check(FoundryCardIdentificationAgent.BuildPrompt(GameAgentProfile.Mtg).Contains("alternates"),
+            "and the agent is asked for them in the first place");
+    }
+
+    /// <summary>A card crop with no image in it, for checks that only parse a reply.</summary>
+    private static CardCrop StubCrop() =>
+        new(0,
+            new AgentImage(ReadOnlyMemory<byte>.Empty, "card-000.png", "image/png"),
+            new CardQuad([new ImagePoint(0, 0), new ImagePoint(1, 0), new ImagePoint(1, 1), new ImagePoint(0, 1)]),
+            null);
+
+    /// <summary>A Scryfall card object that also carries a picture.</summary>
+    private static string CardWithArt(string set, string number, string name, string imageUrl) =>
+        $$$"""
+           {"set":"{{{set}}}","collector_number":"{{{number}}}","name":"{{{name}}}","lang":"en",
+            "printed_name":"","image_uris":{"normal":"{{{imageUrl}}}"}}
+           """;
+
+    /// <summary>
+    /// A synthetic picture with structure in it, as a PNG stream. <paramref name="seed"/> chooses
+    /// the picture; <paramref name="brightness"/> shifts every pixel without changing which parts
+    /// are lighter than their neighbours, which is what a different exposure does to a photograph.
+    /// </summary>
+    private static MemoryStream Gradient(int width, int height, int seed, int brightness = 0)
+    {
+        using var image = new Image<Rgba32>(width, height);
+        var random = new Random(seed);
+        var blobs = Enumerable.Range(0, 12)
+            .Select(_ => (X: random.NextDouble(), Y: random.NextDouble(), Weight: random.NextDouble() * 2 - 1))
+            .ToArray();
+
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var fx = (double)x / width;
+                var fy = (double)y / height;
+                var value = blobs.Sum(b => b.Weight / (0.02 + ((fx - b.X) * (fx - b.X)) + ((fy - b.Y) * (fy - b.Y))));
+                // Squashed rather than clipped: a clipped picture loses its structure in the
+                // bright and dark corners, and shifting the exposure would then genuinely change
+                // it, which is the opposite of what this picture is for.
+                var level = (byte)Math.Clamp((Math.Tanh(value / 12) * 90) + 128 + brightness, 0, 255);
+                image[x, y] = new Rgba32(level, level, level);
+            }
+        }
+
+        var stream = new MemoryStream();
+        image.SaveAsPng(stream);
+        stream.Position = 0;
+        return stream;
     }
 
     /// <summary>A Scryfall card object, as much of one as the catalogue reads.</summary>
