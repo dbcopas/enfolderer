@@ -50,6 +50,12 @@ public sealed class MtgCatalogueTools
 
         Only "unresolved" has no answer in it. Everything else returns a printing you should use;
         the resolution says how much to trust the set and number, never the name.
+
+        The reply also carries "alternates": every printing of this card with a picture of it.
+        Copy that list into your answer exactly as it is given, verbatim and unabridged. You are
+        not being asked to look at the pictures or to choose between them — whoever has the
+        photograph will do that — only to carry the list across. It is what lets a reading that
+        looks perfect in every field still be caught when it is of the wrong printing.
         """)]
     public async Task<string> ResolvePrintingAsync(
         [Description("Card name exactly as the title bar prints it, in whatever language it is printed in. Never join a second spell's name to it with '//'.")] string name,
@@ -94,10 +100,59 @@ public sealed class MtgCatalogueTools
                 collectorNumber = c.CollectorNumber,
                 name = c.Name,
                 printedName = c.PrintedName,
-                language = c.Language
+                language = c.Language,
+                imageUrl = c.ImageUrl
+            }),
+            // The catalogue's picture of the printing above, so the caller can check its answer
+            // against the photograph rather than only against itself.
+            imageUrl = resolved.Printing.ImageUrl,
+            // Every printing of this card, not just the ones that were hard to tell apart.
+            //
+            // The reading this exists to catch is the one that looks perfect: a real name, a real
+            // set, and that set's real number for that name. Nothing above can object to it,
+            // because every field is true of some printing — just not of the one in the
+            // photograph. Alternate art is where that happens, and it happens silently.
+            //
+            // So the list is unconditional. Whoever holds the photograph can compare it against
+            // these and see which printing it actually is; where several share an illustration the
+            // comparison will decline, which costs nothing. The cost of leaving them out is that
+            // the check cannot be made at all.
+            alternates = (await AlternatesAsync(resolved.Printing, language, ct)).Select(c => new
+            {
+                set = c.Set,
+                collectorNumber = c.CollectorNumber,
+                imageUrl = c.ImageUrl
             })
         });
     }
+
+    /// <summary>
+    /// Every printing of a resolved card that has a picture, the resolved one included.
+    /// <para>
+    /// Capped, because this is copied into an agent's reply and a long list is both slow and
+    /// likely to be copied badly. Cards with more printings than this are the heavily reprinted
+    /// staples, which are also the ones most likely to share one illustration — the case the
+    /// comparison declines on anyway — so the cap costs the least where it binds.
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyList<CataloguePrinting>> AlternatesAsync(
+        CataloguePrinting printing, string? language, CancellationToken ct)
+    {
+        try
+        {
+            var all = await _catalogue.SearchPrintingsAsync(printing.Name, null, language, ct);
+            return all.Where(p => !string.IsNullOrEmpty(p.ImageUrl)).Take(MaxAlternates).ToList();
+        }
+        catch (Exception)
+        {
+            // A reading that cannot be checked is still a reading. Failing the whole resolution
+            // because the extra search failed would turn a working answer into no answer.
+            return string.IsNullOrEmpty(printing.ImageUrl) ? [] : [printing];
+        }
+    }
+
+    /// <summary>How many printings of one card are offered for comparison.</summary>
+    private const int MaxAlternates = 12;
 
     [McpServerTool(Name = "lookup_by_set_and_number")]
     [Description("Look up the exact Magic printing for a set code and collector number, e.g. set 'bro', number '167'.")]

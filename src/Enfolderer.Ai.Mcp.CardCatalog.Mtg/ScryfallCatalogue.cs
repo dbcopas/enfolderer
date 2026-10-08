@@ -9,12 +9,23 @@ namespace Enfolderer.Ai.Mcp.CardCatalog.Mtg;
 /// The name in the language the card was printed in, where that differs from the English name. A
 /// Japanese card carries no English text at all, so this is the only name a reader can check.
 /// </param>
+/// <param name="ImageUrl">
+/// The catalogue's picture of this printing's front face, or empty where it has none.
+/// <para>
+/// This is the only field here that is not read off the card, and it is the only one that can
+/// contradict the rest. A name, a set and a collector number that agree with each other are
+/// satisfied by any printing of that card — including one the photograph plainly is not — so a
+/// reading can be wrong in a way no text check can see. The picture is what settles it, and
+/// carrying its address costs one string per printing.
+/// </para>
+/// </param>
 public sealed record CataloguePrinting(
     string Set,
     string CollectorNumber,
     string Name,
     string Language,
-    string PrintedName = "");
+    string PrintedName = "",
+    string ImageUrl = "");
 
 /// <summary>
 /// How a reading was settled. Every answer carries one, so a scan can be diagnosed from the log
@@ -704,6 +715,50 @@ public sealed class ScryfallCatalogue
             Read("collector_number"),
             name,
             string.IsNullOrEmpty(language) ? "en" : language,
-            Read("printed_name"));
+            Read("printed_name"),
+            ReadImageUrl(root));
+    }
+
+    /// <summary>
+    /// The address of this printing's front face at a size worth comparing.
+    /// <para>
+    /// A single-faced card carries <c>image_uris</c> itself. A double-faced one carries none and
+    /// puts a set per face in <c>card_faces</c>, so the front face is taken: that is the side a
+    /// photograph of a card in a binder shows, and the back is a different picture entirely.
+    /// </para>
+    /// <para>
+    /// <c>normal</c> rather than <c>art_crop</c>, because the crop this is compared against is a
+    /// whole card face. Where the illustration sits inside the face depends on the frame, and the
+    /// printings most worth telling apart — borderless, showcase, full-art — are exactly the ones
+    /// with no fixed illustration window, so cropping to the art would mean solving the frame
+    /// first and would compare one card's art against another card's border when it got it wrong.
+    /// </para>
+    /// </summary>
+    private static string ReadImageUrl(JsonElement root)
+    {
+        if (TryNormal(root, out var url)) return url;
+
+        if (root.TryGetProperty("card_faces", out var faces)
+            && faces.ValueKind == JsonValueKind.Array
+            && faces.GetArrayLength() > 0
+            && TryNormal(faces[0], out var faceUrl))
+        {
+            return faceUrl;
+        }
+
+        return string.Empty;
+
+        static bool TryNormal(JsonElement element, out string url)
+        {
+            url = string.Empty;
+            if (element.ValueKind != JsonValueKind.Object) return false;
+            if (!element.TryGetProperty("image_uris", out var images)) return false;
+            if (images.ValueKind != JsonValueKind.Object) return false;
+            if (!images.TryGetProperty("normal", out var normal)) return false;
+            if (normal.ValueKind != JsonValueKind.String) return false;
+
+            url = normal.GetString() ?? string.Empty;
+            return !string.IsNullOrEmpty(url);
+        }
     }
 }
