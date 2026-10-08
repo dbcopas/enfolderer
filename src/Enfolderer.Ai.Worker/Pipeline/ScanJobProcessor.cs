@@ -224,11 +224,15 @@ public sealed class ScanJobProcessor
             index, jobId, card.Set, card.CollectorNumber ?? "(no number)", card.Name, card.Language, card.Resolution,
             corrected && !string.IsNullOrWhiteSpace(card.ReadCollectorNumber)
                 ? $" — the number read off the card was '{card.ReadCollectorNumber}'"
-                : !card.PrintingWasPlaced
-                    ? " — no set code was read off the card and no number matched one, so that set and "
-                      + "number are the catalogue's default printing of the name, not this card's. "
-                      + "Check the art before believing them."
-                    : string.Empty,
+                : string.Equals(card.Resolution, "unverified", StringComparison.OrdinalIgnoreCase)
+                    ? " — no number was read, so that set code alone chose between this name's "
+                      + "printings with nothing to corroborate it. A set code supplied from "
+                      + "recognising the card looks exactly like one read off it. Check the art."
+                    : !card.PrintingWasPlaced
+                        ? " — no set code was read off the card and no number matched one, so that set and "
+                          + "number are the catalogue's default printing of the name, not this card's. "
+                          + "Check the art before believing them."
+                        : string.Empty,
             DescribeArt(card));
     }
 

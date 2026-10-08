@@ -48,6 +48,10 @@
 .PARAMETER ApiVersion
     Foundry data-plane API version. Must match ScanPipeline:FoundryApiVersion in the worker.
 
+.PARAMETER PassThru
+    Return the provisioned agents as objects (Name, Id, File) instead of printing a table. Used by
+    scripts/update-demo.ps1 to carry Team A's agent id across to Team B, which cannot look it up.
+
 .PARAMETER WhatIf
     Show the request bodies that would be sent without calling Azure.
 
@@ -76,7 +80,8 @@ param(
     [string[]] $Only,
     [hashtable] $McpServerUrl = @{},
     [hashtable] $ConnectedAgentId = @{},
-    [string] $ApiVersion = 'v1'
+    [string] $ApiVersion = 'v1',
+    [switch] $PassThru
 )
 
 Set-StrictMode -Version Latest
@@ -424,4 +429,7 @@ $results = foreach ($file in $files) {
     }
 }
 
-$results | Format-Table -AutoSize
+# Format-Table is for a person reading the run. A caller that needs the ids back - to pass an agent
+# in one project to an orchestrator in another, which cannot list it - asks for the objects instead,
+# because the boundary that makes those ids worth returning also makes them impossible to look up.
+if ($PassThru) { $results } else { $results | Format-Table -AutoSize }
