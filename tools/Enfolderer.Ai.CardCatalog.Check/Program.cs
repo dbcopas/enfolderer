@@ -41,6 +41,7 @@ internal static class Program
         ArtHashChecks();
         ArtAdjudicationChecks();
         ArtFetchChecks();
+        RecalledSetChecks().GetAwaiter().GetResult();
 
         Console.WriteLine(_failures == 0
             ? "\nAll checks passed."
@@ -818,6 +819,110 @@ internal static class Program
         image.SaveAsPng(stream);
         stream.Position = 0;
         return stream;
+    }
+
+
+    /// <summary>
+    /// Photo 1, cards 0,0 and 0,1: two TMC cards that kept exporting as <c>mh2 238</c> and
+    /// <c>2x2 147</c> — the original printing of each, which is what recall returns.
+    /// <para>
+    /// Both are the most reprinted cards in that photograph, and that is not a coincidence. A set
+    /// code is supplied from memory when the card is recognised, and the recognisable cards are
+    /// the ones with a dozen printings, so the chance of the remembered one being the one in the
+    /// binder is worst exactly where the memory is most confident.
+    /// </para>
+    /// <para>
+    /// A recalled set code does not fail. It is a real set that really does print that card, so
+    /// every rung of the ladder filters on it happily and hands back a real printing of the right
+    /// card from the wrong set. These checks pin down which readings survive that and which do
+    /// not, because the difference is invisible in the answer.
+    /// </para>
+    /// </summary>
+    private static async Task RecalledSetChecks()
+    {
+        Section("A set code that was remembered rather than read");
+
+        // Sword of Hearth and Home: the photographed card is TMC 136; mh2 238 is the printing a
+        // model remembers it by.
+        const string Sword = "Sword of Hearth and Home";
+        var printings = Searches(
+            CardWithArt("mh2", "238", Sword, "https://cards.scryfall.io/normal/mh2.jpg"),
+            CardWithArt("tmc", "136", Sword, "https://cards.scryfall.io/normal/tmc.jpg"));
+
+        // The set is filtered server-side, so the stub has to do it too or every query looks
+        // like a search of everything and the set code appears never to narrow anything.
+        Func<string, string?> catalogue = url =>
+        {
+            if (!url.Contains("/cards/search")) return null;
+            var asked = Uri.UnescapeDataString(url);
+            var set = asked.Contains("set:mh2") ? "mh2" : asked.Contains("set:tmc") ? "tmc" : null;
+            var body = printings(url);
+            if (set is null || body is null) return body;
+            return body.Contains($"\"{set}\"")
+                ? $$"""{"data":[{{(set == "mh2"
+                        ? CardWithArt("mh2", "238", Sword, "https://cards.scryfall.io/normal/mh2.jpg")
+                        : CardWithArt("tmc", "136", Sword, "https://cards.scryfall.io/normal/tmc.jpg"))}}]}"""
+                : null;
+        };
+
+        async Task<ResolvedPrinting> Resolve(string set, string? number)
+        {
+            var (cat, _) = Build(catalogue);
+            return await cat.ResolveAsync(Sword, set, number, "en", default);
+        }
+
+        {
+            // The number was read and disagrees with the remembered set. It lands on another
+            // printing of the same name, which is remote enough to be evidence, so the card moves.
+            var r = await Resolve("mh2", "136");
+            Check(r.Printing?.Set == "tmc" && r.Resolution == Resolutions.Relocated,
+                "a read number overrules the set code it was read beside");
+        }
+
+        {
+            // Nothing was read that could disagree. The printing cannot be improved on here — but
+            // it must not be reported as settled, because the set code chose it unaided.
+            var r = await Resolve("mh2", null);
+            Check(r.Printing?.Set == "mh2" && r.Resolution == Resolutions.Unverified,
+                "with no number, a set code that chose between printings is not treated as proof");
+        }
+
+        {
+            var r = await Resolve("mh2", null);
+            var card = new IdentifiedCard { Set = r.Printing!.Set, Name = Sword, Resolution = r.Resolution };
+            Check(card.IsIdentified && !card.PrintingWasPlaced,
+                "so the row is still exported, and still sent to a human to check against the art");
+        }
+
+        {
+            // The one reading text cannot save: set and number both remembered, agreeing with each
+            // other and with a real printing. Only the picture is left to object.
+            var r = await Resolve("mh2", "238");
+            Check(r.Printing?.Set == "mh2" && r.Resolution == Resolutions.Confirmed,
+                "a recalled set and a recalled number corroborate each other, and only the art can object");
+        }
+
+        {
+            // Which is why leaving the set code out is better than filling it in from memory.
+            var r = await Resolve("", "136");
+            Check(r.Printing?.Set == "tmc",
+                "no set code plus a read number finds the card outright");
+        }
+
+        {
+            var r = await Resolve("tmc", "136");
+            Check(r.Printing?.Set == "tmc" && r.Resolution == Resolutions.Confirmed,
+                "and a set code actually read off the card needs none of this");
+        }
+
+        {
+            // A card printed in one set only: the set code had nothing to choose, so a missing
+            // number costs nothing and this must stay `named` rather than being swept up as doubt.
+            var (cat, _) = Build(Searches(Card("blb", "61", "Mockingbird")));
+            var r = await cat.ResolveAsync("Mockingbird", "blb", null, "en", default);
+            Check(r.Resolution == Resolutions.Named,
+                "a card printed only once is still settled by its name alone");
+        }
     }
 
     /// <summary>A Scryfall card object, as much of one as the catalogue reads.</summary>

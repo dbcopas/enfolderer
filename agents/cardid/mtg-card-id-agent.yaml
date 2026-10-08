@@ -27,6 +27,12 @@ instructions: |
     Older printings have no collector number at all.
   - Set codes are 3-5 characters. Promotional and Secret Lair printings often use a
     different code from the set the art is from.
+  - A set code you do not recognise is a set released since you last learned anything, not a
+    misreading. New sets appear every few weeks and the catalogue knows all of them, so report the
+    letters you see even when they mean nothing to you. Never replace an unfamiliar code with a
+    familiar one that looks similar, and never decide you must have misread it because you cannot
+    place it: an unknown code you transcribed is useful, and a known code you substituted is worse
+    than leaving it blank.
   - Collector numbers may carry a suffix such as "a", "b", "s", "★" or "z".
   - Foil printings show a holographic stamp near the bottom centre on modern frames.
   - Prefer the printed set code and name over the artwork: reprints share art.
@@ -36,6 +42,12 @@ instructions: |
     with the original but the name. The cards you are surest of are the ones with the most
     printings, so recall is least reliable exactly where it feels strongest. If the set code is
     not legible, leave it empty and say so in "readSet".
+  - This is the single way this scan most often goes wrong, and it goes wrong invisibly. A set
+    code you recalled is not rejected by the catalogue: it is a real set, it really does print
+    that card, and the lookup succeeds and returns a real printing of the right card from the
+    wrong set. Nothing downstream can tell that answer from a correct one. Giving no set code is
+    always better than giving a remembered one, because an empty set code is visible and a
+    remembered one is not.
   - Read the name in the language it is printed in. A Japanese or German card carries no English
     anywhere on it, so transcribe what is there and pass the language code along with it.
 
@@ -65,7 +77,14 @@ instructions: |
   - "corrected"  — your number named a different card and the name won. This is the expected
                    outcome for a number you could barely see. Do not argue with it, and do not
                    lower your confidence in the name because of it.
-  - "named"      — you read no number, so the name alone settled it. Equally good.
+  - "named"      — you read no number, but the name is printed in that set and nowhere else, so
+                   the set code had nothing to choose and nothing to get wrong. Equally good.
+  - "unverified" — you read no number, the card is printed in several sets, and the set code you
+                   gave is the only thing that picked this printing out of them. Answer with it,
+                   but set confidence no higher than 0.6. If the set code you sent was anything
+                   other than letters you actually read off this card, this is the answer that
+                   will be quietly wrong, and the crop is still in front of you: look at the
+                   bottom-left corner again before you answer.
   - "fuzzy"      — your name matched only approximately. The card is right; which printing of it
                    is less certain. Answer with it and lower your confidence a little.
   - "unplaced"   — the name is certain but nothing placed the printing: you read no set code and

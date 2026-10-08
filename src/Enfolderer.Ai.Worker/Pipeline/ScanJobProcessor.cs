@@ -211,6 +211,7 @@ public sealed class ScanJobProcessor
                     && (card.Resolution.Equals("corrected", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("fuzzy", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("unplaced", StringComparison.OrdinalIgnoreCase)
+                     || card.Resolution.Equals("unverified", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("relocated", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("ambiguous", StringComparison.OrdinalIgnoreCase));
 

@@ -45,8 +45,42 @@ public static class Resolutions
     /// <summary>
     /// Only the name was read; the number comes from the catalogue and nothing corroborated it.
     /// Safe when the set holds the name once, which is why ambiguity is a separate answer.
+    /// <para>
+    /// Safe, that is, when the name is printed in that set and nowhere else. When it is printed
+    /// elsewhere too, the set code alone chose between those printings and nothing checked it —
+    /// that is <see cref="Unverified"/>, not this.
+    /// </para>
     /// </summary>
     public const string Named = "named";
+
+    /// <summary>
+    /// The name and the set code found exactly one printing, no number was read, and the same name
+    /// is printed in other sets as well. The printing is real and the name is certain; what is
+    /// uncorroborated is the set code, and it is the only thing that chose this printing over the
+    /// others.
+    /// <para>
+    /// This is split out from <see cref="Named"/> because the two look identical in the answer and
+    /// are worth very different amounts. Every rung of the ladder filters on the set code, so a
+    /// wrong one does not fail — it quietly restricts the search to the wrong place and returns a
+    /// real printing of the right card. When a collector number was read, that is caught:
+    /// <see cref="Relocated"/> exists exactly for it. When no number was read, nothing is left to
+    /// disagree with the set code, and a recalled set code is then indistinguishable from a read
+    /// one.
+    /// </para>
+    /// <para>
+    /// That matters because recall is strongest where it is least reliable. A model supplies a set
+    /// from memory when it recognises the card, and it recognises the famous ones — which are the
+    /// heavily reprinted ones, where the odds of the remembered printing being the one in the
+    /// photograph are worst. A card printed once is both unlikely to be recalled wrongly and
+    /// impossible to place wrongly; this answer is reserved for the other kind.
+    /// </para>
+    /// <para>
+    /// The printing is still returned. The name is right, and a row carrying the right name with a
+    /// doubtful set is worth incomparably more than no row at all. What this changes is that the
+    /// doubt is now visible — to the art check, to the log, and to the person reading the summary.
+    /// </para>
+    /// </summary>
+    public const string Unverified = "unverified";
 
     /// <summary>
     /// Only the number was read, so there was no name to check it against. The weakest answer the
@@ -460,7 +494,20 @@ public sealed class ScryfallCatalogue
         if (candidates.Count == 1)
         {
             var only = await LocaliseAsync(candidates[0], language, ct);
-            if (!hasNumber) return new ResolvedPrinting(only, Resolutions.Named, collectorNumber);
+            if (!hasNumber)
+            {
+                // Nothing was read that could disagree with the set code, so before calling this
+                // settled, ask whether the set code had anything to settle. If the name is printed
+                // only here, it did not: any set code that found this card found the only card
+                // there is, and a wrong one would have found nothing. If the name is printed
+                // elsewhere too, the set code alone chose between those printings and no second
+                // thing agreed with it.
+                var elsewhere = await PrintedOutsideAsync(name!, setCode, language, ct);
+                return new ResolvedPrinting(
+                    only,
+                    elsewhere ? Resolutions.Unverified : Resolutions.Named,
+                    collectorNumber);
+            }
 
             if (NumbersMatch(collectorNumber!, only.CollectorNumber))
                 return new ResolvedPrinting(only, Resolutions.Confirmed, collectorNumber);
@@ -521,6 +568,27 @@ public sealed class ScryfallCatalogue
     /// between; the ordinary answers below handle that case honestly and this one would not.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Whether <paramref name="name"/> is printed in any set other than <paramref name="setCode"/>.
+    /// <para>
+    /// This is what separates a set code that was evidence from one that merely went unchallenged.
+    /// A name printed in one set only is placed by its name; the set code beside it had no work to
+    /// do and could not have done it wrongly. A name printed in several is placed by the set code
+    /// and by nothing else, so the answer is only as good as that reading was.
+    /// </para>
+    /// <para>
+    /// Costs one search, and only on cards where no collector number was read at all — the card
+    /// has already been looked up once by then, so this is the second call on a minority of cards
+    /// rather than an extra call on all of them.
+    /// </para>
+    /// </summary>
+    private async Task<bool> PrintedOutsideAsync(
+        string name, string setCode, string? language, CancellationToken ct)
+    {
+        var everywhere = await SearchPrintingsAsync(name, null, language, ct);
+        return everywhere.Any(p => !string.Equals(p.Set, setCode.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
     private async Task<CataloguePrinting?> RelocateByNumberAsync(
         string name, string setCode, string collectorNumber, string? language, CancellationToken ct)
     {

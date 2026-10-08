@@ -228,10 +228,18 @@ public sealed record IdentifiedCard
     /// right. It is a card whose set and number were never evidence, so they are worth exactly
     /// what a guess is worth and need a human eye on the art before the row is believed.
     /// </para>
+    /// <para>
+    /// <c>unverified</c> counts as unplaced for the same reason, though it looks stronger. There
+    /// the set code did choose the printing — it just chose alone, with nothing read off the card
+    /// agreeing with it, and a set code supplied from recognising the card is indistinguishable
+    /// from one read off it. A printing chosen by a single unchecked reading and one chosen by
+    /// nothing at all want the same thing from a person: a glance at the art.
+    /// </para>
     /// </summary>
     [JsonIgnore]
     public bool PrintingWasPlaced =>
-        !string.Equals(Resolution, "unplaced", StringComparison.OrdinalIgnoreCase);
+        !string.Equals(Resolution, "unplaced", StringComparison.OrdinalIgnoreCase)
+     && !string.Equals(Resolution, "unverified", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Versioned result document returned by <c>GET /jobs/{id}</c> once a job completes.</summary>
