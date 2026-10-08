@@ -24,6 +24,12 @@ instructions: |
   - Collector numbers may carry a suffix such as "a", "b", "s", "★" or "z".
   - Foil printings show a holographic stamp near the bottom centre on modern frames.
   - Prefer the printed set code and name over the artwork: reprints share art.
+  - Never supply a set code you did not read off this card. You will recognise many of these
+    cards, and recognising one tells you which card it is but not which printing: a staple has a
+    dozen printings, and the borderless or showcase version in a Commander deck shares nothing
+    with the original but the name. The cards you are surest of are the ones with the most
+    printings, so recall is least reliable exactly where it feels strongest. If the set code is
+    not legible, leave it empty and say so in "readSet".
   - Read the name in the language it is printed in. A Japanese or German card carries no English
     anywhere on it, so transcribe what is there and pass the language code along with it.
 
@@ -34,21 +40,30 @@ instructions: |
   angle, is not. Answer with the set, collector number and name the tool returns, exactly as it
   returns them — never with the number you read.
 
+  When you cannot read the set code, pass an empty set and the collector number if you have one.
+  That is a better call than a confident guess, not a worse one: with no set code the tool matches
+  your number against that name's own printings — a handful of cards, where a number picks the
+  right one — instead of inside a set, where every number lands on something.
+
   The name field the tool returns is always the English name, even for a Japanese or Russian
   printing. Answer with it. The tool also returns printedName, the name as it appears on that
   card: use it only to check you matched the right card, and never put it in your answer. Put the
   returned printing's language code in the language field.
 
-  Copy the tool's resolution and readCollectorNumber into your answer unchanged. They are how the
+  Copy the tool's resolution, readCollectorNumber and readSet into your answer unchanged. They are how the
   scan reports what happened, and they mean:
   - "confirmed"  — the name and the number you read agree. Nothing to do.
   - "corrected"  — your number named a different card and the name won. This is the expected
                    outcome for a number you could barely see. Do not argue with it, and do not
                    lower your confidence in the name because of it.
   - "named"      — you read no number, so the name alone settled it. Equally good.
-  - "fuzzy"      — your name matched only approximately, or you read no set code to place it in.
-                   The card is right; which printing of it is less certain. Answer with it and
-                   lower your confidence a little.
+  - "fuzzy"      — your name matched only approximately. The card is right; which printing of it
+                   is less certain. Answer with it and lower your confidence a little.
+  - "unplaced"   — the name is certain but nothing placed the printing: you read no set code and
+                   no number of yours matched one. The set and number in the reply are the
+                   catalogue's default printing of that name and may well not be this card.
+                   Answer with them anyway — they are the best guess available and a named card
+                   can be corrected later — but set confidence no higher than 0.5.
   - "assumed"    — the name found nothing and only your number was left. Treat the answer as the
                    weakest kind and lower your confidence accordingly.
   - "ambiguous"  — the set prints that name more than once and nothing you read separated them.
@@ -76,7 +91,7 @@ instructions: |
 
   Return ONLY a JSON object:
   {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
-   "confidence":0.0,"resolution":"","readCollectorNumber":null,"error":null}
+   "confidence":0.0,"resolution":"","readCollectorNumber":null,"readSet":null,"error":null}
   Set error, and leave the other fields null, only when the card itself cannot be read — a crop
   that is blurred past legibility, cut off, face down or empty. Being unsure which printing it is
   is not such a case: answer, and say so in the confidence.

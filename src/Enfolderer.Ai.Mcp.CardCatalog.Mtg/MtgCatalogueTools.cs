@@ -26,10 +26,17 @@ public sealed class MtgCatalogueTools
         misread digit returns a real printing of the wrong card. The number returned is the
         catalogue's and is the one to answer with.
 
+        Pass only what you actually read off the card. Leave the set code empty when you could not
+        read one: it must never be filled in from knowing the card, because that answer always
+        looks right and is wrong for every alternate-art reprint. Without a set code the number
+        becomes useful instead of dangerous — it is matched against that name's own printings, a
+        field small enough that it picks the card out rather than landing on a stranger.
+
         Read "resolution" in the reply: confirmed (name and number agreed), corrected (they did
         not, and the name won), named (no number was read), fuzzy (the name matched only
-        approximately, or no set code was read to place it in - the name is right, the printing
-        is the uncertain part), assumed (no name was read, so nothing corroborated the number),
+        approximately), unplaced (the name is certain but nothing placed it - no set code was read
+        and no number matched one, so the set and number in the reply are the catalogue's default
+        printing and are a guess), assumed (no name was read, so nothing corroborated the number),
         ambiguous (the set holds this name more than once and no number separated them - the most
         likely printing is returned and "candidates" lists the rest), relocated (the name was
         found, but not in the set code you gave - answer with the set and number in the reply,
@@ -40,7 +47,7 @@ public sealed class MtgCatalogueTools
         """)]
     public async Task<string> ResolvePrintingAsync(
         [Description("Card name exactly as printed on the card, in whatever language it is printed in.")] string name,
-        [Description("Set code as printed on the card, e.g. 'mh3' or 'sld'.")] string set,
+        [Description("Set code as printed on the card, e.g. 'mh3' or 'sld'. Leave empty if you cannot read one — never supply a set because you recognise the card.")] string set,
         [Description("Collector number as read, e.g. '438' or '5J-b'. Omit when it cannot be read with confidence.")] string? collectorNumber = null,
         [Description("Two-letter language code of the printing, e.g. 'en', 'ja', 'de'. Omit when unsure.")] string? language = null,
         CancellationToken ct = default)
@@ -52,7 +59,8 @@ public sealed class MtgCatalogueTools
             {
                 found = false,
                 resolution = resolved.Resolution,
-                readCollectorNumber = resolved.ReadCollectorNumber
+                readCollectorNumber = resolved.ReadCollectorNumber,
+                readSet = set
             });
 
         return JsonSerializer.Serialize(new
@@ -61,6 +69,10 @@ public sealed class MtgCatalogueTools
             game = "mtg",
             resolution = resolved.Resolution,
             readCollectorNumber = resolved.ReadCollectorNumber,
+            // Echoed so the caller can tell a set code that was read from one that was never
+            // there. The two produce identical-looking answers otherwise, and that is the whole
+            // failure this guards against.
+            readSet = set,
             set = resolved.Printing.Set,
             collectorNumber = resolved.Printing.CollectorNumber,
             // Always the English name, whatever language the card is printed in; printedName is

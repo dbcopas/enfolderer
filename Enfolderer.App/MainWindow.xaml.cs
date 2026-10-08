@@ -456,8 +456,16 @@ public partial class MainWindow : Window
                 var incomplete = result.CardsWithoutNumber > 0
                     ? $"\n  of which without a collector number: {result.CardsWithoutNumber}"
                     : string.Empty;
+                // A card whose set code could not be read is exported as the catalogue's default
+                // printing of that name. The name is right and the row is worth keeping, but an
+                // alternate-art reprint will be exported as the original, and nothing in the file
+                // marks which rows those are. Naming them turns a silent wrong row into two
+                // minutes of checking the art.
+                var unplaced = result.UnplacedCards is { Count: > 0 } names
+                    ? "\n\nPrinting not placed — check these against the art:\n  " + string.Join("\n  ", names)
+                    : string.Empty;
                 MessageBox.Show(this,
-                    $"Images processed: {result.ImagesProcessed}\nCards identified: {result.CardsFound}{incomplete}\nUnidentified cards: {result.LookupFailures}\n\nOutput: {result.OutputPath}",
+                    $"Images processed: {result.ImagesProcessed}\nCards identified: {result.CardsFound}{incomplete}\nUnidentified cards: {result.LookupFailures}{unplaced}\n\nOutput: {result.OutputPath}",
                     "Card Scan", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }

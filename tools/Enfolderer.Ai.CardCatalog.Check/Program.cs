@@ -126,36 +126,75 @@ internal static class Program
         {
             // Lightning Bolt is in dozens of sets. Searching for it without a set code used to
             // return every printing and then refuse to choose, dropping a card that was read well.
+            // It still answers with one card — but as "unplaced", because nothing read off the
+            // card said which of those dozens it is.
             var (catalogue, stub) = Build(url => url.Contains("/cards/named")
                 ? Card("lea", "161", "Lightning Bolt")
                 : url.Contains("/cards/search")
                     ? Searches(Card("lea", "161", "Lightning Bolt"), Card("m10", "146", "Lightning Bolt"))(url)
                     : null);
             var resolved = await catalogue.ResolveAsync("Lightning Bolt", "", null, null, default);
-            Check(resolved.Resolution == "fuzzy", "a set-less name is one card, not a shortlist");
+            Check(resolved.Resolution == "unplaced", "a set-less name with no number is unplaced, not fuzzy");
             Check(resolved.Printing?.Name == "Lightning Bolt", "and the card is still named");
             Check(!stub.Urls.Any(u => u.Contains("/cards/search")),
-                "no Scryfall-wide multi-candidate search is sent");
+                "with no number to choose with, no Scryfall-wide search is sent");
         }
 
         {
-            // With no set code, the number is only worth something inside the set the name found.
+            // The failure this section exists for. An alternate-art reprint: the set symbol is a
+            // design the reader has never seen, but the number is printed plainly. Looking that
+            // number up inside the set the name happened to land in finds the wrong card or none;
+            // matching it against the name's own printings finds the card in the photograph.
             var (catalogue, _) = Build(url => url.Contains("/cards/named")
-                ? Card("lea", "161", "Lightning Bolt")
-                : url.Contains("/cards/lea/161") ? Card("lea", "161", "Lightning Bolt") : null);
-            var resolved = await catalogue.ResolveAsync("Lightning Bolt", "", "161", null, default);
-            Check(resolved.Resolution == "confirmed",
-                "a number corroborating the set the name found is confirmed");
+                ? Card("mh2", "238", "Sword of Hearth and Home")
+                : url.Contains("/cards/search")
+                    ? Searches(
+                        Card("mh2", "238", "Sword of Hearth and Home"),
+                        Card("tmc", "136", "Sword of Hearth and Home"))(url)
+                    : null);
+            var resolved = await catalogue.ResolveAsync("Sword of Hearth and Home", "", "136", null, default);
+            Check(resolved.Printing?.Set == "tmc", "a number picks the printing out of the name's own printings");
+            Check(resolved.Printing?.CollectorNumber == "136", "and it is that printing's number, not the default's");
+            Check(resolved.Resolution == "confirmed", "a number that chose a printing is corroboration");
         }
 
         {
-            // A number that lands on a different card says the set was wrong, not the name.
+            // Recognising the card is not reading it. With no set code and no number, the answer
+            // is the catalogue's default printing, and saying so is the whole point: this is the
+            // alternate-art card that comes back as the original and looks perfectly right.
+            var (catalogue, _) = Build(url => url.Contains("/cards/named")
+                ? Card("2x2", "147", "Food Chain")
+                : url.Contains("/cards/search")
+                    ? Searches(Card("2x2", "147", "Food Chain"), Card("tmc", "133", "Food Chain"))(url)
+                    : null);
+            var resolved = await catalogue.ResolveAsync("Food Chain", "", null, null, default);
+            Check(resolved.Resolution == "unplaced",
+                "the catalogue's default printing is reported as a guess, not as a reading");
+            Check(resolved.Printing?.Name == "Food Chain", "the name, which was read, is still certain");
+        }
+
+        {
+            // A number that matches none of the name's printings has told us nothing, so the card
+            // is unplaced rather than confirmed against a stranger.
             var (catalogue, _) = Build(url => url.Contains("/cards/named")
                 ? Card("lea", "161", "Lightning Bolt")
-                : url.Contains("/cards/lea/999") ? Card("lea", "999", "Black Lotus") : null);
+                : url.Contains("/cards/search")
+                    ? Searches(Card("lea", "161", "Lightning Bolt"))(url)
+                    : url.Contains("/cards/lea/999") ? Card("lea", "999", "Black Lotus") : null);
             var resolved = await catalogue.ResolveAsync("Lightning Bolt", "", "999", null, default);
             Check(resolved.Printing?.Name == "Lightning Bolt", "the name is kept, the number discarded");
-            Check(resolved.Resolution == "fuzzy", "and the printing is flagged as the uncertain part");
+            Check(resolved.Resolution == "unplaced", "and nothing placed the printing");
+            Check(resolved.ReadCollectorNumber == "999", "the number that was read survives for the log");
+        }
+
+        {
+            // Fuzzy keeps its own meaning: the name itself only matched approximately. If unplaced
+            // swallowed that case the log could no longer tell a misread name from an unread set.
+            var (catalogue, _) = Build(url => url.Contains("/cards/named")
+                ? Card("lea", "161", "Lightning Bolt")
+                : null);
+            var resolved = await catalogue.ResolveAsync("Lightnin Bolt", "", null, null, default);
+            Check(resolved.Resolution == "fuzzy", "an approximate name is still fuzzy, not unplaced");
         }
 
         {
@@ -373,6 +412,18 @@ internal static class Program
         Check(!Card("dmr", "28", null).IsIdentified, "a set and a number without a name are not a card");
         Check(!Card(null, "28", "Historian's Boon").IsIdentified, "nor is a name with nowhere to put it");
         Check(!Card("   ", null, "  ").IsIdentified, "and whitespace is not a reading");
+
+        // The export gate does not change for an unplaced card — the row is still worth writing —
+        // but the caller has to be able to find it, because the CSV itself shows nothing.
+        static IdentifiedCard Settled(string resolution) =>
+            new() { Set = "2x2", CollectorNumber = "147", Name = "Food Chain", Resolution = resolution };
+
+        Check(Settled("unplaced").IsIdentified, "an unplaced card is still exported");
+        Check(!Settled("unplaced").PrintingWasPlaced, "but its printing is marked as unplaced");
+        Check(Settled("UNPLACED").PrintingWasPlaced is false, "whatever case the agent echoed it in");
+        Check(Settled("confirmed").PrintingWasPlaced, "a confirmed printing was placed");
+        Check(Settled("relocated").PrintingWasPlaced,
+            "and so was a relocated one: the name found it, the set was merely corrected");
     }
 
     private static (ScryfallCatalogue Catalogue, StubScryfall Stub) Build(Func<string, string?> reply)
