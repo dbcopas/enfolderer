@@ -30,8 +30,17 @@ public static class BinderScanService
     /// recover later without the photograph, so the count is surfaced rather than left to be
     /// noticed in the file.
     /// </param>
+    /// <param name="UnplacedCards">
+    /// Names of the cards whose set and number came from the catalogue's default printing rather
+    /// than from anything read off the card. These are the rows to check against the art: the name
+    /// is right, but an alternate-art reprint is exported as whichever printing the catalogue
+    /// prefers, and nothing in the CSV itself shows which rows those are. They are named rather
+    /// than counted because there are usually two or three, and checking two named rows is work a
+    /// person will actually do.
+    /// </param>
     public record ScanResult(
-        int ImagesProcessed, int CardsFound, int LookupFailures, string OutputPath, int CardsWithoutNumber = 0);
+        int ImagesProcessed, int CardsFound, int LookupFailures, string OutputPath, int CardsWithoutNumber = 0,
+        IReadOnlyList<string>? UnplacedCards = null);
 
     private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"];
 
@@ -94,6 +103,7 @@ public static class BinderScanService
         var allCards = new List<ScannedCard>();
         var unidentified = 0;
         var withoutNumber = 0;
+        var unplaced = new List<string>();
 
         for (var i = 0; i < imageFiles.Count; i++)
         {
@@ -111,11 +121,14 @@ public static class BinderScanService
             allCards.AddRange(AiScanClient.MapCards(result));
             unidentified += result.Cards.Count(c => !c.IsIdentified);
             withoutNumber += result.Cards.Count(c => c.IsIdentified && !c.HasPrinting);
+            unplaced.AddRange(result.Cards
+                .Where(c => c.IsIdentified && !c.PrintingWasPlaced)
+                .Select(c => $"{c.Name} (exported as {c.Set} {c.CollectorNumber})"));
         }
 
         File.WriteAllLines(outputPath, allCards.Select(BuildCsvRow));
 
-        return new ScanResult(imageFiles.Count, allCards.Count, unidentified, outputPath, withoutNumber);
+        return new ScanResult(imageFiles.Count, allCards.Count, unidentified, outputPath, withoutNumber, unplaced);
     }
 
     /// <summary>

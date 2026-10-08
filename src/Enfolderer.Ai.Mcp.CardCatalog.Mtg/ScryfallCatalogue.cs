@@ -84,6 +84,24 @@ public static class Resolutions
     /// </summary>
     public const string Relocated = "relocated";
 
+    /// <summary>
+    /// The name was read and is certain, but nothing read off the card said which printing it is:
+    /// no set code, and no collector number that matched one. The set and number in the answer are
+    /// the catalogue's default printing of that name, and they are a guess.
+    /// <para>
+    /// This is the answer for the card the model recognised rather than read. A famous card has
+    /// the most printings and the most alternate art, so recognition is at its most confident on
+    /// exactly the cards where it settles the least: the art of a borderless Commander-deck
+    /// printing shares nothing with the original but the name. Reporting <c>named</c> here would
+    /// say the set was read and happened to hold the card, which is the opposite of what happened.
+    /// </para>
+    /// <para>
+    /// A printing is still returned, because the name is certain and a named card can be checked
+    /// and corrected while a dropped one cannot. The resolution is what stops it being believed.
+    /// </para>
+    /// </summary>
+    public const string Unplaced = "unplaced";
+
     /// <summary>Neither the name nor the number found a printing.</summary>
     public const string Unresolved = "unresolved";
 }
@@ -406,30 +424,48 @@ public sealed class ScryfallCatalogue
     /// Settles a card whose set code could not be read, from the name alone.
     /// <para>
     /// The number cannot lead here: it only means anything inside a set, and every set has a card
-    /// at almost every number. So the name finds the card, and the number — if one was read — is
-    /// then used to pick the printing within the set the name landed in, which is the one place a
-    /// number is worth something without a set code of its own.
+    /// at almost every number. So the name finds the card first, and the number — if one was read
+    /// — then chooses between that name's printings, which is the one place a number is worth
+    /// something without a set code beside it. A name narrows the field to a handful of printings,
+    /// and a number is very unlikely to collide inside a field that small; that is the opposite of
+    /// looking a number up in a set, where it always lands on something.
+    /// </para>
+    /// <para>
+    /// When nothing chooses, the answer is <see cref="Resolutions.Unplaced"/> rather than a
+    /// printing stated as fact. The alternative was reporting whichever printing the catalogue
+    /// happens to prefer, which is wrong for every alternate-art reprint and wrong silently.
     /// </para>
     /// </summary>
     private async Task<ResolvedPrinting> ResolveWithoutSetAsync(
         string name, string? collectorNumber, string? language, CancellationToken ct)
     {
+        var hasNumber = !string.IsNullOrWhiteSpace(collectorNumber);
+
+        // Every printing of this name, in any set. This is the search that used to be avoided for
+        // returning a dozen cards with nothing to choose between them; a number is exactly the
+        // thing that chooses, and the printing it picks is the card in the photograph rather than
+        // the catalogue's favourite. It is what finds an alt-art reprint whose set symbol is a
+        // new design the reader has never seen.
+        if (hasNumber)
+        {
+            var everywhere = await SearchPrintingsAsync(name, null, language, ct);
+            var picked = everywhere.FirstOrDefault(p => NumbersMatch(collectorNumber!, p.CollectorNumber));
+            if (picked is not null)
+                return new ResolvedPrinting(
+                    await LocaliseAsync(picked, language, ct), Resolutions.Confirmed, collectorNumber);
+        }
+
         var found = await FuzzyAsync(name, null, ct);
         if (found is null) return new ResolvedPrinting(null, Resolutions.Unresolved, collectorNumber);
 
-        if (!string.IsNullOrWhiteSpace(collectorNumber) && !string.IsNullOrWhiteSpace(found.Set))
-        {
-            var inThatSet = await LookupBySetAndNumberAsync(found.Set, collectorNumber, language, ct);
-            // Only when it is the same card: a number that lands on a different name has told us
-            // the set was wrong, not the name, and the name is the evidence worth keeping.
-            if (inThatSet is not null && NameMatches(name, inThatSet))
-                return new ResolvedPrinting(inThatSet, Resolutions.Confirmed, collectorNumber);
-        }
+        // The name was read well enough that the catalogue knows the card, but nothing placed it:
+        // no set code, and no number that matched any of its printings. Say so rather than dress
+        // the catalogue's default printing up as a reading. Fuzzy is kept for its own meaning —
+        // the name itself only matched approximately — so that the two stay tellable apart.
+        var resolution = NameMatches(name, found) ? Resolutions.Unplaced : Resolutions.Fuzzy;
 
-        // Named with no set code to place it in: the right card, but which printing of it is a
-        // guess, so it is reported with the same doubt as an approximate name match.
         return new ResolvedPrinting(
-            await LocaliseAsync(found, language, ct), Resolutions.Fuzzy, collectorNumber);
+            await LocaliseAsync(found, language, ct), resolution, collectorNumber);
     }
 
     /// <summary>

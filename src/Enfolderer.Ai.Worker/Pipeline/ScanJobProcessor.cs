@@ -160,11 +160,12 @@ public sealed class ScanJobProcessor
     /// <summary>
     /// Records how one card's printing was settled, identified or not.
     /// <para>
-    /// <c>corrected</c>, <c>fuzzy</c> and <c>ambiguous</c> are warnings rather than information:
-    /// the first means a number was misread, and a photograph that misreads one is likely
-    /// misreading others; the second means the name itself only matched approximately; the third
-    /// means two real printings could not be told apart, so the printing named is the likeliest
-    /// rather than the known one.
+    /// <c>corrected</c>, <c>fuzzy</c>, <c>unplaced</c> and <c>ambiguous</c> are warnings rather
+    /// than information: the first means a number was misread, and a photograph that misreads one
+    /// is likely misreading others; the second means the name itself only matched approximately;
+    /// the third means nothing read off the card chose the printing, so the set and number are the
+    /// catalogue's default; the fourth means two real printings could not be told apart, so the
+    /// printing named is the likeliest rather than the known one.
     /// </para>
     /// <para>
     /// A card with no resolution at all is the one worth acting on, because it means no catalogue
@@ -204,6 +205,7 @@ public sealed class ScanJobProcessor
         var doubtful = card.Resolution is not null
                     && (card.Resolution.Equals("corrected", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("fuzzy", StringComparison.OrdinalIgnoreCase)
+                     || card.Resolution.Equals("unplaced", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("relocated", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("ambiguous", StringComparison.OrdinalIgnoreCase));
 
@@ -214,7 +216,11 @@ public sealed class ScanJobProcessor
             index, jobId, card.Set, card.CollectorNumber ?? "(no number)", card.Name, card.Language, card.Resolution,
             corrected && !string.IsNullOrWhiteSpace(card.ReadCollectorNumber)
                 ? $" — the number read off the card was '{card.ReadCollectorNumber}'"
-                : string.Empty);
+                : !card.PrintingWasPlaced
+                    ? " — no set code was read off the card and no number matched one, so that set and "
+                      + "number are the catalogue's default printing of the name, not this card's. "
+                      + "Check the art before believing them."
+                    : string.Empty);
     }
 
     private async Task<List<IdentifiedCard>> IdentifyAllAsync(

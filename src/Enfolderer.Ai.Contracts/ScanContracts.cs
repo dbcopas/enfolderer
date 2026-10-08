@@ -108,7 +108,8 @@ public sealed record IdentifiedCard
 
     /// <summary>
     /// How the catalogue settled this printing: <c>confirmed</c>, <c>corrected</c>, <c>named</c>,
-    /// <c>assumed</c>, <c>fuzzy</c>, <c>relocated</c>, <c>ambiguous</c> or <c>unresolved</c>.
+    /// <c>assumed</c>, <c>fuzzy</c>, <c>unplaced</c>, <c>relocated</c>, <c>ambiguous</c> or
+    /// <c>unresolved</c>.
     /// <para>
     /// Null means the agent did not say, which is itself the useful signal: it is what a run looks
     /// like when the resolution tool was never called and the model answered from the crop alone.
@@ -125,6 +126,17 @@ public sealed record IdentifiedCard
     /// number matching the printing found in another set is the corroboration for the move.
     /// </summary>
     [JsonPropertyName("readCollectorNumber")] public string? ReadCollectorNumber { get; init; }
+
+    /// <summary>
+    /// The set code as the agent read it off the card, null when it could not read one.
+    /// <para>
+    /// This exists because a set code supplied from recognising the card is indistinguishable, in
+    /// the answer, from one read off it — and the catalogue cannot tell either, since a famous
+    /// card really is in the famous set it is remembered from. Only the agent knows which it did,
+    /// so only the agent can report it.
+    /// </para>
+    /// </summary>
+    [JsonPropertyName("readSet")] public string? ReadSet { get; init; }
 
     /// <summary>Confidence in the identification, 0..1.</summary>
     [JsonPropertyName("confidence")] public double Confidence { get; init; }
@@ -160,6 +172,19 @@ public sealed record IdentifiedCard
     /// </summary>
     [JsonIgnore]
     public bool HasPrinting => IsIdentified && !string.IsNullOrWhiteSpace(CollectorNumber);
+
+    /// <summary>
+    /// True when something read off this card chose the printing, rather than the catalogue
+    /// offering its default printing of a name.
+    /// <para>
+    /// An unplaced card is not a bad reading — the name is the part that was read, and it is
+    /// right. It is a card whose set and number were never evidence, so they are worth exactly
+    /// what a guess is worth and need a human eye on the art before the row is believed.
+    /// </para>
+    /// </summary>
+    [JsonIgnore]
+    public bool PrintingWasPlaced =>
+        !string.Equals(Resolution, "unplaced", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Versioned result document returned by <c>GET /jobs/{id}</c> once a job completes.</summary>

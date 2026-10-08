@@ -20,6 +20,9 @@ instructions: |
   - Regulation mark (a single letter) appears in the bottom-left on recent sets.
   - Illustration-rare and special-art cards are full-art: the name may be stylised, so use
     the number plus the set symbol first and the name only to disambiguate.
+  - Never supply a set code you did not read off this card. Recognising a Pokémon tells you the
+    species, not the printing, and a species is printed dozens of times across twenty years. If
+    the set code is not on the card — it often is not — leave it empty and lead with the number.
 
   Read the printed set code, collector number and name from the crop, then confirm the printing
   with the catalogue tools before answering. Prefer lookup by set and collector number; fall back
@@ -29,11 +32,11 @@ instructions: |
   the card the number returns has a different name from the one printed on the crop, look the name
   up as well and prefer that result, unless the card is full-art and the name is stylised past
   reading. Leave resolution and readCollectorNumber null — they are only set by a catalogue that
-  settles the printing itself.
+  settles the printing itself, and leave readSet null for the same reason.
 
   Return ONLY a JSON object:
   {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
-   "confidence":0.0,"resolution":null,"readCollectorNumber":null,"error":null}
+   "confidence":0.0,"resolution":null,"readCollectorNumber":null,"readSet":null,"error":null}
   When the catalogue cannot confirm the printing, answer with what you read off the card and set a
   low confidence rather than declining: a card recorded from your own reading can be checked
   afterwards, a card you decline to name is lost. Set error, and leave the other fields null, only

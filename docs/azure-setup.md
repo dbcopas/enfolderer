@@ -2290,7 +2290,8 @@ there is more than one. The reply says how it was settled:
 | `confirmed` | One printing of that name in that set, and the number read matches it. | Nothing. |
 | `named` | One printing of that name, and no number was read. Just as good. | Nothing. |
 | `corrected` | The number read named a different card. `collectorNumber` is the catalogue's; `readCollectorNumber` is what the agent read. | Nothing — this is the mechanism working. Expect it often. |
-| `fuzzy` | The name matched only approximately, or no set code was read to place it in. | The set and the number. The card itself is right. |
+| `fuzzy` | The name matched only approximately. | The set and the number. The card itself is right. |
+| `unplaced` | The name is certain, but no set code was read and no number matched one of that name's printings. The set and number are the catalogue's default printing. | The set and the number, entirely. They are a guess that looks like a reading. |
 | `ambiguous` | The set prints that name more than once and nothing separated them. The likeliest printing is returned and `candidates` lists the rest. | The printing, never the name — every candidate carries it. |
 | `relocated` | The name was found, but not in the set code that was read. The set and number are the catalogue's; only the name came off the card. | The set, which was misread. The name is right. |
 | `assumed` | The name found no printing, so only the number was left. | Everything. The name was misread, so nothing checked the number. |
@@ -2316,6 +2317,26 @@ when the two disagree, it is very nearly always the symbol that was misread — 
 added, every rung of the ladder was confined to that misread set, so a name read perfectly found
 nothing and the card was dropped. Now the name is tried on its own before giving up, and the answer
 says plainly that the set came from the catalogue rather than from the card.
+
+`unplaced` is the answer for a card the model **recognised** rather than read, and it is the one to
+read carefully. A vision model knows these cards. Shown a famous staple it will name the set from
+memory without ever looking at the bottom-left corner — and the catalogue cannot catch that,
+because a real card of that name really is in that set, so the lookup confirms a printing nobody
+read. The failure is silent and it looks perfect: the row names the right card, in a real set, at a
+real number, and only the art disagrees.
+
+That failure lands hardest exactly where recall feels strongest. The cards you are surest of are
+the cards with the most printings, and a borderless or showcase printing in a Commander deck shares
+nothing with the original but the name. So the agents are told never to pass a set code they did
+not read off the card, however certain they are which set it is from — and when they pass none, the
+tool answers `unplaced` instead of dressing its default printing up as a reading.
+
+Passing no set code is the better call, not the worse one, because it changes what the collector
+number is worth. Inside a set a number is dangerous: every set has a card at nearly every number,
+so a misread digit lands on a real printing of the wrong card. Against a single name's printings —
+a handful of cards — a number is decisive, and it picks out the alternate-art reprint whose set
+symbol is a design nobody has seen before. That is why a card with no set code and a legible number
+comes back `confirmed` rather than `unplaced`.
 
 `ambiguous` is the other one worth understanding. A set can carry the same name several times —
 basic lands, Secret Lairs, borderless and showcase variants — and when the number was unreadable
@@ -2414,6 +2435,61 @@ Japanese card object, and `printed_name` is the localised one; the agent is told
 first and never the second. The language is not thrown away — it travels in its own field and ends
 up in the CSV's language column, so `neo;268;;ja;Boseiju, Who Endures` is a Japanese card recorded
 under the name you can search for.
+
+### If a card is named correctly but exported as the wrong printing
+
+The symptom is a row that looks entirely right until you hold it next to the card: the name
+matches, the set is a real set, the number is a real number in it, and the art is nothing like the
+photograph. It happens to famous cards — a staple with a dozen printings, where the one in the
+binder is a borderless or alternate-art version from a Commander deck.
+
+What happened is that the model recognised the card instead of reading it. Look for this in the
+worker log:
+
+```powershell
+az containerapp logs show -g enf-demo-platform -n enf-demo-worker --tail 200 |
+  Select-String 'unplaced'
+```
+
+A line ending `resolved as unplaced` says the agent read the name, read no set code, and nothing it
+read chose between that name's printings — so the set and number in the row are the catalogue's
+default and should be checked against the art. The desktop scan summary lists these by name for the
+same reason, under **Printing not placed — check these against the art**.
+
+A line that instead reads `resolved as confirmed` or `named` on a card whose art is wrong means the
+agent supplied a set code it did not read. Check `readSet` in the job document — if it is empty
+while `set` is populated, the set came from recall:
+
+```powershell
+$prefix = 'enf-demo'
+$apiFqdn = az containerapp show -g "$prefix-platform" -n "$prefix-api" `
+  --query properties.configuration.ingress.fqdn -o tsv
+$apiClientId = az deployment sub show --name enfolderer-scan `
+  --query properties.parameters.apiClientId.value -o tsv
+
+$token = az account get-access-token --resource "api://$apiClientId" --query accessToken -o tsv
+$job = Invoke-RestMethod -Uri "https://$apiFqdn/jobs/<jobId>" `
+  -Headers @{ Authorization = 'Bearer ' + $token }
+$job.result.cards |
+  Select-Object name, set, readSet, collectorNumber, readCollectorNumber, resolution |
+  Format-Table
+```
+
+That is what the agent instructions forbid, so the fix is to re-provision the identification agents
+so they pick up the current wording:
+
+```powershell
+$id = az deployment sub show --name enfolderer-scan `
+        --query properties.outputs.identificationProjectEndpoint.value -o tsv
+
+$mcp = @{}
+foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
+  (az deployment sub show --name enfolderer-scan --query "properties.outputs.$o.value" -o json |
+     ConvertFrom-Json) | ForEach-Object { $mcp[$_.name] = $_.url }
+}
+
+./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid -McpServerUrl $mcp
+```
 
 ### If a card with a correct name is still counted as unidentified
 

@@ -161,9 +161,11 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             ? $"Confirm the printing with your catalogue tools ({profile.CatalogueToolHint}) before answering."
             : $"""
                Settle the printing by calling {profile.ResolutionTool} ({profile.CatalogueToolHint}) with the
-               name and set code you read, and the collector number only if you could read it. Answer with the
-               set, collector number and name it gives back, never with the number you read, and copy its
-               "resolution" and "readCollectorNumber" into your reply.
+               name and set code you read, and the collector number only if you could read it. Pass the set
+               code only if you read it off this card; leave it empty if you did not, however sure you are
+               which set the card is from. Answer with the set, collector number and name it gives back,
+               never with the number you read, and copy its "resolution", "readCollectorNumber" and
+               "readSet" into your reply.
 
                If the tool answers "unresolved", or you cannot call it, answer with what you read off the card
                and lower "confidence" to say so. A card recorded from your own reading can be checked later; a
@@ -177,7 +179,7 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
 
             Return ONLY a JSON object, with no prose and no markdown fences:
             {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
-             "confidence":0.0,"resolution":"","readCollectorNumber":""}
+             "confidence":0.0,"resolution":"","readCollectorNumber":"","readSet":""}
 
             "name" is the catalogue's English name, whatever language the card is printed in, and
             "language" is the language the card itself is printed in.
@@ -230,6 +232,7 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             Finish = Read("finish") ?? "nonfoil",
             Resolution = Read("resolution"),
             ReadCollectorNumber = Read("readCollectorNumber"),
+            ReadSet = Read("readSet"),
             Confidence = confidence,
             Agent = agentId
         };
