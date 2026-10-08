@@ -464,8 +464,15 @@ public partial class MainWindow : Window
                 var unplaced = result.UnplacedCards is { Count: > 0 } names
                     ? "\n\nPrinting not placed — check these against the art:\n  " + string.Join("\n  ", names)
                     : string.Empty;
+                // The other direction: not a row nobody checked, but one the pictures overruled.
+                // The name is untouched — the candidates were all printings of it — so this is
+                // only ever a change of set and number, and it is shown because software quietly
+                // overwriting something read off a card is exactly the thing to be told about.
+                var moved = result.CardsMovedByArt is { Count: > 0 } movedRows
+                    ? "\n\nMoved to the printing the art matches:\n  " + string.Join("\n  ", movedRows)
+                    : string.Empty;
                 MessageBox.Show(this,
-                    $"Images processed: {result.ImagesProcessed}\nCards identified: {result.CardsFound}{incomplete}\nUnidentified cards: {result.LookupFailures}{unplaced}\n\nOutput: {result.OutputPath}",
+                    $"Images processed: {result.ImagesProcessed}\nCards identified: {result.CardsFound}{incomplete}\nUnidentified cards: {result.LookupFailures}{unplaced}{moved}\n\nOutput: {result.OutputPath}",
                     "Card Scan", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }

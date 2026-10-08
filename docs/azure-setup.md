@@ -2492,6 +2492,91 @@ foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
 ./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid -McpServerUrl $mcp
 ```
 
+### Checking a printing against its own picture
+
+Every check described above is a check on text, and text has a blind spot. A name that is real, a
+set that is real, and a number that is really that set's number for that name describe a card that
+exists — just not necessarily the one in the photograph. Nothing in the catalogue can object,
+because each field is true on its own and they agree with each other. That is exactly the shape of
+an alternate-art reprint, and it is why those rows kept surviving every rung of the ladder.
+
+So the scan now compares the pictures. `resolve_printing` returns `alternates` — every printing of
+the card it resolved, each with the catalogue's image of it — the agent copies that list into its
+reply, and the orchestrator, which is the only component holding both the photograph and the list,
+fetches each image and compares it with the crop.
+
+The comparison is a *perceptual* hash rather than a pixel comparison, and it has to be. The two
+pictures are never alike as files: one is a clean catalogue scan, the other is a photograph taken
+through a sleeve under whatever light the room had, straightened out of a quadrilateral and
+encoded as JPEG somewhere along the way. The hash records only where the image gets lighter and
+darker across the face, which none of those things disturb. It is taken in greyscale because a
+foil card throws colour everywhere while leaving that structure intact.
+
+A verdict appears on each card and in the worker log:
+
+| `artVerdict` | What it means |
+| --- | --- |
+| `agrees` | The printing that was identified is the one the photograph looks like. |
+| `moved` | A different printing of the **same card** looked markedly more like the photograph, so the set and number were changed to it. The name never changes — every candidate carries it. |
+| `inconclusive` | The comparison ran and declined. |
+| *absent* | No comparison was made at all: no pictures were offered, or none could be fetched. |
+
+`inconclusive` is the ordinary outcome and is not a fault. Most reprints share one illustration, so
+their pictures are nearly identical and whichever comes out a few bits ahead is ahead by noise.
+Picking it would overwrite a set code that was read off the card with one chosen by a coin toss,
+while presenting the result as evidence. A candidate therefore has to win twice over: it must be
+close to the photograph in absolute terms, and it must be clear of its nearest rival. Failing
+either changes nothing and claims nothing.
+
+To see what it decided:
+
+```powershell
+az containerapp logs show -g enf-demo-platform -n enf-demo-worker --tail 200 |
+  Select-String 'moved to the printing'
+```
+
+The desktop summary lists the same rows under **Moved to the printing the art matches**, because
+software quietly overwriting something read off a card is the thing to be told about.
+
+Two thresholds govern all of this, and both are named constants with the reasoning beside them in
+`src/Enfolderer.Ai.Imaging/ArtAdjudicator.cs`: `MaxAgreeingDistance`, how close counts as the same
+picture, and `MinSeparation`, how far ahead of the runner-up counts as evidence. They are set
+conservatively — they will decline a comparison sooner than make a wrong one — so if you find real
+moves being reported as `inconclusive`, `MinSeparation` is the one to lower, in small steps, and
+then redeploy:
+
+```powershell
+./scripts/deploy-images.ps1
+```
+
+The outbound fetches are restricted to the catalogue's own image hosts, checked on the parsed host
+name rather than by substring. That matters more than it looks: the URLs arrive by way of a
+language model repeating a tool's output, so they are caller-supplied addresses for requests made
+with the worker's managed identity. The allow-list is in
+`src/Enfolderer.Ai.Worker/Pipeline/CardArtVerifier.cs`, and it is itself worth a minute of the
+demo — it is the same argument as the MCP caller allow-list, one layer further out.
+
+This needs the catalogue image **and** the identification agents, because the agent has to be asked
+for `alternates` before it will send them:
+
+```powershell
+git pull
+./scripts/deploy-images.ps1
+```
+
+```powershell
+$id = az deployment sub show --name enfolderer-scan `
+        --query properties.outputs.identificationProjectEndpoint.value -o tsv
+
+$mcp = @{}
+foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
+  (az deployment sub show --name enfolderer-scan --query "properties.outputs.$o.value" -o json |
+     ConvertFrom-Json) | ForEach-Object { $mcp[$_.name] = $_.url }
+}
+
+./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid -McpServerUrl $mcp
+```
+
 ### If a card is named correctly but exported as the wrong printing
 
 The symptom is a row that looks entirely right until you hold it next to the card: the name

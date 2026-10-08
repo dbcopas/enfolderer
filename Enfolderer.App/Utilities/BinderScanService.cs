@@ -38,9 +38,15 @@ public static class BinderScanService
     /// than counted because there are usually two or three, and checking two named rows is work a
     /// person will actually do.
     /// </param>
+    /// <param name="CardsMovedByArt">
+    /// Rows where the printing the agent settled on did not look like the photograph, and a
+    /// different printing of the same card did, so the row was moved to it. The card is the same
+    /// card either way — only the set and number changed — but a move is a claim made by software
+    /// about a photograph, and a claim nobody is told about is one nobody can overrule.
+    /// </param>
     public record ScanResult(
         int ImagesProcessed, int CardsFound, int LookupFailures, string OutputPath, int CardsWithoutNumber = 0,
-        IReadOnlyList<string>? UnplacedCards = null);
+        IReadOnlyList<string>? UnplacedCards = null, IReadOnlyList<string>? CardsMovedByArt = null);
 
     private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"];
 
@@ -104,6 +110,7 @@ public static class BinderScanService
         var unidentified = 0;
         var withoutNumber = 0;
         var unplaced = new List<string>();
+        var movedByArt = new List<string>();
 
         for (var i = 0; i < imageFiles.Count; i++)
         {
@@ -124,11 +131,15 @@ public static class BinderScanService
             unplaced.AddRange(result.Cards
                 .Where(c => c.IsIdentified && !c.PrintingWasPlaced)
                 .Select(c => $"{c.Name} (exported as {c.Set} {c.CollectorNumber})"));
+            movedByArt.AddRange(result.Cards
+                .Where(c => string.Equals(c.ArtVerdict, "moved", StringComparison.OrdinalIgnoreCase))
+                .Select(c => $"{c.Name}: {c.ArtMovedFrom} → {c.Set} {c.CollectorNumber}"));
         }
 
         File.WriteAllLines(outputPath, allCards.Select(BuildCsvRow));
 
-        return new ScanResult(imageFiles.Count, allCards.Count, unidentified, outputPath, withoutNumber, unplaced);
+        return new ScanResult(
+            imageFiles.Count, allCards.Count, unidentified, outputPath, withoutNumber, unplaced, movedByArt);
     }
 
     /// <summary>
