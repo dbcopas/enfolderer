@@ -2578,6 +2578,50 @@ foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
 ./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid -McpServerUrl $mcp
 ```
 
+### After pulling a change: one command
+
+A change to this repository lands in one of two places, and they are updated by different means.
+C# ships inside container images and needs a build and a redeploy. Agent instructions live in
+`agents/*.yaml`, which nothing in Azure ever reads — they only reach Foundry when
+`agents/provision.ps1` sends them. An agent whose prompt was edited but never re-provisioned goes
+on behaving exactly as it did before, and nothing anywhere reports the difference. That is the
+usual reason a fix appears not to have worked.
+
+So do both, with one command that takes no arguments and looks up every name, endpoint and URL for
+itself:
+
+```powershell
+./scripts/update-demo.ps1
+```
+
+It finds your deployment, the Foundry projects, and each team's MCP server URLs; builds and deploys
+the images; provisions Team A's agent and then Team B's, carrying Team A's agent id across the
+boundary Team B cannot see past; and finally points the apps at the agents it just provisioned.
+Re-running it is safe and is the normal way to use it.
+
+If the change was only to a prompt — which is most of them — skip the slow part:
+
+```powershell
+./scripts/update-demo.ps1 -SkipImages
+```
+
+and if it was only to C#:
+
+```powershell
+./scripts/update-demo.ps1 -SkipAgents
+```
+
+Then scan a page from the desktop app and read back what the pipeline decided:
+
+```powershell
+./scripts/show-last-scan.ps1
+```
+
+That prints one line per card — the resolution, the number actually read where it differs from the
+catalogue's, and what the art comparison made of the printing — with anything doubtful in yellow.
+The exported CSV cannot tell you any of this: it carries a set and a number, but not how they were
+arrived at, which is the only thing that says whether to believe them.
+
 ### Why a wrong set code is the one mistake nothing catches
 
 Every other misreading leaves a mark. A misread name finds no card. A misread number lands on a
