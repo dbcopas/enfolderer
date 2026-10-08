@@ -65,8 +65,15 @@ public static class Resolutions
     public const string Ambiguous = "ambiguous";
 
     /// <summary>
-    /// The name was found, but not in the set code that was read — so the set and number in the
-    /// answer are the catalogue's, and only the name came off the card.
+    /// The card was found somewhere other than the set code that was read, so whatever else is
+    /// right, the set in the reply is not the set that was read off the card.
+    /// <para>
+    /// It is reached two ways. Either the name was not in the read set at all and was found
+    /// elsewhere; or the name was in the read set, but the number read off the card belonged to a
+    /// different printing of that same name. The second is the one that catches a recognised card
+    /// — see <c>RelocateByNumberAsync</c> for why a number landing on another printing of the same
+    /// name is believed over the set code.
+    /// </para>
     /// <para>
     /// A set code is a symbol, not text: an expansion symbol is a few dozen pixels of engraved
     /// glyph, and the three letters beside it are the smallest print on the card after the
@@ -398,9 +405,15 @@ public sealed class ScryfallCatalogue
             var only = await LocaliseAsync(candidates[0], language, ct);
             if (!hasNumber) return new ResolvedPrinting(only, Resolutions.Named, collectorNumber);
 
-            return NumbersMatch(collectorNumber!, only.CollectorNumber)
-                ? new ResolvedPrinting(only, Resolutions.Confirmed, collectorNumber)
-                : new ResolvedPrinting(only, Resolutions.Corrected, collectorNumber);
+            if (NumbersMatch(collectorNumber!, only.CollectorNumber))
+                return new ResolvedPrinting(only, Resolutions.Confirmed, collectorNumber);
+
+            // The name and the set found one printing, and the number read off the card is not
+            // its number. Before concluding the number was misread, ask the other question.
+            var moved = await RelocateByNumberAsync(name!, setCode, collectorNumber!, language, ct);
+            if (moved is not null) return new ResolvedPrinting(moved, Resolutions.Relocated, collectorNumber);
+
+            return new ResolvedPrinting(only, Resolutions.Corrected, collectorNumber);
         }
 
         // Several printings of this name in this set, so the number is the tiebreak it exists to be.
@@ -410,6 +423,11 @@ public sealed class ScryfallCatalogue
             if (picked is not null)
                 return new ResolvedPrinting(
                     await LocaliseAsync(picked, language, ct), Resolutions.Confirmed, collectorNumber);
+
+            // None of this set's printings carries that number, so the same question arises as
+            // above: the set may be the thing that was wrong.
+            var moved = await RelocateByNumberAsync(name!, setCode, collectorNumber!, language, ct);
+            if (moved is not null) return new ResolvedPrinting(moved, Resolutions.Relocated, collectorNumber);
         }
 
         // Nothing separated them, so say so — but still answer. The candidates are ordered by
@@ -418,6 +436,45 @@ public sealed class ScryfallCatalogue
         // list, plus a resolution telling it the printing is the doubtful part and the name is not.
         return new ResolvedPrinting(
             await LocaliseAsync(candidates[0], language, ct), Resolutions.Ambiguous, collectorNumber, candidates);
+    }
+
+    /// <summary>
+    /// Looks for a printing of <paramref name="name"/> outside <paramref name="setCode"/> that
+    /// carries <paramref name="collectorNumber"/>, and returns it when exactly one does.
+    /// <para>
+    /// This exists because a disagreement between a read set code and a read number has two
+    /// explanations, and the ladder used to consider only one of them. The number may have been
+    /// misread — that is <see cref="Resolutions.Corrected"/>, and it is common, because the number
+    /// is six-point type in a corner. Or the <em>set</em> may be wrong and the number right, which
+    /// happens whenever a model recognises a famous card and supplies the set it remembers it from
+    /// rather than reading the symbol. Assuming the first explanation silently returns the wrong
+    /// printing of the right card, and says <c>corrected</c>, which reads as nothing being wrong.
+    /// </para>
+    /// <para>
+    /// What tells them apart is where the number lands. A misread digit lands on a different card:
+    /// a set has something at nearly every number, so being wrong costs nothing to arrange. For it
+    /// to land on <em>another printing of the same name</em> is a different matter — a name has a
+    /// handful of printings scattered across tens of thousands of numbers, so the coincidence is
+    /// remote and the far likelier reading is that the number was right all along and the set was
+    /// not. That is strong enough evidence to move the card, and it is why this is checked before
+    /// the number is written off.
+    /// </para>
+    /// <para>
+    /// Exactly one, because two printings of a name sharing a number give nothing to choose
+    /// between; the ordinary answers below handle that case honestly and this one would not.
+    /// </para>
+    /// </summary>
+    private async Task<CataloguePrinting?> RelocateByNumberAsync(
+        string name, string setCode, string collectorNumber, string? language, CancellationToken ct)
+    {
+        var everywhere = await SearchPrintingsAsync(name, null, language, ct);
+
+        var matches = everywhere
+            .Where(p => !string.Equals(p.Set, setCode.Trim(), StringComparison.OrdinalIgnoreCase)
+                     && NumbersMatch(collectorNumber, p.CollectorNumber))
+            .ToList();
+
+        return matches.Count == 1 ? await LocaliseAsync(matches[0], language, ct) : null;
     }
 
     /// <summary>

@@ -47,6 +47,16 @@ internal static class Program
             if (!File.Exists(listing) || photo is null) continue;
 
             var name = Path.GetFileName(directory);
+
+            var malformed = MalformedLines(listing);
+            if (malformed.Count > 0)
+            {
+                failures++;
+                Console.WriteLine($"FAIL {name}: cards.txt is not in the documented format");
+                foreach (var complaint in malformed) Console.WriteLine($"       {complaint}");
+                continue;
+            }
+
             var expected = ReadExpectedCells(listing);
 
             using var stream = File.OpenRead(photo);
@@ -92,6 +102,53 @@ internal static class Program
             directory = directory.Parent;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Complains about any line of a <c>cards.txt</c> that is not
+    /// <c>row,column;name;edition;number;foil;language</c>.
+    /// <para>
+    /// The answer key is read by people, not only by this check — it is what a scan's output is
+    /// compared against by hand — so a line in the wrong order is worse than useless: it makes a
+    /// correct reading look wrong. The edition and number columns are the pair that get swapped,
+    /// because both are short and only one of them looks like a number, so they are the pair worth
+    /// testing: an edition has a letter in it and a collector number has a digit.
+    /// </para>
+    /// <para>
+    /// This is checked rather than ignored because the parsing below only ever wanted the first
+    /// field, so every other mistake in the file would otherwise pass in silence.
+    /// </para>
+    /// </summary>
+    private static List<string> MalformedLines(string path)
+    {
+        var complaints = new List<string>();
+
+        foreach (var (line, index) in File.ReadAllLines(path).Select((l, i) => (l, i + 1)))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            var fields = line.Split(';');
+            if (fields.Length != 6)
+            {
+                complaints.Add($"line {index}: expected 6 fields, found {fields.Length} — {line}");
+                continue;
+            }
+
+            var location = fields[0].Split(',');
+            if (location.Length != 2 || !int.TryParse(location[0].Trim(), out _) || !int.TryParse(location[1].Trim(), out _))
+                complaints.Add($"line {index}: '{fields[0]}' is not a row,column pocket — {line}");
+
+            if (string.IsNullOrWhiteSpace(fields[1]))
+                complaints.Add($"line {index}: the name is empty — {line}");
+
+            if (!fields[2].Any(char.IsLetter))
+                complaints.Add($"line {index}: '{fields[2]}' is not an edition code; are the edition and number swapped? — {line}");
+
+            if (!fields[3].Any(char.IsDigit))
+                complaints.Add($"line {index}: '{fields[3]}' is not a collector number; are the edition and number swapped? — {line}");
+        }
+
+        return complaints;
     }
 
     /// <summary>Reads the pocket of each card from a <c>cards.txt</c>: <c>a,b;name;set;...</c>.</summary>
