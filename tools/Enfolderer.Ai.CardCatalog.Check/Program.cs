@@ -258,6 +258,61 @@ internal static class Program
             Check(resolved.Resolution == "unresolved", "a name found nowhere at all is still unresolved");
         }
 
+        Section("A spell printed inside the card's text box");
+
+        {
+            // The case from image 1: SOS 80 is one card, Emeritus of Woe, with a second spell
+            // printed in its text box. The reader wrote both names joined with //, which matches
+            // nothing whole — so without the face fallback a perfectly legible card falls through
+            // the whole ladder on the strength of the thing it read best.
+            var (catalogue, _) = Build(url =>
+                !url.Contains("/cards/search") ? null
+                : url.Contains("Emeritus%20of%20Woe%20%2F%2F") ? null
+                : url.Contains("Emeritus") ? $$"""{"data":[{{Card("sos", "80", "Emeritus of Woe")}}]}"""
+                : null);
+            var resolved = await catalogue.ResolveAsync(
+                "Emeritus of Woe // Demonic Tutor", "sos", "80", null, default);
+            Check(resolved.Printing?.Name == "Emeritus of Woe",
+                "a name assembled from the card and a spell in its text box still finds the card");
+            Check(resolved.Resolution == "confirmed", "and the printing the number named is confirmed");
+        }
+
+        {
+            // The title bar is above the text box, so a reader who appends writes the card's own
+            // name first. Both parts here are real cards and the first one has to win.
+            var (catalogue, stub) = Build(url =>
+                !url.Contains("/cards/search") ? null
+                : url.Contains("%2F%2F") ? null
+                : url.Contains("Emeritus") ? $$"""{"data":[{{Card("sos", "80", "Emeritus of Woe")}}]}"""
+                : url.Contains("Demonic") ? $$"""{"data":[{{Card("lea", "97", "Demonic Tutor")}}]}"""
+                : null);
+            var resolved = await catalogue.ResolveAsync(
+                "Emeritus of Woe // Demonic Tutor", "", null, null, default);
+            Check(resolved.Printing?.Name == "Emeritus of Woe",
+                "the part written first wins, because the card's own name is the title bar");
+            Check(resolved.Resolution == "unplaced",
+                "and with no set and no number the printing is still only a guess");
+            Check(!stub.Urls.Any(u => u.Contains("Demonic") && !u.Contains("Emeritus")),
+                "and the second part is never asked for on its own");
+        }
+
+        {
+            // A card that really is in two named parts is catalogued under the joined name, so it
+            // matches whole and must never reach the fallback.
+            var (catalogue, stub) = Build(Searches(Card("mh2", "26", "Fire // Ice")));
+            var resolved = await catalogue.ResolveAsync("Fire // Ice", "mh2", null, null, default);
+            Check(resolved.Printing?.Name == "Fire // Ice", "a real split card keeps its joined name");
+            Check(!stub.Urls.Any(u => u.Contains("%22Fire%22") || u.Contains("%22Ice%22")),
+                "and is never broken into its faces");
+        }
+
+        {
+            // Nothing here may rescue two names that are both nonsense.
+            var (catalogue, _) = Build(_ => null);
+            var resolved = await catalogue.ResolveAsync("Nonesuch // Alsononesuch", "mh2", null, null, default);
+            Check(resolved.Resolution == "unresolved", "two names that find nothing are still unresolved");
+        }
+
         Section("A number that disagrees with the set it was read beside");
 
         {

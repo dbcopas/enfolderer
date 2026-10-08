@@ -20,6 +20,10 @@ instructions: |
   - Regulation mark (a single letter) appears in the bottom-left on recent sets.
   - Illustration-rare and special-art cards are full-art: the name may be stylised, so use
     the number plus the set symbol first and the name only to disambiguate.
+  - Never join two names together with "//". The name is the title bar and nothing else; anything
+    printed below it is rules text, whatever panel it sits in. A card that really is in two named
+    parts is catalogued under both, so the lookup returns them joined and you do not have to.
+    Writing "//" yourself turns a legible card into a name no catalogue has.
   - Never supply a set code you did not read off this card. Recognising a Pokémon tells you the
     species, not the printing, and a species is printed dozens of times across twenty years. If
     the set code is not on the card — it often is not — leave it empty and lead with the number.
