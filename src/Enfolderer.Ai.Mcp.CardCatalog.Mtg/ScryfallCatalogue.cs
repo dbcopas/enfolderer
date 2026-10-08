@@ -251,6 +251,52 @@ public sealed class ScryfallCatalogue
             }
         }
 
+        return await SearchByFaceAsync(name, setCode, language, ct);
+    }
+
+    /// <summary>
+    /// Last resort for a name holding <c>//</c> that matched nothing whole: searches each part on
+    /// its own and answers with the first that finds printings.
+    /// <para>
+    /// <c>//</c> on a card means two named parts — a split card, an Adventure, a double-faced
+    /// card — and Scryfall joins those names the same way, so a correctly read one matches whole
+    /// above and never reaches here. What reaches here is a name that was <em>assembled</em>: a
+    /// reader seeing a second spell printed inside one card's text box and writing it into the
+    /// name as though the card had two faces. Modern frames print such spells in their own little
+    /// titled box, which looks very much like a second name.
+    /// </para>
+    /// <para>
+    /// An assembled name is worse than a misread one, because it matches nothing exactly and
+    /// nothing as free text either, so a perfectly legible card falls all the way through the
+    /// ladder on the strength of the one thing that was read best. This is the mirror of what
+    /// <see cref="NameMatches"/> does from the other side, where the catalogue's joined name is
+    /// split so that a card naming only its front face still matches.
+    /// </para>
+    /// <para>
+    /// The first part that matches wins, because a card's own name is in the title bar across the
+    /// top and anything a reader appends to it was printed below it. So when both parts are real
+    /// cards — and the second one here usually is, since it is a real spell — the one written
+    /// first is the one the card is called.
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyList<CataloguePrinting>> SearchByFaceAsync(
+        string name, string? setCode, string? language, CancellationToken ct)
+    {
+        var faces = name.Split("//", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (faces.Length < 2) return [];
+
+        foreach (var face in faces)
+        {
+            foreach (var exact in new[] { true, false })
+            {
+                foreach (var lang in Distinct(language, null))
+                {
+                    var found = await SearchOnceAsync(face, setCode, lang, exact, ct);
+                    if (found.Count > 0) return found;
+                }
+            }
+        }
+
         return [];
     }
 
@@ -510,6 +556,19 @@ public sealed class ScryfallCatalogue
             if (picked is not null)
                 return new ResolvedPrinting(
                     await LocaliseAsync(picked, language, ct), Resolutions.Confirmed, collectorNumber);
+        }
+
+        // A name holding // is the one case worth a search even with no number behind it, because
+        // fuzzy matching below is the worst possible tool for it: asked for two names joined it
+        // either answers nothing or answers with whichever of them it liked, and neither failure
+        // is visible afterwards. SearchPrintingsAsync tries the name whole first, so a card that
+        // really is in two named parts is unaffected; only an assembled one reaches its faces.
+        if (name.Contains("//", StringComparison.Ordinal))
+        {
+            var byFace = await SearchPrintingsAsync(name, null, language, ct);
+            if (byFace.Count > 0)
+                return new ResolvedPrinting(
+                    await LocaliseAsync(byFace[0], language, ct), Resolutions.Unplaced, collectorNumber);
         }
 
         var found = await FuzzyAsync(name, null, ct);

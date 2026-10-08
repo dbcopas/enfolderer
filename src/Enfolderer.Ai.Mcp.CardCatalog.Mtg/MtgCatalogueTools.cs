@@ -26,6 +26,12 @@ public sealed class MtgCatalogueTools
         misread digit returns a real printing of the wrong card. The number returned is the
         catalogue's and is the one to answer with.
 
+        Give the name as the title bar prints it and nothing more. A second spell printed inside a
+        card's text box is not a second name, however much its little titled panel looks like one,
+        and joining the two with "//" asks for a card no catalogue has. A card that really is in
+        two named parts is catalogued under both, so the name in the reply carries "//" when it
+        belongs there. Answer with the name in the reply, not with the one you sent.
+
         Pass only what you actually read off the card. Leave the set code empty when you could not
         read one: it must never be filled in from knowing the card, because that answer always
         looks right and is wrong for every alternate-art reprint. Without a set code the number
@@ -46,7 +52,7 @@ public sealed class MtgCatalogueTools
         the resolution says how much to trust the set and number, never the name.
         """)]
     public async Task<string> ResolvePrintingAsync(
-        [Description("Card name exactly as printed on the card, in whatever language it is printed in.")] string name,
+        [Description("Card name exactly as the title bar prints it, in whatever language it is printed in. Never join a second spell's name to it with '//'.")] string name,
         [Description("Set code as printed on the card, e.g. 'mh3' or 'sld'. Leave empty if you cannot read one — never supply a set because you recognise the card.")] string set,
         [Description("Collector number as read, e.g. '438' or '5J-b'. Omit when it cannot be read with confidence.")] string? collectorNumber = null,
         [Description("Two-letter language code of the printing, e.g. 'en', 'ja', 'de'. Omit when unsure.")] string? language = null,

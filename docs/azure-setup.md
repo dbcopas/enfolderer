@@ -2453,6 +2453,45 @@ first and never the second. The language is not thrown away — it travels in it
 up in the CSV's language column, so `neo;268;;ja;Boseiju, Who Endures` is a Japanese card recorded
 under the name you can search for.
 
+### If an exported name has `//` in it and the card does not
+
+The symptom is a row like `sos;80;;en;Emeritus of Woe // Demonic Tutor`, where the set and number
+are right and the name has a second card's name welded onto it. `//` means a card that really is
+in two named parts — a split card, an Adventure, a double-faced card — and the catalogue joins
+those names itself. What this row is instead is a card with a second spell printed inside its own
+text box, in a little titled panel that looks very much like a second name.
+
+It matters more than a cosmetic blemish, because the name is the only field the rest of the scan
+is built from. A name with `//` invented in it matches nothing in the catalogue exactly and
+nothing as free text either, so the most legible thing on the card becomes the thing that sinks
+it. The catalogue now splits such a name and searches each part, taking the one written first —
+the card's own name is the title bar, and anything appended to it was printed below. A name that
+really is joined matches whole before that fallback is reached, so split and Adventure cards are
+untouched.
+
+That gets the lookup right. What puts the bad name in the file is the agent answering with the
+name it read rather than the one the tool returned, so both identification agents are now told
+plainly never to write `//` themselves. Deploying the catalogue image alone will not fix the
+exported name — this one needs the agents re-provisioned as well:
+
+```powershell
+git pull
+./scripts/deploy-images.ps1
+```
+
+```powershell
+$id = az deployment sub show --name enfolderer-scan `
+        --query properties.outputs.identificationProjectEndpoint.value -o tsv
+
+$mcp = @{}
+foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
+  (az deployment sub show --name enfolderer-scan --query "properties.outputs.$o.value" -o json |
+     ConvertFrom-Json) | ForEach-Object { $mcp[$_.name] = $_.url }
+}
+
+./agents/provision.ps1 -ProjectEndpoint $id -Path ./agents/cardid -McpServerUrl $mcp
+```
+
 ### If a card is named correctly but exported as the wrong printing
 
 The symptom is a row that looks entirely right until you hold it next to the card: the name
