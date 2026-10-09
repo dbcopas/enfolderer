@@ -220,8 +220,10 @@ public sealed class ScanJobProcessor
         var moved = string.Equals(card.ArtVerdict, "moved", StringComparison.OrdinalIgnoreCase);
 
         _log.Log(doubtful || moved || !card.HasPrinting ? LogLevel.Warning : LogLevel.Information,
-            "Card {Index} of job {JobId}: {Set} {Number} ({Name}, {Language}) resolved as {Resolution}{Read}{Art}.",
+            "Card {Index} of job {JobId}: {Set} {Number} ({Name}, {Language}) resolved as {Resolution}"
+            + " (read set '{ReadSet}', read number '{ReadNumber}', confidence {Confidence:0.00}){Read}{Art}.",
             index, jobId, card.Set, card.CollectorNumber ?? "(no number)", card.Name, card.Language, card.Resolution,
+            card.ReadSet ?? "(none)", card.ReadCollectorNumber ?? "(none)", card.Confidence,
             corrected && !string.IsNullOrWhiteSpace(card.ReadCollectorNumber)
                 ? $" — the number read off the card was '{card.ReadCollectorNumber}'"
                 : string.Equals(card.Resolution, "unverified", StringComparison.OrdinalIgnoreCase)
@@ -245,9 +247,8 @@ public sealed class ScanJobProcessor
     /// the entire claim being made, and the number that carries it.
     /// </para>
     /// <para>
-    /// Silence where nothing was compared is deliberate. "Inconclusive" is said out loud because
-    /// it means the check ran and declined — the usual outcome for a reprint that shares its
-    /// illustration — and that is different from a check that never happened.
+    /// An inconclusive comparison may mean poor alignment, missing candidates, or shared art.
+    /// Report the measured reason, not an assumption about the illustration.
     /// </para>
     /// </summary>
     private static string DescribeArt(IdentifiedCard card) => card.ArtVerdict?.ToLowerInvariant() switch
@@ -256,9 +257,9 @@ public sealed class ScanJobProcessor
         "moved" => $", then moved to {card.Set} {card.CollectorNumber} because the art matches it and not "
                  + $"{card.ArtMovedFrom} (clearer by {card.ArtMargin:0.00}). The set or number read off the "
                  + "card belongs to a different printing of it",
-        "inconclusive" => ", and the art could not separate its printings, which is what a shared "
-                        + "illustration looks like and is not a fault",
-        _ => string.Empty
+        "inconclusive" => $", and the art declined: {card.ArtReason ?? "unspecified"} "
+                        + $"(distance {card.ArtDistance:0.000}, separation {card.ArtMargin:0.000})",
+        _ => card.ArtReason is null ? string.Empty : $", art not checked: {card.ArtReason}"
     };
 
     private async Task<List<IdentifiedCard>> IdentifyAllAsync(

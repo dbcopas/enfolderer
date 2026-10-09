@@ -75,7 +75,13 @@ public sealed class CardArtVerifier
     public async Task<IdentifiedCard> VerifyAsync(
         IdentifiedCard card, byte[] cropBytes, string jobId, CancellationToken ct)
     {
-        if (!card.IsIdentified || card.ArtReferences.Count == 0) return card;
+        if (!card.IsIdentified) return card;
+        if (card.ArtReferences.Count == 0)
+        {
+            _log.LogWarning("Card {Index} of job {JobId}: art not checked, no candidate images supplied.",
+                card.Index, jobId);
+            return card with { ArtReason = "no_references" };
+        }
 
         var references = card.ArtReferences
             .Where(r => IsFetchable(r.ImageUrl))
@@ -84,23 +90,23 @@ public sealed class CardArtVerifier
 
         if (references.Count == 0)
         {
-            _log.LogDebug(
+            _log.LogWarning(
                 "Card {Index} of job {JobId} offered {Count} picture(s), none of them on the catalogue's "
                 + "image hosts, so the art was not checked.",
                 card.Index, jobId, card.ArtReferences.Count);
-            return card;
+            return card with { ArtReason = "no_fetchable_references" };
         }
 
-        ulong[] cropHash;
+        IReadOnlyList<ulong[]> cropHashes;
         try
         {
             using var crop = new MemoryStream(cropBytes, writable: false);
-            cropHash = CardArtHash.Compute(crop);
+            cropHashes = CardArtHash.ComputeAlignments(crop);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogWarning(ex, "Card {Index} of job {JobId}: the crop could not be hashed.", card.Index, jobId);
-            return card;
+            return card with { ArtReason = "crop_unreadable" };
         }
 
         var measured = new List<ArtCandidate>(references.Count);
@@ -109,12 +115,21 @@ public sealed class CardArtVerifier
             ct.ThrowIfCancellationRequested();
 
             var hash = await TryHashAsync(reference.ImageUrl, ct);
-            if (hash is null) continue;
+            if (hash is null)
+            {
+                _log.LogWarning("Card {Index} of job {JobId}: could not compare candidate {Set} {Number}.",
+                    card.Index, jobId, reference.Set, reference.CollectorNumber);
+                continue;
+            }
 
+            var distance = cropHashes.Min(cropHash => CardArtHash.NormalisedDistance(cropHash, hash));
+            _log.LogInformation(
+                "Card {Index} of job {JobId}: art candidate {Set} {Number}, aligned distance {Distance:0.000}.",
+                card.Index, jobId, reference.Set, reference.CollectorNumber, distance);
             measured.Add(new ArtCandidate(
                 reference.Set,
                 reference.CollectorNumber,
-                CardArtHash.NormalisedDistance(cropHash, hash)));
+                distance));
         }
 
         var identified = card.Set is { Length: > 0 } set && card.CollectorNumber is { Length: > 0 } number
@@ -122,6 +137,24 @@ public sealed class CardArtVerifier
             : ((string, string)?)null;
 
         var comparison = ArtAdjudicator.Adjudicate(identified, measured);
+        var reason = measured.Count == 0 ? "no_images_readable"
+            : measured.Count != references.Count ? "missing_candidates"
+            : comparison.Best!.Distance > ArtAdjudicator.MaxAgreeingDistance ? "distance_too_large"
+            : measured.Count == 1 && comparison.Verdict == ArtVerdict.Inconclusive ? "insufficient_candidates"
+            : measured.Count > 1 && comparison.Separation < ArtAdjudicator.MinSeparation ? "separation_too_small"
+            : "match";
+
+        _log.LogInformation(
+            "Card {Index} of job {JobId}: art compared {Compared}/{Offered} candidates; "
+            + "best {Set} {Number}, distance {Distance:0.000} (maximum {MaxDistance:0.000}), "
+            + "separation {Separation:0.000} (minimum {MinSeparation:0.000}); reason {Reason}.",
+            card.Index, jobId, measured.Count, references.Count,
+            comparison.Best?.Set, comparison.Best?.CollectorNumber, comparison.Best?.Distance,
+            ArtAdjudicator.MaxAgreeingDistance, comparison.Separation, ArtAdjudicator.MinSeparation, reason);
+
+        card = card with { ArtReason = reason, ArtDistance = comparison.Best?.Distance };
+        if (reason == "missing_candidates")
+            return card with { ArtVerdict = "inconclusive", ArtMargin = comparison.Separation };
 
         return comparison.Verdict switch
         {
@@ -175,9 +208,17 @@ public sealed class CardArtVerifier
         try
         {
             using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode)
+            {
+                _log.LogWarning("Catalogue image {Url} returned HTTP {Status}.", url, (int)response.StatusCode);
+                return null;
+            }
 
-            if (response.Content.Headers.ContentLength is > MaxImageBytes) return null;
+            if (response.Content.Headers.ContentLength is > MaxImageBytes)
+            {
+                _log.LogWarning("Catalogue image {Url} exceeds the {Limit} byte limit.", url, MaxImageBytes);
+                return null;
+            }
 
             await using var body = await response.Content.ReadAsStreamAsync(ct);
             using var buffered = new MemoryStream();
@@ -188,7 +229,11 @@ public sealed class CardArtVerifier
             int read;
             while ((read = await body.ReadAsync(chunk, ct)) > 0)
             {
-                if (buffered.Length + read > MaxImageBytes) return null;
+                if (buffered.Length + read > MaxImageBytes)
+                {
+                    _log.LogWarning("Catalogue image {Url} exceeds the {Limit} byte limit.", url, MaxImageBytes);
+                    return null;
+                }
                 buffered.Write(chunk, 0, read);
             }
 
@@ -197,7 +242,7 @@ public sealed class CardArtVerifier
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log.LogDebug(ex, "Catalogue image could not be read for comparison.");
+            _log.LogWarning(ex, "Catalogue image {Url} could not be read for comparison.", url);
             return null;
         }
     }

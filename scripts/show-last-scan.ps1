@@ -8,8 +8,8 @@
     arrived at, and that is the only thing that says whether to believe them.
 
     The worker writes one line per card as it resolves it, and those lines do carry it: the
-    resolution, the number actually read off the card where it differs from the catalogue's, and
-    what the art comparison made of the printing. This script finds the worker, pulls those lines
+    resolution, the set and number read off the card, each art candidate's distance, and the
+    comparison's measured reason for accepting or declining. This script finds the worker, pulls those lines
     out of Log Analytics and prints them in order.
 
     It reads logs rather than the job document in Cosmos deliberately. Cosmos has local
@@ -83,9 +83,12 @@ if (-not (Invoke-Az @('account', 'show', '-o', 'json'))) {
 Write-Step '1. Find the worker'
 
 if (-not $NamePrefix) {
-    $groups = Invoke-Az @('group', 'list', '--query', "[?ends_with(name,'-platform')].name", '-o', 'tsv')
+    $groupJson = Invoke-Az @('group', 'list', '-o', 'json')
     $candidates = @()
-    if ($groups) { $candidates = @($groups -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+    if ($groupJson) {
+        $candidates = @(($groupJson | ConvertFrom-Json) |
+            Where-Object { $_.name.EndsWith('-platform') } | ForEach-Object { $_.name })
+    }
 
     if ($candidates.Count -eq 1) { $NamePrefix = $candidates[0] -replace '-platform$', '' }
     elseif ($candidates.Count -gt 1) {
@@ -108,9 +111,8 @@ Write-Note "$worker in $rg"
 
 # Container Apps writes to the environment's Log Analytics workspace, and the query below runs
 # against the workspace rather than the app, so the link has to be followed to find its id.
-$envId = Invoke-Az @('containerapp', 'show', '-g', $rg, '-n', $worker,
-    '--query', 'properties.environmentId', '-o', 'tsv')
-if (-not $envId) {
+$workerJson = Invoke-Az @('containerapp', 'show', '-g', $rg, '-n', $worker, '-o', 'json')
+if (-not $workerJson) {
     throw @"
 No container app named '$worker' in resource group '$rg'.
 
@@ -118,9 +120,12 @@ See what is there:
     az containerapp list -g $rg --query "[].name" -o table
 "@
 }
+$envId = ($workerJson | ConvertFrom-Json).properties.environmentId
 
-$customerId = Invoke-Az @('containerapp', 'env', 'show', '--ids', $envId,
-    '--query', 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId', '-o', 'tsv')
+$environmentJson = Invoke-Az @('containerapp', 'env', 'show', '--ids', $envId, '-o', 'json')
+$customerId = if ($environmentJson) {
+    ($environmentJson | ConvertFrom-Json).properties.appLogsConfiguration.logAnalyticsConfiguration.customerId
+} else { $null }
 if (-not $customerId) {
     throw @"
 The Container Apps environment is not sending logs to Log Analytics, so there is nothing to read.
@@ -130,11 +135,6 @@ You can still watch the worker live while a scan runs:
 "@
 }
 Write-Note "log analytics workspace $customerId"
-
-if (-not (Invoke-Az @('extension', 'show', '-n', 'log-analytics', '-o', 'json'))) {
-    Write-Note 'installing the log-analytics CLI extension (first run only)'
-    az extension add -n log-analytics --only-show-errors | Out-Null
-}
 
 Write-Step "2. Read the resolution lines from the last $Hours hour(s)"
 
@@ -146,13 +146,26 @@ $query = @"
 ContainerAppConsoleLogs_CL
 | where TimeGenerated > ago($($Hours)h)
 | where ContainerAppName_s == '$worker'
-| where Log_s has 'resolved as' or Log_s has 'could not be identified' or Log_s has 'was dropped after'
+| where Log_s contains 'resolved as' or Log_s contains 'was not identified'
+    or Log_s contains 'was dropped after' or Log_s contains 'Identification failed for card'
+    or Log_s contains 'art candidate' or Log_s contains 'art compared' or Log_s contains 'art not checked'
+    or Log_s contains 'could not compare candidate' or Log_s contains 'server_error; retry'
 | project TimeGenerated, Log_s
 | order by TimeGenerated asc
 "@
 
-$raw = az monitor log-analytics query --workspace $customerId --analytics-query $query -o json 2>$null
-if ($LASTEXITCODE -ne 0 -or -not $raw) {
+# az.cmd lets cmd.exe interpret KQL pipes and quotes. Send JSON from a file instead.
+$queryFile = [System.IO.Path]::GetTempFileName()
+try {
+    [System.IO.File]::WriteAllText($queryFile, (@{ query = $query } | ConvertTo-Json))
+    $raw = az rest --method post --url "https://api.loganalytics.azure.com/v1/workspaces/$customerId/query" `
+        --resource https://api.loganalytics.io --body "@$queryFile" -o json
+    $queryExitCode = $LASTEXITCODE
+}
+finally {
+    Remove-Item -LiteralPath $queryFile
+}
+if ($queryExitCode -ne 0 -or -not $raw) {
     throw @"
 The log query failed. The usual cause is not having Log Analytics Reader on the workspace; Owner on
 the subscription does not include it.
@@ -168,7 +181,12 @@ Then run this script again. Role assignments can take a minute or two to take ef
 
 # az returns its output a line at a time, and piping that array to ConvertFrom-Json asks it to
 # parse each line on its own. Join it back into one document first.
-$rows = @(($raw -join "`n") | ConvertFrom-Json)
+$response = ($raw -join "`n") | ConvertFrom-Json
+$table = @($response.tables | Where-Object { $_.name -eq 'PrimaryResult' })
+if ($table.Count -ne 1) { throw 'Log Analytics returned no PrimaryResult table.' }
+$rows = @($table[0].rows | ForEach-Object {
+    [pscustomobject]@{ TimeGenerated = $_[0]; Log_s = $_[1] }
+})
 if (-not $rows -or $rows.Count -eq 0) {
     Write-Host ''
     Write-Host "No card was resolved in the last $Hours hour(s)." -ForegroundColor Yellow
@@ -186,6 +204,8 @@ $parsed = foreach ($r in $rows) {
     [pscustomobject] @{ Time = $r.TimeGenerated; Job = $job; Line = $r.Log_s }
 }
 
+$uncorrelated = @($parsed | Where-Object { $_.Job -eq '(unknown)' })
+$parsed = @($parsed | Where-Object { $_.Job -ne '(unknown)' })
 $jobs = @($parsed | Select-Object -ExpandProperty Job -Unique)
 if (-not $All -and $jobs.Count -gt 1) {
     $latest = ($parsed | Select-Object -Last 1).Job
@@ -203,12 +223,20 @@ foreach ($job in $jobs) {
         $doubt = $p.Line -match 'resolved as (unverified|unplaced|ambiguous|fuzzy|relocated|corrected)' `
               -or $p.Line -match 'could not be identified' `
               -or $p.Line -match 'was dropped after' `
-              -or $p.Line -match 'then moved to'
+              -or $p.Line -match 'then moved to|Identification failed|was not identified|art declined|art not checked|could not compare'
         $colour = if ($doubt) { 'Yellow' } else { 'Gray' }
 
         # Strip the structured-logging preamble if the runtime added one; the sentence is the point.
         $text = $p.Line -replace '^\s*(?:\S+\s+)?(?:info|warn|fail|trce|dbug|crit):\s*', ''
         Write-Host "  $text" -ForegroundColor $colour
+    }
+}
+
+if ($uncorrelated.Count -gt 0) {
+    Write-Host ''
+    Write-Host 'Uncorrelated retry events in this time window (identified by thread, not job):' -ForegroundColor Yellow
+    foreach ($event in $uncorrelated) {
+        Write-Host "  $($event.Time): $($event.Line)" -ForegroundColor Yellow
     }
 }
 

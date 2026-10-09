@@ -24,9 +24,9 @@ namespace Enfolderer.Ai.Imaging;
 /// That is the point, because the two images being compared are never alike as files. One is a
 /// clean scan from the catalogue; the other is a photograph through a sleeve, under whatever light
 /// the room had, rectified out of a quadrilateral by <see cref="PerspectiveCropper"/> and encoded
-/// as JPEG somewhere along the way. Exact comparison fails on every one of those; a difference
-/// hash is unmoved by all of them, because none changes which parts of a picture are lighter than
-/// their neighbours.
+/// as JPEG somewhere along the way. A difference hash tolerates exposure changes, but geometry
+/// and sleeve margins move those neighbours. <see cref="ComputeAlignments"/> searches a bounded
+/// range of offsets and sizes for them.
 /// </para>
 /// <para>
 /// Greyscale rather than colour is deliberate and not merely a simplification. A foil card throws
@@ -39,10 +39,10 @@ public static class CardArtHash
 {
     /// <summary>
     /// Width and height, in pixels, of the grid the image is reduced to. The hash is this squared
-    /// in bits — 1024 for the default 32 — which is small enough to compare instantly and large
-    /// enough to tell two illustrations apart rather than merely two layouts.
+    /// in bits. Sixteen cells retain the illustration's structure without making tiny crop
+    /// offsets dominate the comparison, as they did on the real training photographs at 32.
     /// </summary>
-    public const int Size = 32;
+    public const int Size = 16;
 
     /// <summary>Number of bits in a hash, and so the largest possible distance between two.</summary>
     public const int BitCount = Size * Size;
@@ -64,6 +64,35 @@ public static class CardArtHash
 
         using var loaded = Image.Load<Rgba32>(image);
         return Compute(loaded);
+    }
+
+    /// <summary>
+    /// Hashes bounded alignments of a photographic crop. Boundary estimates can include sleeve
+    /// and neighbouring-card margins; a catalogue scan does not.
+    /// </summary>
+    public static IReadOnlyList<ulong[]> ComputeAlignments(Stream image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        using var loaded = Image.Load<Rgba32>(image);
+        using var reduced = loaded.Clone(c => c.Resize(128, 176));
+        var hashes = new List<ulong[]>();
+        for (var step = 0; step <= 5; step++)
+        {
+            var scale = 0.75 + step * 0.05;
+            var width = (int)Math.Round(reduced.Width * scale);
+            var height = (int)Math.Round(reduced.Height * scale);
+            var offsets = step == 5 ? 0 : 4;
+            for (var x = 0; x <= offsets; x++)
+            for (var y = 0; y <= offsets; y++)
+            {
+                using var aligned = reduced.Clone(c => c.Crop(new Rectangle(
+                    (reduced.Width - width) * x / 4,
+                    (reduced.Height - height) * y / 4,
+                    width, height)));
+                hashes.Add(Compute(aligned));
+            }
+        }
+        return hashes;
     }
 
     /// <summary>Hashes an image already in memory.</summary>

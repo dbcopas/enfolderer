@@ -107,8 +107,8 @@ public sealed class FoundryAgentClient
     }
 
     /// <summary>
-    /// Starts a run on an existing thread and polls it to completion, retrying when the model
-    /// deployment throttles us.
+    /// Starts a run on an existing thread and polls it to completion, retrying throttling and
+    /// terminal server errors within separate bounded budgets.
     /// </summary>
     /// <remarks>
     /// A token-per-minute limit is not a property of the request, so a run that failed on it would
@@ -126,7 +126,9 @@ public sealed class FoundryAgentClient
     private async Task RunToCompletionAsync(
         string agentId, string threadId, string? approvedServerLabel, CancellationToken ct)
     {
-        for (var attempt = 1; ; attempt++)
+        var throttleRetries = 0;
+        var serverErrorRetries = 0;
+        while (true)
         {
             string status;
             string? lastError;
@@ -144,17 +146,28 @@ public sealed class FoundryAgentClient
                 (status, lastError, errorCode) = await WaitForRunAsync(threadId, runId, approvedServerLabel, ct);
                 if (IsCompleted(status)) return;
             }
-            catch (FoundryAccessException ex) when (ex.StatusCode == 429 && attempt <= _throttleRetries)
+            catch (FoundryAccessException ex) when (ex.StatusCode == 429 && throttleRetries < _throttleRetries)
             {
                 // The same limit, refused one step earlier: the service declined to start the run
                 // at all rather than starting it and failing it.
-                await DelayAfterThrottleAsync(agentId, ex.Message, attempt, ct);
+                await DelayAfterThrottleAsync(agentId, ex.Message, ++throttleRetries, ct);
                 continue;
             }
 
-            if (IsThrottled(errorCode, lastError) && attempt <= _throttleRetries)
+            if (IsThrottled(errorCode, lastError) && throttleRetries < _throttleRetries)
             {
-                await DelayAfterThrottleAsync(agentId, lastError, attempt, ct);
+                await DelayAfterThrottleAsync(agentId, lastError, ++throttleRetries, ct);
+                continue;
+            }
+
+            if (IsServerError(status, errorCode) && serverErrorRetries < MaxServerErrorRetries)
+            {
+                var delay = TimeSpan.FromSeconds(Math.Pow(2, serverErrorRetries++));
+                _log.LogWarning(
+                    "Agent '{AgentId}' run failed with server_error; retry {Retry} of {Max} on thread "
+                    + "{ThreadId} in {Delay}. {Error}",
+                    agentId, serverErrorRetries, MaxServerErrorRetries, threadId, delay, lastError);
+                await Task.Delay(delay, ct);
                 continue;
             }
 
@@ -163,11 +176,19 @@ public sealed class FoundryAgentClient
             var exhausted = IsThrottled(errorCode, lastError)
                 ? $" The model deployment is rate limited and {_throttleRetries} retries did not clear it; "
                   + "the deployment's tokens-per-minute quota is shared by every project in the account."
-                : string.Empty;
+                : IsServerError(status, errorCode)
+                    ? $" {MaxServerErrorRetries} server_error retries were exhausted."
+                    : string.Empty;
             throw new InvalidOperationException(
                 $"Agent '{agentId}' run ended with status '{status}'{reason}.{exhausted}");
         }
     }
+
+    private const int MaxServerErrorRetries = 2;
+
+    internal static bool IsServerError(string status, string? errorCode) =>
+        string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase)
+        && string.Equals(errorCode, "server_error", StringComparison.OrdinalIgnoreCase);
 
     private async Task DelayAfterThrottleAsync(string agentId, string? message, int attempt, CancellationToken ct)
     {
