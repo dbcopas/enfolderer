@@ -178,6 +178,12 @@ public sealed record IdentifiedCard
     /// </summary>
     [JsonPropertyName("artMargin")] public double? ArtMargin { get; init; }
 
+    /// <summary>Distance of the closest catalogue image, 0..1; lower is better.</summary>
+    [JsonPropertyName("artDistance")] public double? ArtDistance { get; init; }
+
+    /// <summary>Why the art check accepted, declined, or could not compare the printing.</summary>
+    [JsonPropertyName("artReason")] public string? ArtReason { get; init; }
+
     /// <summary>
     /// Where the card was before the pictures moved it, as <c>set number</c>, and null when
     /// nothing moved. Kept so a move can be seen rather than inferred, exactly as

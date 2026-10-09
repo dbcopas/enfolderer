@@ -30,8 +30,13 @@ internal static class Program
 {
     private static int _failures;
 
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (args.Length > 0 && (args[0] != "--photo-art" || args.Length > 2))
+        {
+            Console.Error.WriteLine("Usage: Enfolderer.Ai.CardCatalog.Check [--photo-art [training-directory]]");
+            return 2;
+        }
         NumberReadingChecks();
         ResolutionChecks().GetAwaiter().GetResult();
         PromptChecks();
@@ -42,6 +47,10 @@ internal static class Program
         ArtAdjudicationChecks();
         ArtFetchChecks();
         RecalledSetChecks().GetAwaiter().GetResult();
+        ScanReliabilityChecks.RunOfflineAsync(Check).GetAwaiter().GetResult();
+        if (args.Length > 0)
+            ScanReliabilityChecks.RunPhotoAsync(Check, args.Length == 2 ? args[1] : null)
+                .GetAwaiter().GetResult();
 
         Console.WriteLine(_failures == 0
             ? "\nAll checks passed."

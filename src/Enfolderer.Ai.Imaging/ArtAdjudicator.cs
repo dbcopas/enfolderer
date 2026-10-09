@@ -106,20 +106,25 @@ public static class ArtAdjudicator
 
         var separation = Separation(ranked);
 
-        // One candidate only: there is nothing to separate it from, so closeness is the whole
-        // test. A single printing is also the case where moving is impossible anyway.
+        // A lone alternative cannot endorse a different identified printing: its rival may
+        // simply have failed to download.
         if (ranked.Count == 1)
-            return new ArtComparison(ArtVerdict.Agrees, best, separation, ranked);
+            return new ArtComparison(
+                Matches(identified, best) ? ArtVerdict.Agrees : ArtVerdict.Inconclusive,
+                best, separation, ranked);
 
         if (separation < MinSeparation)
             return new ArtComparison(ArtVerdict.Inconclusive, best, separation, ranked);
 
-        var agrees = identified is not null
-                  && string.Equals(identified.Value.Set, best.Set, StringComparison.OrdinalIgnoreCase)
-                  && string.Equals(identified.Value.CollectorNumber, best.CollectorNumber, StringComparison.OrdinalIgnoreCase);
+        var agrees = Matches(identified, best);
 
         return new ArtComparison(agrees ? ArtVerdict.Agrees : ArtVerdict.Moved, best, separation, ranked);
     }
+
+    private static bool Matches((string Set, string CollectorNumber)? identified, ArtCandidate candidate) =>
+        identified is not null
+        && string.Equals(identified.Value.Set, candidate.Set, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(identified.Value.CollectorNumber, candidate.CollectorNumber, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Gap between the closest candidate and the next closest; 0 when there is only one.</summary>
     private static double Separation(IReadOnlyList<ArtCandidate> ranked)

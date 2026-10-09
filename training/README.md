@@ -52,6 +52,19 @@ dotnet run --project tools/Enfolderer.Ai.Imaging.TrainingCheck
 It prints the expected and the located pockets for each photograph and exits non-zero when any
 photograph disagrees. All six should pass, for 47 cards of 47.
 
+The separate printing check exercises the worker's art verifier on all nine cards in `01`,
+using the boundary coordinates from the failing live scan:
+
+```powershell
+dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --photo-art
+```
+
+It must move Sword of Hearth and Home from MH2 238 to TMC 136 and Food Chain from 2X2 147 to
+TMC 133, preserve the other seven printings, and reject unrelated-card photographs. The original
+distance and separation thresholds are asserted, not relaxed. Unlike the layout check, this
+requires internet access to fetch public catalogue pictures; they stay in memory and are not saved.
+Omit `--photo-art` to run that tool's offline catalogue, retry, and synthetic-image checks only.
+
 Note that a card cut off by the edge of the frame is **not** listed: `02` shows the top of a row of
 Annex cards along its bottom edge and they are deliberately absent from its `cards.txt`, because a
 card without all four of its sides in the photograph is not something the detector should claim to

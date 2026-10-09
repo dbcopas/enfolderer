@@ -278,6 +278,51 @@ geometry but no name, so the audience can see exactly where a card was lost.
 Contract deserialisation, the polling state machine and the card mapping are covered by
 `Enfolderer.App/Tests/AiScanClientTests.cs`, which runs as part of `--selftests`.
 
+## Scan reliability and printing evidence
+
+A terminal Foundry run with status `failed` and error code `server_error` is retried twice,
+after one and two seconds. Retries reuse the same thread and uploaded image; cleanup still runs
+on failure or cancellation. Throttling has its own existing bounded retry budget. Invalid requests,
+authorization failures, cancelled runs, and HTTP 5xx responses are not replayed as terminal server
+errors: an HTTP failure does not prove that a run has stopped. Exhausted retries remain per-card
+errors, not invented identifications.
+
+Art verification uses a 16-by-16 difference hash and compares bounded alignments of the crop:
+75-100% of its width and height, with offsets inside the crop. This tolerates sleeve margins and
+imprecise boundaries without lowering the acceptance gates: the best image's distance must still
+be at most `0.30`, and its lead over the next candidate at least `0.06`. Shared-art printings remain
+inconclusive. If a candidate image cannot be read, the check does not move the printing on the
+strength of an incomplete field.
+
+Each card's resolution log includes `readSet`, `readCollectorNumber`, and confidence. Additional
+art logs report every candidate's distance, the closest printing, the separation, both thresholds,
+and why the comparison declined. Result JSON adds optional `artDistance` and `artReason` fields;
+the CSV format is unchanged. Reasons include `distance_too_large`, `separation_too_small`,
+`missing_candidates`, `insufficient_candidates`, `no_references`, `no_fetchable_references`,
+`no_images_readable`, and `crop_unreadable`. An inconclusive check is **not** proof of shared art.
+
+Run the offline retry, cancellation, download-failure, and image-comparison checks:
+
+```powershell
+dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check
+```
+
+For the real-photo regression, including all nine cards on training page 01 and unrelated-card
+negative controls:
+
+```powershell
+dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --photo-art
+```
+
+This uses the stored photograph and the boundary coordinates returned by the failing live scan,
+then fetches public Scryfall catalogue images into memory without saving them. It exercises the
+worker's actual art verifier, not mocked distances. It does not call Foundry or deploy anything.
+The default checks remain offline.
+
+After deploying the worker image and rescanning, read the evidence with
+`.\scripts\show-last-scan.ps1`. Its Log Analytics query is sent as a JSON file so Windows
+`az.cmd` cannot interpret the KQL pipes as shell commands.
+
 ## Running locally without Azure
 
 Leave `ScanPlatform:CosmosEndpoint` and `ScanPlatform:StorageAccountUrl` empty. The API and worker
