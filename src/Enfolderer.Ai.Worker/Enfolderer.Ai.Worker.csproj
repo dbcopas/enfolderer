@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-Enfolderer.Ai.Worker-3a9802c4-87d4-467c-bb2e-fb88f4e9c308</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Enfolderer.Ai.Contracts\Enfolderer.Ai.Contracts.csproj" />
+    <ProjectReference Include="..\Enfolderer.Ai.Infrastructure\Enfolderer.Ai.Infrastructure.csproj" />
+    <ProjectReference Include="..\Enfolderer.Ai.Imaging\Enfolderer.Ai.Imaging.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- So the per-run prompt can be asserted on: it is the copy that overrides the agent YAML,
+         and a second set of instructions creeping back into it is a silent failure. -->
+    <InternalsVisibleTo Include="Enfolderer.Ai.CardCatalog.Check" />
+  </ItemGroup>
+</Project>

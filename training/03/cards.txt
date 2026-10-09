@@ -1,0 +1,7 @@
+0,1;War of the Last Alliance;LTR;36;no;en
+0,2;Galadriel of Lothlorien;LTR;206;no;en
+1,0;Pippin, Guard of the Citadel;LTR;218;no;en
+1,1;Horn of Valhalla;CLB;26;no;en
+1,2;Lotho, Corrupt Shirriff;LTR;213;no;en
+2,0;Isildur's Fateful Strike;LTR;91;no;en
+2,1;Historian's Boon;DMC;21;no;en

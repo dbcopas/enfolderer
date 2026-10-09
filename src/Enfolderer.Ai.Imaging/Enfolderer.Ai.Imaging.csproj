@@ -1,0 +1,39 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Held at the 2.x line, which is Apache-2.0. From 3.0 ImageSharp is under the Six Labors Split
+      License and from 4.0 the package fails the build without a licence key: its targets file runs
+      ValidateLicenseTask with ContinueOnError set to Configuration.StartsWith('Debug'), so a key is
+      a warning in Debug and an error in Release — and Release is what src/Dockerfile publishes. A
+      bump therefore stops every container image building until a key is bought and threaded through
+      the image build, which is a purchasing decision rather than a code one.
+
+      Three advisories are open against every version up to 4.1.1, patched only in 4.1.2: the TIFF
+      CCITT T4 and T6 *encoders* overrun their output buffers, and HistogramEqualization indexes a
+      histogram with an unvalidated luminance. None is reachable from here. This project decodes
+      JPEG and PNG, resizes, reads pixels, and encodes PNG and nothing else — see PerspectiveCropper
+      SaveAsPng, the only encode in the repository. No TIFF is ever written and no histogram
+      processor is ever invoked, so the vulnerable code is not merely unlikely to run but absent
+      from the call graph.
+
+      When a licence is in hand: raise this to 4.1.2, set SixLaborsLicenseKey (or drop a sixlabors.lic
+      beside the solution), and re-run tools/Enfolderer.Ai.Imaging.TrainingCheck. Expect it to need
+      attention — on 4.1.2 it finds 46 of 47 training cards rather than 47, because the rewritten
+      JPEG decoder shifts pixels enough to lose one marginal card, and CardArrangementOptions.MinEdge
+      sits at a sharp optimum at 1.0 (0.8 through 1.05 were all measured worse).
+    -->
+    <PackageReference Include="SixLabors.ImageSharp" Version="2.1.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Enfolderer.Ai.Contracts\Enfolderer.Ai.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

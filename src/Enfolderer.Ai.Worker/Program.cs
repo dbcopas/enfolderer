@@ -1,0 +1,102 @@
+using Azure.Core;
+using Azure.Storage.Queues;
+using Enfolderer.Ai.Contracts;
+using Enfolderer.Ai.Infrastructure;
+using Enfolderer.Ai.Worker;
+using Enfolderer.Ai.Worker.Agents;
+using Enfolderer.Ai.Worker.Pipeline;
+using Enfolderer.Ai.Worker.Queueing;
+
+// A web host rather than a plain worker host. The pipeline is a hosted service and needs no HTTP,
+// and on Container Apps this runs with ingress disabled, so nothing reaches the listener. It stays
+// a web host because /healthz is the cheapest way to check a running replica from `az containerapp
+// exec`, and because dropping the listener buys nothing.
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddScanPlatform(builder.Configuration);
+
+var pipeline = new ScanPipelineOptions();
+builder.Configuration.GetSection(ScanPipelineOptions.SectionName).Bind(pipeline);
+builder.Services.AddSingleton(pipeline);
+
+builder.Services.AddHttpClient();
+
+// Queue consumer, matching whichever queue the API is configured to publish to.
+builder.Services.AddSingleton<IJobQueueConsumer>(sp =>
+{
+    var platform = sp.GetRequiredService<ScanPlatformOptions>();
+    if (!platform.UsesAzureQueue)
+        return new LocalDirectoryQueueConsumer(platform.LocalStorageRoot, sp.GetRequiredService<ILogger<LocalDirectoryQueueConsumer>>());
+
+    var queueService = new QueueServiceClient(new Uri(platform.QueueAccountUrl!), sp.GetRequiredService<TokenCredential>());
+    // One agent run per detected card, so the initial lease is sized off the agent timeout and
+    // then renewed while the job is in flight.
+    var pipelineOptions = sp.GetRequiredService<ScanPipelineOptions>();
+    return new StorageQueueConsumer(
+        queueService.GetQueueClient(platform.QueueName),
+        pipelineOptions.AgentRunTimeout + TimeSpan.FromMinutes(1),
+        sp.GetRequiredService<ILogger<StorageQueueConsumer>>());
+});
+
+// Team A: the geometry project gets its own client, so a missing RBAC assignment fails here and
+// nowhere else.
+builder.Services.AddSingleton<ICardBoundaryAgent>(sp =>
+{
+    if (!pipeline.UsesFoundryGeometry)
+    {
+        return new StubCardBoundaryAgent(sp.GetRequiredService<ILogger<StubCardBoundaryAgent>>());
+    }
+
+    var client = CreateFoundryClient(sp, pipeline.GeometryProjectEndpoint!);
+    return new FoundryCardBoundaryAgent(client, pipeline.BoundaryAgentId, sp.GetRequiredService<ILogger<FoundryCardBoundaryAgent>>());
+});
+
+// Team B: one identification agent per game that has a deployed agent id.
+foreach (var profile in GameAgentProfile.Live)
+{
+    var captured = profile;
+    builder.Services.AddSingleton<ICardIdentificationAgent>(sp =>
+    {
+        if (!pipeline.UsesFoundryIdentification ||
+            !pipeline.IdentificationAgentIds.TryGetValue(captured.Game, out var agentId) ||
+            string.IsNullOrWhiteSpace(agentId))
+        {
+            return new StubCardIdentificationAgent(captured.Game);
+        }
+
+        var client = CreateFoundryClient(sp, pipeline.IdentificationProjectEndpoint!);
+        return new FoundryCardIdentificationAgent(
+            client, captured, agentId, sp.GetRequiredService<ILogger<FoundryCardIdentificationAgent>>());
+    });
+}
+
+// Built from the factory, like the Foundry clients above, so that a singleton processor does not
+// pin one message handler for the life of the worker.
+builder.Services.AddSingleton(sp =>
+{
+    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(CardArtVerifier));
+    // Short, because the comparison is a check on an answer the pipeline already has: a catalogue
+    // image that is slow to arrive must never hold up a scan.
+    http.Timeout = TimeSpan.FromSeconds(20);
+    return new CardArtVerifier(http, sp.GetRequiredService<ILogger<CardArtVerifier>>());
+});
+
+builder.Services.AddSingleton<ScanJobProcessor>();
+builder.Services.AddHostedService<ScanJobWorker>();
+
+var app = builder.Build();
+
+app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+
+app.Run();
+
+static FoundryAgentClient CreateFoundryClient(IServiceProvider sp, string endpoint) => new(
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(FoundryAgentClient)),
+    sp.GetRequiredService<TokenCredential>(),
+    sp.GetRequiredService<ILogger<FoundryAgentClient>>(),
+    endpoint,
+    sp.GetRequiredService<ScanPipelineOptions>().FoundryApiVersion,
+    sp.GetRequiredService<ScanPipelineOptions>().AgentRunTimeout,
+    sp.GetRequiredService<ScanPipelineOptions>().AgentPollInterval,
+    sp.GetRequiredService<ScanPipelineOptions>().AgentThrottleRetries,
+    sp.GetRequiredService<ScanPipelineOptions>().AgentThrottleBackoff);

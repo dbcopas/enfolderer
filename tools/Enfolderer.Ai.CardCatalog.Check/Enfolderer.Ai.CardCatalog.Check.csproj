@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Enfolderer.Ai.CardCatalog.Check</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Enfolderer.Ai.Mcp.CardCatalog.Mtg\Enfolderer.Ai.Mcp.CardCatalog.Mtg.csproj" />
+    <ProjectReference Include="..\..\src\Enfolderer.Ai.Worker\Enfolderer.Ai.Worker.csproj" />
+  </ItemGroup>
+
+</Project>

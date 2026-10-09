@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The resolution ladder is checked offline against a stubbed Scryfall, because
+         api.scryfall.com is not reachable from every environment this is built in. -->
+    <InternalsVisibleTo Include="Enfolderer.Ai.CardCatalog.Check" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Enfolderer.Ai.Mcp.Shared\Enfolderer.Ai.Mcp.Shared.csproj" />
+  </ItemGroup>
+
+</Project>
