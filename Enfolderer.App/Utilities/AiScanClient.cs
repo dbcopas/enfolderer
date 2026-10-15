@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -79,7 +80,7 @@ public sealed class AiScanClient
     {
         var deadline = DateTimeOffset.UtcNow + OverallTimeout;
         var delay = InitialPollInterval;
-        ScanJobStatus? lastReported = null;
+        var elapsed = Stopwatch.StartNew();
 
         while (true)
         {
@@ -87,11 +88,7 @@ public sealed class AiScanClient
 
             var status = await GetAsync<JobStatusResponse>($"jobs/{jobId}", ct);
 
-            if (lastReported != status.Status)
-            {
-                statusCallback?.Invoke(DescribeStatus(status));
-                lastReported = status.Status;
-            }
+            statusCallback?.Invoke($"{DescribeStatus(status)} Elapsed {elapsed.Elapsed:mm\\:ss}.");
 
             switch (status.Status)
             {
@@ -125,9 +122,10 @@ public sealed class AiScanClient
         ScanJobStatus.Pending => "Waiting for upload...",
         ScanJobStatus.Uploaded => "Queued for processing...",
         ScanJobStatus.DetectingBoundaries => "Finding card boundaries (cardgeo)...",
-        ScanJobStatus.Identifying => status.CardsDetected > 0
-            ? $"Identifying {status.CardsDetected} card(s) (cardid)..."
-            : "Identifying cards (cardid)...",
+        ScanJobStatus.Identifying => status.ProgressMessage ?? (status.CardsDetected > 0
+            ? $"Reading cards and checking catalogue/art (cardid): {status.CardsProcessed}/{status.CardsDetected} processed, "
+                + $"{status.CardsIdentified} identified..."
+            : "Identifying cards (cardid)..."),
         ScanJobStatus.Completed => $"Completed: {status.CardsIdentified}/{status.CardsDetected} card(s) identified.",
         ScanJobStatus.Failed => $"Failed: {status.Error}",
         _ => status.Status.ToString()
@@ -178,6 +176,33 @@ public sealed class AiScanClient
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
     }
 
+    public async Task DownloadAnnotatedImageAsync(ScanResultDocument result, string outputPath, CancellationToken ct)
+    {
+        var expected = $"jobs/{Uri.EscapeDataString(result.JobId)}/annotated-image";
+        if (result.AnnotatedImagePath != expected)
+            throw new InvalidOperationException("The scan returned an unexpected annotated-image route.");
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_apiBaseUrl, expected));
+        await AuthorizeAsync(request, ct);
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        await EnsureSuccessAsync(response, "download the annotated image", ct);
+        if (response.Content.Headers.ContentType?.MediaType != "image/png")
+            throw new InvalidDataException("The scan API did not return a PNG image.");
+        const int maxBytes = 64 * 1024 * 1024;
+        await using var content = await response.Content.ReadAsStreamAsync(ct);
+        using var buffer = new MemoryStream();
+        var block = new byte[81920];
+        int count;
+        while ((count = await content.ReadAsync(block, ct)) > 0)
+        {
+            if (buffer.Length + count > maxBytes)
+                throw new InvalidDataException("The annotated image exceeds the 64 MB download limit.");
+            buffer.Write(block, 0, count);
+        }
+        if (buffer.Length < 8 || !buffer.GetBuffer().AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
+            throw new InvalidDataException("The annotated image has an invalid PNG signature.");
+        await File.WriteAllBytesAsync(outputPath, buffer.ToArray(), ct);
+    }
+
     private static async Task<T> ReadAsync<T>(HttpResponseMessage response, CancellationToken ct)
     {
         var json = await response.Content.ReadAsStringAsync(ct);
@@ -217,6 +242,6 @@ public sealed class AiScanClient
         (result?.Cards ?? Array.Empty<IdentifiedCard>())
             .Where(c => c.IsIdentified)
             .Select(c => new BinderScanService.ScannedCard(
-                c.Set!, c.CollectorNumber ?? string.Empty, c.Name!, c.Language ?? "en"))
+                c.Set!, c.CollectorNumber ?? string.Empty, c.Name!, c.Language ?? "en", c.Finish))
             .ToList();
 }

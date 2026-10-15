@@ -98,7 +98,71 @@ The remaining File-menu maintenance actions modify the local `mtgstudio.collecti
 **Scan Card Image...** turns a photograph into binder entries: the app uploads a single image to a
 job API and polls it while a multi-agent Azure AI Foundry pipeline finds each card's outline and
 identifies it. That API is the only endpoint the app talks to, so it runs from anywhere. **Scan Binder Images...** runs the same job API once per image in
-a selected folder. Both write the `SET;NUMBER;;en;NAME` CSV the importer already understands.
+a selected folder. Both write `SET;NUMBER;MODIFIER;LANGUAGE;NAME` CSV rows; the modifier is
+`foil` or `etched` when identified, and blank for nonfoil or unknown finish. Unknown finishes are
+listed in the scan summary so a blank is not mistaken for a confirmed nonfoil.
+Both scan save dialogs suggest `scanned_cards_yyyyMMdd_HHmmss.csv`, using local date and time.
+You can change the suggested filename before saving.
+During processing, the status bar reports elapsed polling time, processed/detected cards, and
+successful identifications (processed includes unreadable cards). The final status retains the
+saved filename and counts of unidentified cards, missing numbers, printings needing review,
+unknown finishes, and art-based printing changes. Per-card progress requires the updated worker
+and API as well as the desktop app.
+The progress bar counts completed images rather than showing 100% when a scan starts. Hover over
+the status text to read the full message if it is truncated.
+
+After final printing/art verification, scans also produce a priced PNG of the original photo.
+Numbered artwork overlays show separate EUR nonfoil and foil reference prices; an appended
+legend includes card identity, photographed language, price-source language, printing uncertainty,
+finish, and retrieval time. Prices are **Cardmarket via Scryfall daily reference prices**, not
+live offers or a guaranteed valuation. Each missing foreign-language price independently falls
+back to English for the **same set and collector number**, marked `[en fallback]` on the image.
+A foil-only or nonfoil-only record is
+valid; unavailable prices remain `N/A`, never zero, USD, or the other finish's price.
+
+The desktop downloads the PNG through the authenticated job API, saves it beside the CSV as
+`<csv-stem>_<job-id>_priced.png`, and opens a preview. Batch scans save one PNG per source image.
+The original upload is unchanged. CSVs remain available if pricing, rendering, or download fails;
+the completion summary reports those warnings separately. Both prices are shown even if the
+photographed finish is unknown, and uncertain printings are explicitly marked as indicative.
+The image separates the exact price target (`Price for ONS 62`) from identification evidence.
+`Printing needs verification` means the photographed printing is not established, not that the
+price lookup failed. A lone artwork match is described as `Artwork matches; set/number not established`.
+A decisive artwork comparison that separates competing printings can verify either the existing
+printing or an art-based correction; shared artwork alone cannot.
+
+Deploy with `.\scripts\update-demo.ps1 -SkipAgents`, then rebuild/restart the desktop app.
+The deployment includes the private `outputs` container, API read-only access and worker write
+access scoped to that container, and the worker's Linux rendering font. No new agent/project or
+public blob URL is needed. Team B's catalogue also exposes `get_printing_prices` as an MCP tool;
+the worker calls the same deterministic pricing implementation after art verification rather
+than asking a model to copy monetary amounts.
+
+For MTG cards, the identifier receives the full crop and an enlarged full-width footer. Sideways
+crops supply both possible quarter-turn footers rather than guessing which end is the printed top.
+Retro-frame collector numbers may sit beside the copyright line, not in the modern lower-left.
+MTG language is read from the photographed footer/title/rules, independently of an English
+catalogue name or fallback printing. Results retain the original `readName` and footer
+`readLanguage` (`JP`/`JPN` becomes `ja`). Missing language/title evidence or contradictory language
+triggers one logged re-reading attempt; persistent contradictions fail rather than defaulting
+to English. Deploy the worker and identification prompt together with `.\scripts\update-demo.ps1`.
+Unplaced, ambiguous, assumed and missing-resolution printings are listed for review; a CSV's
+set and number are not automatically confirmed just because the card's name was identified.
+
+Measured card regions are authoritative: the worker runs the shared detector locally and retains
+every region even if the boundary agent omits it. Unambiguous agent matches can supply game and
+printed orientation, but cannot move measured corners or add regions. Unmatched candidates still
+go through identification and may be reported as unidentified rather than silently discarded.
+When the detector finds nothing, agent-estimated geometry remains an explicitly logged fallback.
+
+Where the
+frame prints a separator between the set code and language, a dot indicates nonfoil and a star
+indicates foil. A blurred round separator can still be a star: the identifier compares its height
+and width with adjacent letters, not just whether its points are visible. Unreadable markers stay
+unknown; enlargement cannot recover lost detail. Older cards without that marker can use the large
+Wizards of the Coast shooting-star watermark across the lower text box as explicit foil evidence,
+or clearly visible foil treatment as separately labelled visual evidence. A missing watermark
+does not prove nonfoil. The bottom-centre authenticity stamp is not a foil indicator.
 
 Configuration lives in `aiconfig.txt` beside the executable and contains **no secrets** — only the
 API URL, tenant id, public client id and scope; you sign in interactively. A template is written

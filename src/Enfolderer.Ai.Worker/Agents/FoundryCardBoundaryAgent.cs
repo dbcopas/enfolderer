@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Enfolderer.Ai.Contracts;
+using Enfolderer.Ai.Imaging;
 using Microsoft.Extensions.Logging;
 
 namespace Enfolderer.Ai.Worker.Agents;
@@ -8,7 +9,8 @@ namespace Enfolderer.Ai.Worker.Agents;
 /// Team A's boundary agent, reached through the <c>cardgeo</c> project endpoint.
 /// The prompt is the agent's *skill contract*: it must find any collectible card — including
 /// borderless, full-art, textured and other modern treatments where there is no printed border —
-/// at any rotation and under perspective distortion.
+/// at any rotation and under perspective distortion. Shared local measurements are authoritative;
+/// the model enriches their printed orientation and game, but cannot drop them.
 /// </summary>
 public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
 {
@@ -47,18 +49,16 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
         tool can measure them for you.
 
         THEN use the photo to judge what the tool could not:
-        - Drop any returned region that is not actually a card — a coaster, a phone, a playmat
-          panel, a shadow. Geometry alone cannot tell.
-        - Add any card the tool missed, estimating its corners yourself. A card touching the edge of
-          the frame, or one with almost no contrast against the surface, is the usual miss.
+        - Return every measured region exactly once. Do not drop regions or invent additional ones
+          when the tool found regions. Identification will report uncertain or non-card crops.
         - Fix the rotation. A page photographed sideways puts every card on its side, and the tool
           reports those cards lying down. It cannot tell which end of a card is its top either,
           because that is printed on the face rather than being part of its shape; you can see it.
           Rotate the four points so the card's printed top-left comes first.
         - Set gameHint from the card frame or back.
 
-        If the tool fails or returns no cards, estimate every corner yourself and say nothing about
-        the failure — just return your best answer in the same format.
+        If the tool returns no cards, estimate every corner yourself in the same format.
+        Do not conceal tool errors or substitute guessed corners for failed measurements.
 
         Cards may be at an oblique angle, rotated arbitrarily, partially overlapping, and misaligned
         with each other. Many modern printings are borderless, full-art, textured, foil-etched or
@@ -79,7 +79,7 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
         - The four points must be the corners of one single card. Never return a box that contains
           several cards, and never return the whole image as one card.
         - gameHint is your best guess of the game from the card back/frame; use "unknown" if unsure.
-        - Emit no prose, no markdown fences, and no cards you are not confident are cards.
+        - Emit no prose or markdown fences. Preserve measured regions even when unsure of the game.
         """;
 
     /// <summary>The <c>server_label</c> Team A's imaging MCP server is attached under.</summary>
@@ -101,11 +101,27 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
     public async Task<IReadOnlyList<DetectedBoundary>> DetectAsync(
         AgentImage image, string scanBlobPath, int width, int height, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
+        using var source = new MemoryStream(image.Content.ToArray(), writable: false);
+        var measured = CardDetector.Detect(source);
+
         // "imaging" is the server_label card-boundary-agent.yaml gives Team A's own MCP server.
         // Foundry pauses the run at each tool call for approval, and the orchestrator approves only
         // this label — so an agent edited to reach for a catalogue server is refused here too.
         var reply = await _client.RunAsync(
-            _agentId, BuildPrompt(width, height, scanBlobPath), image, ImagingServerLabel, ct);
+            _agentId, BuildPrompt(width, height, scanBlobPath), image, ImagingServerLabel, ct,
+            validateReply: text =>
+            {
+                var parsed = ParseBoundaries(text, width, height);
+                if (parsed.Any(b =>
+                {
+                    var p = b.Quad.Points;
+                    static double Length(ImagePoint a, ImagePoint b) =>
+                        Math.Sqrt(Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2));
+                    return Length(p[0], p[1]) > Length(p[1], p[2]) * 1.2;
+                }))
+                    _log.LogWarning("Boundary reply contains landscape quads; footer and art checks will inspect both quarter-turns.");
+            });
 
         // Logged in full because a wrong quad is invisible downstream: the crop succeeds, the
         // identification agent sees a picture of a table, and nothing anywhere reports an error.
@@ -123,7 +139,56 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
         }
 
         _log.LogInformation("Boundary agent {AgentId} returned {Count} card(s).", AgentId, boundaries.Count);
-        return boundaries;
+        if (measured.Count == 0)
+        {
+            _log.LogWarning("No card regions were measured; using {Count} agent-estimated boundaries.", boundaries.Count);
+            return boundaries;
+        }
+
+        var authoritative = PreserveMeasuredRegions(measured, boundaries);
+        var unmatched = authoritative.Count(b => b.GameHint == CardGames.Unknown);
+        _log.LogInformation("Measured geometry retained {Count} regions; agent returned {AgentCount}.",
+            authoritative.Count, boundaries.Count);
+        if (unmatched > 0 || boundaries.Count != measured.Count)
+            _log.LogWarning("Measured regions are authoritative: {Count} retained, {AgentCount} agent boundaries; "
+                + "{UnknownCount} regions have unknown game metadata. Unmatched agent geometry is not used.",
+                measured.Count, boundaries.Count, unmatched);
+        return authoritative;
+    }
+
+    internal static IReadOnlyList<DetectedBoundary> PreserveMeasuredRegions(
+        IReadOnlyList<DetectedCard> measured, IReadOnlyList<DetectedBoundary> agentBoundaries)
+    {
+        var result = new List<DetectedBoundary>(measured.Count);
+        foreach (var region in measured)
+        {
+            var matches = agentBoundaries.Where(b => Overlap(region.Quad, b.Quad) > 0.6).ToList();
+            var match = matches.Count == 1
+                && measured.Count(m => Overlap(m.Quad, matches[0].Quad) > 0.6) == 1
+                    ? matches[0] : null;
+            var quad = region.Quad;
+            if (match is not null)
+            {
+                var offset = Enumerable.Range(0, CardQuad.RequiredPointCount).MinBy(rotation =>
+                    Enumerable.Range(0, CardQuad.RequiredPointCount).Sum(i =>
+                        Math.Pow(quad.Points[(i + rotation) % CardQuad.RequiredPointCount].X - match.Quad.Points[i].X, 2)
+                        + Math.Pow(quad.Points[(i + rotation) % CardQuad.RequiredPointCount].Y - match.Quad.Points[i].Y, 2)));
+                quad = new CardQuad(Enumerable.Range(0, CardQuad.RequiredPointCount)
+                    .Select(i => region.Quad.Points[(i + offset) % CardQuad.RequiredPointCount]).ToList());
+            }
+            result.Add(new DetectedBoundary(quad, region.Confidence, match?.GameHint ?? CardGames.Unknown));
+        }
+        return result;
+    }
+
+    private static double Overlap(CardQuad first, CardQuad second)
+    {
+        var a = first.BoundingBox();
+        var b = second.BoundingBox();
+        var intersection = Math.Max(0, Math.Min(a.X + a.Width, b.X + b.Width) - Math.Max(a.X, b.X))
+            * Math.Max(0, Math.Min(a.Y + a.Height, b.Y + b.Height) - Math.Max(a.Y, b.Y));
+        var union = a.Width * a.Height + b.Width * b.Height - intersection;
+        return union > 0 ? intersection / union : 0;
     }
 
     /// <summary>
@@ -171,10 +236,13 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
         var results = new List<DetectedBoundary>();
 
         if (!doc.RootElement.TryGetProperty("cards", out var cards) || cards.ValueKind != JsonValueKind.Array)
-            return results;
+            throw new InvalidOperationException("Boundary reply must contain a cards array.");
 
         foreach (var card in cards.EnumerateArray())
         {
+            if (card.TryGetProperty("quad", out var nested)
+                && (nested.TryGetProperty("confidence", out _) || nested.TryGetProperty("gameHint", out _)))
+                throw new InvalidOperationException("Boundary confidence and gameHint belong outside quad.");
             if (!card.TryGetProperty("quad", out var quad) ||
                 !quad.TryGetProperty("points", out var points) ||
                 points.ValueKind != JsonValueKind.Array)

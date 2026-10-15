@@ -102,8 +102,8 @@ Four identities are created, one per role:
 
 | Identity | Resource group | Used by | Gets |
 |---|---|---|---|
-| `<prefix>-api-id` | `<prefix>-platform` | Job API | Cosmos read/write, write `scans`, queue data |
-| `<prefix>-worker-id` | `<prefix>-platform` | Worker | Cosmos read/write, read `scans`, write `crops`, queue data |
+| `<prefix>-api-id` | `<prefix>-platform` | Job API | Cosmos read/write, write `scans`, read-only `outputs`, queue data |
+| `<prefix>-worker-id` | `<prefix>-platform` | Worker | Cosmos read/write, read `scans`, write `crops` and `outputs`, queue data |
 | `<prefix>-cardgeo-id` | `<prefix>-cardgeo` | Team A's Foundry project | read `scans` only |
 | `<prefix>-cardid-id` | `<prefix>-cardid` | Team B's Foundry project | invoke Team A's agent; no storage role at all |
 
@@ -493,7 +493,7 @@ file by hand without updating the variable. Re-run the variable block at the top
 the location the deployment already uses, and deploy again.
 
 This creates three resource groups (`<prefix>-platform`, `<prefix>-cardgeo`, `<prefix>-cardid`),
-the four managed identities, the storage account with the `scans` and `crops` containers and the
+the four managed identities, the storage account with the `scans`, `crops`, and `outputs` containers and the
 `scan-jobs` queue, the Cosmos account with the `jobs` container, one Foundry account holding both
 the `cardgeo` and `cardid` projects and a shared `gpt-4o` deployment, the container registry, the
 three Container Apps environments and the five container apps, and all the role assignments.

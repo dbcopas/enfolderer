@@ -26,8 +26,9 @@ That skill is not just a prompt. Behind `CardBoundaryAgent` sits Team A's own MC
 `mcp-imaging`, whose `detect_cards` tool measures the card corners by edge detection. This is the
 division of labour worth pointing at on screen: a chat model has no detection head and never sees
 the photo at full resolution, so asked for coordinates it invents plausible ones — the tool
-*measures* them, and the model spends its judgement on what geometry cannot settle (is that
-rectangle really a card, which end is its top, which game is it). Team B gets the benefit of both
+*measures* them, and the model supplies printed orientation and game metadata. Measured candidates
+are no longer dropped by the model; identification can decline non-card or unreadable crops.
+Team B gets the benefit of both
 by invoking one agent, and cannot see, call or redeploy the server underneath it.
 
 Team B's skill is *reading cards*: given a rectified crop, work out the set, collector number and
@@ -62,13 +63,26 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
    orchestrator — approves it, having first checked the call targets the `imaging` server and not
    some other team's. A call to any other server is refused, so the boundary is enforced twice over
    by two different parties.
+   The worker also runs the same shared detector locally. Its regions are authoritative: the
+   agent can supply printed orientation and game metadata for unambiguous overlapping matches,
+   but cannot delete regions, move measured corners, or add estimates when regions were measured.
+   Missing or ambiguous metadata is logged and the candidates still reach identification.
+   No measured regions triggers an explicitly logged fallback to agent estimates; failures to
+   invoke or parse the agent still fail the job rather than masquerading as a successful scan.
 6. Worker crops each quadrilateral itself (perspective-correct warp) and writes the crops to
    `crops/{jobId}/`. Team A never gets blob write access.
 7. Worker → `Identifying`: uploads each crop to the `cardid` project and fans them out to the
    per-game agents. Team B receives one card at a time and never the whole page.
-8. Worker → `Completed`, writing the versioned result document to Cosmos.
+8. Worker retrieves exact-printing EUR nonfoil/foil prices after art verification, renders the
+   priced photo, and writes it to private `outputs/{jobId}/priced.png`. Missing foreign-language
+   prices fall back independently to English for that same printing. No image-generation model
+   is involved. Pricing/rendering failures are explicit optional-output warnings, not lost scans.
+   Worker → `Completed`, writing the versioned result document to Cosmos.
 9. The app polls `GET /jobs/{id}` every 2s with exponential backoff and maps `cards[]` into the
    CSV shape the importer already understands.
+   It also downloads the priced image from authenticated `GET /jobs/{jobId}/annotated-image`,
+   saves it beside the CSV, and previews it. The route streams the job's fixed output blob;
+   the client never follows a model-supplied storage URL.
 
 ## Why the boundaries are real
 
@@ -88,8 +102,9 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
   client id and scope. Sign-in is interactive (`InteractiveBrowserCredential`) or device code.
   If an old file still contains `client_secret`, the app refuses to start the scan and tells you
   to revoke the secret.
-* **Least-privilege identities.** The API can write `scans` and touch Cosmos, and has no access to
-  `crops` — it cannot read what either team produces. Team A can read `scans` and nothing else.
+* **Least-privilege identities.** The API can write `scans`, read final `outputs`, and touch Cosmos,
+  and has no access to intermediate `crops`. Only the worker can write `outputs`; Team A can read
+  `scans` and nothing else.
   Neither project has any Cosmos role assignment, so neither can read job state.
 * **Team B holds no storage role at all.** Its agents receive each card as an uploaded file, so
   there is nothing to grant. This is stronger than the container-scoped read it used to have:
@@ -287,6 +302,20 @@ authorization failures, cancelled runs, and HTTP 5xx responses are not replayed 
 errors: an HTTP failure does not prove that a run has stopped. Exhausted retries remain per-card
 errors, not invented identifications.
 
+A completed run can still return malformed JSON. The worker validates the boundary/identification
+reply, logs a bounded excerpt with thread/run IDs, asks for a complete replacement, and retries
+once on the same thread/images. It never repairs JSON by appending braces. A second invalid reply
+fails explicitly. Text parts are combined only from the current run; older assistant messages
+are not mistaken for its result. Terminal `incomplete` runs report their incomplete details rather
+than waiting until timeout. Empty unresolved identifications get the same bounded re-read.
+
+Image 04's captured failure was a completed boundary run with missing object closures and
+confidence/gameHint nested in quad. It was not a token-limit truncation. Geometry on image 05
+also remained sideways despite the orientation instructions. Footer reading now includes the
+whole bottom quarter (including retro-frame centre/right collector numbers), with both candidate
+quarter-turn footers for landscape crops. Art checks compare both quarter-turns before resizing.
+There is no guessed page-specific rotation.
+
 Art verification uses a 16-by-16 difference hash and compares bounded alignments of the crop:
 75-100% of its width and height, with offsets inside the crop. This tolerates sleeve margins and
 imprecise boundaries without lowering the acceptance gates: the best image's distance must still
@@ -294,12 +323,70 @@ be at most `0.30`, and its lead over the next candidate at least `0.06`. Shared-
 inconclusive. If a candidate image cannot be read, the check does not move the printing on the
 strength of an incomplete field.
 
-Each card's resolution log includes `readSet`, `readCollectorNumber`, and confidence. Additional
+Each card's resolution log includes `readSet`, `readCollectorNumber`, `readName` (the original
+photographed title), `readLanguage` (the footer code), and confidence. MTG language comes from
+the photographed footer/title/rules, not the catalogue's English name or an English fallback
+printing. Printed `JP`/`JPN` normalizes to API `ja`. Missing language/title evidence or a language
+contradicting the footer or Japanese kana triggers one logged re-reading attempt on the same
+images; persistent contradictions fail explicitly instead of returning a default English row.
+Deploy the worker image **and** re-provision the identification prompt together for this contract
+change (`.\scripts\update-demo.ps1`, without either skip switch). Additional
 art logs report every candidate's distance, the closest printing, the separation, both thresholds,
 and why the comparison declined. Result JSON adds optional `artDistance` and `artReason` fields;
 the CSV format is unchanged. Reasons include `distance_too_large`, `separation_too_small`,
 `missing_candidates`, `insufficient_candidates`, `no_references`, `no_fetchable_references`,
 `no_images_readable`, and `crop_unreadable`. An inconclusive check is **not** proof of shared art.
+
+Resolution explanations are specific to the reported outcome: `ambiguous` means the readings
+did not distinguish multiple printings; `assumed` means the name was not corroborated and a
+number lookup supplied the printing. Neither means that no set was read. Only `unplaced`
+describes an unplaced name's catalogue default. `relocated` describes a replacement of the read
+set, and `corrected` describes the name winning over a collector-number reading.
+
+The worker logs the start of each card and persists `cardsProcessed` (including identification
+failures) and `cardsIdentified` between cards. The API exposes both counters. Desktop polling
+refreshes elapsed time and the counters on every response, even when the job phase has not
+changed; it does not claim to stream individual model/tool operations. The final status names
+the saved CSV and retains review counts. Deploy the API/worker and rebuild the desktop app to
+enable this end-to-end feedback; older API responses remain compatible with zero progress.
+
+### Priced image output
+
+Team B's catalogue exposes `get_printing_prices` for exact set/collector-number/language queries.
+The worker shares its deterministic `ScryfallPriceClient` implementation, without an additional
+model call or copying monetary amounts through an agent response. Prices are fetched only after
+the final art decision. The identification agents' tool allow-lists remain unchanged.
+
+`prices` on each card carries separate nullable `nonfoil`/`foil` EUR values, source language for
+each finish, `retrievedAt`, attribution, and any lookup error. Each missing foreign finish falls
+back independently to English for the same printing; valid foreign values are preserved if an
+English fallback request fails. A missing foil or nonfoil price is normal, not an error or zero.
+No currency conversion, USD fallback, or cross-finish substitution takes place.
+
+The deterministic PNG renderer places numbered price panels over the artwork and appends a
+legend containing identities, language/fallback provenance, uncertainty, finish, and retrieval
+time. The input photo is not overwritten; the rendered photo is limited to a 2400-pixel long edge
+before adding the legend. The worker image includes DejaVu Sans; Windows uses Arial if DejaVu is
+not installed. Labels use catalogue English names, not the original Japanese title.
+
+The private `outputs` container grants only the worker write access and API read-only access.
+The authenticated job download route derives its blob path from the stored job id, never from an
+arbitrary URL. The desktop limits downloads to 64 MB, requires PNG content, saves the CSV before
+attempting image downloads, and reports failed pricing/rendering/downloads without losing it.
+Existing scans without the optional image fields remain compatible.
+
+Deploy container images and the storage/RBAC template together:
+`.\scripts\update-demo.ps1 -SkipAgents`. Rebuild/restart the desktop app afterwards. No new
+Foundry project, prompt agent, or model deployment is required.
+
+Offline regression tests cover both finish fallbacks, single-finish availability, missing
+localized printings, duplicate-query caching, identity/language preservation, rendering,
+download routing/authentication, and optional-output failures. To also write a **synthetic
+test-price** preview for visual inspection (not a real valuation):
+
+```powershell
+dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --price-render-check test-prices.png
+```
 
 Run the offline retry, cancellation, download-failure, and image-comparison checks:
 
@@ -314,7 +401,8 @@ negative controls:
 dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --photo-art
 ```
 
-This uses the stored photograph and the boundary coordinates returned by the failing live scan,
+This tests the stored page 01 photograph with both captured live-scan boundaries and authoritative
+measured crops, ensuring that all nine printings remain correct under the new geometry policy,
 then fetches public Scryfall catalogue images into memory without saving them. It exercises the
 worker's actual art verifier, not mocked distances. It does not call Foundry or deploy anything.
 The default checks remain offline.
@@ -322,6 +410,111 @@ The default checks remain offline.
 After deploying the worker image and rescanning, read the evidence with
 `.\scripts\show-last-scan.ps1`. Its Log Analytics query is sent as a JSON file so Windows
 `az.cmd` cannot interpret the KQL pipes as shell commands.
+
+The script includes job start/completion/failure events and selects the latest attempt by its
+first event, not whichever older job logged last. It displays boundary-stage failures even when
+no card resolution exists. Azure CLI writes query results to a UTF-8 file, avoiding Windows
+code-page loss of Japanese and accented text. Test it offline with:
+
+```powershell
+.\scripts\test-show-last-scan.ps1
+```
+
+Compare a new exported CSV with its sibling `cards.txt`, ignoring finish and row order while
+preserving duplicate counts. Japanese `jp`/`jpn` annotations normalize to API `ja`; the two
+Undercity Sewers annotations on page 06 are Spanish `es`, as printed:
+
+```powershell
+dotnet run --project tools\Enfolderer.Ai.Imaging.TrainingCheck -- --results training\06\scanned_cards12101110.csv
+```
+
+This reports identity, identity+language and printing+language separately and exits nonzero when
+any exact printing/language or card count is wrong. The original photographed results remain
+0/12 exact printings on page 05 and 4/8 on page 06; annotation normalization does not hide them.
+
+Known limitation: rotation-aware whole-face matching alone cannot establish multilingual reading
+accuracy. The following check exercises art verification with supplied identities and `ja`
+language, not the live model's ability to read language:
+
+```powershell
+dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --photo-multilingual
+```
+
+It uses authoritative measured crops; historical boxes locate only the annotated identities.
+A pass means the verifier preserved those supplied printings/languages, not that the agent read
+them correctly. Use `--live-reading` below or an actual deployed scan to verify language detection.
+
+Live sampled footer re-reading with the existing GPT-4o agent did not resolve this either and
+could turn a catalogue default into a falsely "confirmed" printing. Therefore automatic retries
+of merely unplaced printings were tested and rejected. Uncertainty stays visible; art acceptance
+thresholds have not been relaxed. A narrower upper-face hash was also rejected because it did not
+resolve these cases. Further reading/model work is required before claiming multilingual printing
+accuracy is fixed.
+
+Before measured-region retention, a live image 04 boundary check returned only 6 of the 8 annotated cards, although the
+local measured detector finds all 8 (and all 47 cards across pages 01-06). Bounded JSON recovery
+addresses malformed responses, not unjustified dropping of real measured regions. The approved
+change now makes measured regions authoritative, retaining them even if the agent
+returns an empty list. This can retain false positives, which identification must decline; it does
+not solve multilingual printing accuracy. The updated adapter's live image 04 check retains 8/8.
+
+The offline real-photo adapter regression deliberately supplies an empty agent response for each
+training page and verifies that all 47 measured regions survive:
+
+```powershell
+dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --photo-boundaries
+```
+
+For explicitly selected live reading tests (uses Azure CLI sign-in, calls the supplied Foundry
+agent, and incurs model usage without redeploying):
+
+```powershell
+dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --live-reading <project-endpoint> <agent-id> training\05 0,1,2
+```
+
+Indices refer to local detector order, not annotation order. Each selected result must match a
+listed name/set/number/language and be placed; otherwise the check fails.
+
+## MTG finish evidence
+
+MTG identification uploads an additional nearest-neighbour enlargement of the full-width
+bottom quarter of the rectified card (two stacked candidate footers if sideways). It is supplied in the same message as the full card,
+not treated as another card. Both uploads are reused during run retries and deleted afterwards.
+The enlargement does not sharpen, reconstruct, or restore details lost in the original photograph.
+
+The MTG prompt asks for `finishMarker` (`dot`, `star`, `absent`, or `unknown`), `finishEvidence`,
+and `finishConfidence` separately from identity confidence. A reliable dot between the set code
+and language establishes `nonfoil`; a reliable star establishes `foil`, not `etched`. Symbol size
+relative to the height and width of neighbouring letters on the same line can distinguish a
+blurred round star from a small dot without visible star points. The footprint must be isolated
+from adjacent letters and reflections; no absolute pixel threshold is used. Each identifier sees
+only its own card, so this comparison does not use neighbouring cards on the binder page.
+Rarity letters, collector suffixes, other punctuation, glare, sleeve reflections,
+and the holographic authenticity stamp must not be mistaken for the finish marker.
+
+The worker accepts a marker only at finish confidence `0.8` or above, and derives the finish
+itself rather than trusting a contradictory model finish. Without other accepted finish evidence,
+absent, unreadable, invalid or low-confidence readings leave finish null and evidence `unknown`.
+On older frames, the full-card image is inspected for the large Wizards of the Coast shooting-star
+watermark with its sweeping trail across the lower text box. Evidence `shooting_star_watermark`
+with marker `absent` is accepted at the same confidence threshold and establishes `foil`, not
+`etched`, without requiring visible rainbow sheen. Missing or unreadable watermarks never prove
+nonfoil. Other explicitly reported visual foil/etched treatment can be retained at the same
+threshold with evidence `visual`; absence of visible sheen never proves nonfoil.
+These are model-reported evidence and confidence, not a calibrated pixel classifier.
+
+The result contract preserves these fields, the worker logs them per job/card, and
+`scripts/show-last-scan.ps1` displays them. The desktop exports `foil`/`etched` into the existing
+modifier column. Unknown and nonfoil both use the compatible blank modifier, but unknown finishes
+are named in the completion dialog for manual review.
+
+Offline checks cover marker interpretation, uncertainty, JSON round-tripping, footer extraction,
+two-image message construction and retry/cleanup, plus desktop CSV mapping. Actual marker-reading
+accuracy on blurry photographs still needs a fresh deployed scan.
+
+This change needs both updated images and re-provisioned MTG instructions: run
+`.\scripts\update-demo.ps1 -NamePrefix enf-demo` without `-SkipAgents`, then rebuild/restart the
+desktop app to get finish-aware CSV output and warnings.
 
 ## Running locally without Azure
 

@@ -27,6 +27,7 @@ public sealed class ScanJobProcessor
     private readonly TokenCredential _credential;
     private readonly ScanPlatformOptions _platform;
     private readonly CardArtVerifier? _artVerifier;
+    private readonly ScanAnnotationService? _annotation;
     private readonly ILogger<ScanJobProcessor> _log;
 
     public ScanJobProcessor(
@@ -38,7 +39,8 @@ public sealed class ScanJobProcessor
         TokenCredential credential,
         ScanPlatformOptions platform,
         ILogger<ScanJobProcessor> log,
-        CardArtVerifier? artVerifier = null)
+        CardArtVerifier? artVerifier = null,
+        ScanAnnotationService? annotation = null)
     {
         _jobs = jobs;
         _images = images;
@@ -50,6 +52,7 @@ public sealed class ScanJobProcessor
         // Optional so the offline pipeline, which has no network, runs unchanged: with no verifier
         // every card simply goes unchecked, which is what an unreachable catalogue would do too.
         _artVerifier = artVerifier;
+        _annotation = annotation;
         _log = log;
     }
 
@@ -64,7 +67,12 @@ public sealed class ScanJobProcessor
 
         try
         {
-            job = await _jobs.UpsertAsync(job with { Status = ScanJobStatus.DetectingBoundaries }, ct);
+            _log.LogInformation("Job {JobId} started: detecting boundaries.", job.JobId);
+            job = await _jobs.UpsertAsync(job with
+            {
+                Status = ScanJobStatus.DetectingBoundaries, CardsProcessed = 0, CardsIdentified = 0,
+                ProgressMessage = null
+            }, ct);
 
             // Downloaded once and reused for the dimensions and every crop: a binder page can hold
             // eighteen cards, and re-fetching the photo per card multiplies blob egress.
@@ -92,10 +100,22 @@ public sealed class ScanJobProcessor
                 Cards = cards
             };
 
+            if (_annotation is not null)
+            {
+                job = await _jobs.UpsertAsync(job with
+                {
+                    CardsProcessed = cards.Count, CardsIdentified = identified,
+                    ProgressMessage = "Fetching EUR prices and rendering the annotated image..."
+                }, ct);
+                result = await _annotation.CreateAsync(result, source, ct);
+            }
+
             await _jobs.UpsertAsync(
                 job with
                 {
                     Status = ScanJobStatus.Completed,
+                    ProgressMessage = null,
+                    CardsProcessed = cards.Count,
                     CardsIdentified = identified,
                     Result = result
                 },
@@ -179,6 +199,11 @@ public sealed class ScanJobProcessor
     /// </summary>
     private void LogResolution(int index, string jobId, string agentId, IdentifiedCard card)
     {
+        if (card.IsIdentified)
+            _log.Log(card.Finish is null ? LogLevel.Warning : LogLevel.Information,
+                "Card {Index} of job {JobId}: finish {Finish}, marker {Marker}, evidence {Evidence}, confidence {Confidence}.",
+                index, jobId, card.Finish ?? "unknown", card.FinishMarker ?? "(none)",
+                card.FinishEvidence ?? "(none)", card.FinishConfidence);
         if (string.IsNullOrWhiteSpace(card.Resolution))
         {
             // Nothing to say about an unidentified card that the warning above has not said: with
@@ -201,7 +226,7 @@ public sealed class ScanJobProcessor
         {
             _log.LogWarning(
                 "Card {Index} of job {JobId} was dropped after the catalogue answered {Resolution}: the reply "
-                + "carried neither a name nor a set. The tool ran, so this is a reading problem rather than "
+                + "was missing a name or a set. The tool ran, so this is a reading problem rather than "
                 + "a wiring one.",
                 index, jobId, card.Resolution);
             return;
@@ -213,30 +238,37 @@ public sealed class ScanJobProcessor
                      || card.Resolution.Equals("unplaced", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("unverified", StringComparison.OrdinalIgnoreCase)
                      || card.Resolution.Equals("relocated", StringComparison.OrdinalIgnoreCase)
-                     || card.Resolution.Equals("ambiguous", StringComparison.OrdinalIgnoreCase));
-
-        var corrected = string.Equals(card.Resolution, "corrected", StringComparison.OrdinalIgnoreCase);
+                     || card.Resolution.Equals("ambiguous", StringComparison.OrdinalIgnoreCase)
+                     || card.Resolution.Equals("assumed", StringComparison.OrdinalIgnoreCase)
+                     || card.Resolution.Equals("unresolved", StringComparison.OrdinalIgnoreCase));
 
         var moved = string.Equals(card.ArtVerdict, "moved", StringComparison.OrdinalIgnoreCase);
 
         _log.Log(doubtful || moved || !card.HasPrinting ? LogLevel.Warning : LogLevel.Information,
             "Card {Index} of job {JobId}: {Set} {Number} ({Name}, {Language}) resolved as {Resolution}"
-            + " (read set '{ReadSet}', read number '{ReadNumber}', confidence {Confidence:0.00}){Read}{Art}.",
+            + " (read set '{ReadSet}', read number '{ReadNumber}', read title '{ReadName}', "
+            + "read language '{ReadLanguage}', confidence {Confidence:0.00}){Read}{Art}.",
             index, jobId, card.Set, card.CollectorNumber ?? "(no number)", card.Name, card.Language, card.Resolution,
-            card.ReadSet ?? "(none)", card.ReadCollectorNumber ?? "(none)", card.Confidence,
-            corrected && !string.IsNullOrWhiteSpace(card.ReadCollectorNumber)
-                ? $" — the number read off the card was '{card.ReadCollectorNumber}'"
-                : string.Equals(card.Resolution, "unverified", StringComparison.OrdinalIgnoreCase)
-                    ? " — no number was read, so that set code alone chose between this name's "
-                      + "printings with nothing to corroborate it. A set code supplied from "
-                      + "recognising the card looks exactly like one read off it. Check the art."
-                    : !card.PrintingWasPlaced
-                        ? " — no set code was read off the card and no number matched one, so that set and "
-                          + "number are the catalogue's default printing of the name, not this card's. "
-                          + "Check the art before believing them."
-                        : string.Empty,
+            card.ReadSet ?? "(none)", card.ReadCollectorNumber ?? "(none)",
+            card.ReadName ?? "(none)", card.ReadLanguage ?? "(none)", card.Confidence,
+            DescribeResolution(card),
             DescribeArt(card));
     }
+
+    internal static string DescribeResolution(IdentifiedCard card) => card.Resolution?.ToLowerInvariant() switch
+    {
+        "confirmed" => " - the catalogue reports agreement between the name and collector number; this does not confirm finish",
+        "corrected" => " - the name won over the number reading; the exported number is the catalogue's",
+        "relocated" => " - the catalogue selected a printing outside the read set; the read set was not retained",
+        "ambiguous" => " - multiple printings match the name; the available readings did not distinguish them. Check the printing",
+        "assumed" => " - the name was not corroborated by the catalogue; the number lookup supplied the printing. Check identity and printing",
+        "unverified" => " - the set reading alone selected this printing without a corroborating collector number. Check the printing",
+        "unplaced" => " - the name was found but no reading placed its printing; the exported set and number are a catalogue default. Check the printing",
+        "fuzzy" => " - the name matched approximately or without an exact set placement. Check the name and printing",
+        "unresolved" => " - the catalogue could not resolve the reading; these are the agent's readings, not a confirmed printing",
+        "named" => " - the catalogue placed the name without a collector-number reading",
+        _ => " - unrecognized resolution; check the catalogue evidence before trusting the printing"
+    };
 
     /// <summary>
     /// What the picture comparison added to this card, as a clause for the resolution line.
@@ -273,6 +305,14 @@ public sealed class ScanJobProcessor
         for (var index = 0; index < boundaries.Count; index++)
         {
             ct.ThrowIfCancellationRequested();
+            if (index > 0)
+                job = await _jobs.UpsertAsync(job with
+                {
+                    CardsProcessed = cards.Count,
+                    CardsIdentified = cards.Count(c => c.IsIdentified)
+                }, ct);
+            _log.LogInformation("Card {Index} of job {JobId}: processing card {Current} of {Total}.",
+                index, job.JobId, index + 1, boundaries.Count);
             var boundary = boundaries[index];
 
             // The job-level hint wins over the boundary agent's guess: the user knows which binder

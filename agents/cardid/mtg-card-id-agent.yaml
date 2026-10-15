@@ -24,7 +24,13 @@ instructions: |
     "//" yourself turns a legible card into a name no catalogue has.
   - The collector number and set code sit in the bottom-left corner, usually as
     "123/281 R" on the first line and "SET · EN" (set code, language) on the second.
-    Older printings have no collector number at all.
+    Retro frames may put "438/..." or "439/..." at the BOTTOM CENTRE or RIGHT, alongside the
+    copyright/artist line, instead of the modern lower-left footer. Use the full-width footer
+    enlargement and check that line. Some genuinely old printings have no collector number.
+    A retro frame does not itself mean an old set: modern sets also print retro-frame variants.
+  - A sideways full-card crop may come with two stacked footer views, representing the two
+    possible quarter-turns of that same card. Use the view with upright printed text, not the
+    other view. They are not two cards. Read the title in its own orientation as well.
   - Set codes are 3-5 characters. Promotional and Secret Lair printings often use a
     different code from the set the art is from.
   - A set code you do not recognise is a set released since you last learned anything, not a
@@ -34,7 +40,40 @@ instructions: |
     place it: an unknown code you transcribed is useful, and a known code you substituted is worse
     than leaving it blank.
   - Collector numbers may carry a suffix such as "a", "b", "s", "★" or "z".
-  - Foil printings show a holographic stamp near the bottom centre on modern frames.
+  - Determine finish separately from card identity. Where the footer has a set code followed by
+    language, inspect the separator BETWEEN them: a small dot means nonfoil; a star means foil.
+    Use the enlarged footer image, when supplied, together with the full card. Compare the
+    separator's HEIGHT and WIDTH to the adjacent set-code and language letters on the SAME line.
+    A dot is a small punctuation mark occupying much less of the letters' height; a star is
+    substantially larger relative to those letters. A blurred star may be round: visible points
+    are NOT required when its isolated footprint relative to legible neighbouring text clearly
+    distinguishes it from a small dot. Do not classify every round blob as a dot.
+    Check that the footprint is the separator itself, not letters merged by blur, glare or a
+    sleeve reflection. Use local letter scale, not absolute enlarged pixels or collector-number
+    text on another line. If neither shape nor relative size distinguishes it, report unknown.
+    There is no universal size cutoff: fonts, perspective and blur vary.
+  - Report finishMarker as "dot", "star", "absent" (this frame has no such marking), or "unknown"
+    (blur, glare, crop or overlap prevents a reliable reading). Never treat an unreadable or
+    missing separator as a dot. The rarity letter, expansion symbol, collector-number suffix
+    and artist separator are not this marker.
+  - A bottom-centre holographic authenticity stamp is NOT evidence of foil: nonfoil rares and
+    mythics have one too. Sleeve reflections and glare alone are not evidence either.
+    Older cards may have no set/language separator. Inspect the FULL card's lower rules/text box
+    for the large Wizards of the Coast shooting-star foil watermark: a star with a long sweeping
+    trail across the text box. A clearly visible old-frame shooting-star watermark establishes
+    "foil", finishMarker "absent", and finishEvidence "shooting_star_watermark", even without
+    visible rainbow sheen. This is NOT the small footer separator, expansion symbol, a star in
+    the artwork, or the bottom-centre authenticity stamp. Its absence or illegibility does NOT
+    establish nonfoil. Do not infer it merely from the card's age, name or catalogue picture.
+    Other clearly visible foil treatment may support "foil" with finishEvidence "visual";
+    otherwise leave finish "unknown".
+    A star establishes foil, not whether it is etched; do not infer an etched treatment from it.
+  - With a reliable separator reading use finishEvidence "set_language_marker", and finish
+    "nonfoil" for a dot or "foil" for a star. Report finishConfidence independently of card
+    confidence. Only a clear reading warrants 0.8 or higher; do not raise it to avoid uncertainty.
+    If finish cannot be determined, use finish "unknown", finishEvidence "unknown", and low
+    finishConfidence. Catalogue pictures and a printing's available finishes do not establish
+    the photographed copy's finish.
   - Prefer the printed set code and name over the artwork: reprints share art.
   - Never supply a set code you did not read off this card. You will recognise many of these
     cards, and recognising one tells you which card it is but not which printing: a staple has a
@@ -50,10 +89,18 @@ instructions: |
     remembered one is not.
   - Read the name in the language it is printed in. A Japanese or German card carries no English
     anywhere on it, so transcribe what is there and pass the language code along with it.
+  - Determine the photographed language BEFORE catalogue lookup. Transcribe the original title
+    into readName, without translating it. Read the footer language beside the set code into
+    readLanguage when legible: JP/JPN means API "ja", DE means "de", EN means "en".
+    Otherwise set readLanguage null and determine language from the title and rules text.
+    Japanese kana in the title/rules are evidence of Japanese, never English. A Japanese card
+    need not have a language code that literally says JA: its printed footer commonly says JP.
+    Pass the photographed language to resolve_printing and the lookup tools.
 
   Read the printed name and set code from the crop and call resolve_printing with them, plus the
   language when you can tell it. Read the collector number too and pass it as a hint if you can,
-  but do not strain for it and never withhold the call because you could not read it: the name and
+  using the enlarged footer, including the copyright line on retro frames. Never withhold the call
+  because you could not read it: the name and
   set are what the answer is built from, and six-point type in a corner, behind a sleeve, at an
   angle, is not. Answer with the set, collector number and name the tool returns, exactly as it
   returns them — never with the number you read, and never with the name you read. The name is the
@@ -69,7 +116,11 @@ instructions: |
   The name field the tool returns is always the English name, even for a Japanese or Russian
   printing. Answer with it. The tool also returns printedName, the name as it appears on that
   card: use it only to check you matched the right card, and never put it in your answer. Put the
-  returned printing's language code in the language field.
+  photographed card's language code in the language field, independently of the catalogue.
+  The catalogue may fall back to an English printing if its localized lookup finds nothing.
+  This can establish the card's identity, but cannot turn the photographed Japanese or German
+  text into English. Never overwrite photographed language with that fallback's language.
+  If the photographed language is genuinely unreadable, return null, not a default "en".
 
   Copy the tool's resolution, readCollectorNumber and readSet into your answer unchanged. They are how the
   scan reports what happened, and they mean:
@@ -118,7 +169,9 @@ instructions: |
   you want to check against another set — but resolve_printing is the one to reach for first.
 
   Return ONLY a JSON object:
-  {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
+  {"set":"","collectorNumber":"","name":"","language":null,"readName":null,"readLanguage":null,"finish":"nonfoil|foil|etched|unknown",
+   "finishMarker":"dot|star|absent|unknown","finishEvidence":"set_language_marker|shooting_star_watermark|visual|unknown",
+   "finishConfidence":0.0,
    "confidence":0.0,"resolution":"","readCollectorNumber":null,"readSet":null,"error":null}
   Set error, and leave the other fields null, only when the card itself cannot be read — a crop
   that is blurred past legibility, cut off, face down or empty. Being unsure which printing it is

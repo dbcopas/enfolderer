@@ -103,8 +103,25 @@ public sealed record IdentifiedCard
     /// <summary>Two-letter language code of the printing, e.g. "en".</summary>
     [JsonPropertyName("language")] public string? Language { get; init; }
 
-    /// <summary>Printing finish, e.g. "nonfoil", "foil", "etched".</summary>
+    /// <summary>Title transcribed from the photographed card, before catalogue translation.</summary>
+    [JsonPropertyName("readName")] public string? ReadName { get; init; }
+
+    /// <summary>Language code read from the footer, normalized to API codes; null when unreadable.</summary>
+    [JsonPropertyName("readLanguage")] public string? ReadLanguage { get; init; }
+
+    [JsonPropertyName("prices")] public CardPrices? Prices { get; init; }
+
+    /// <summary>Printing finish: "nonfoil", "foil", "etched", or null when not determined.</summary>
     [JsonPropertyName("finish")] public string? Finish { get; init; }
+
+    /// <summary>MTG set/language separator reading: dot, star, absent, or unknown.</summary>
+    [JsonPropertyName("finishMarker")] public string? FinishMarker { get; init; }
+
+    /// <summary>Evidence for finish: set_language_marker, shooting_star_watermark, visual, or unknown.</summary>
+    [JsonPropertyName("finishEvidence")] public string? FinishEvidence { get; init; }
+
+    /// <summary>Confidence in the finish evidence, separate from card identification, 0..1.</summary>
+    [JsonPropertyName("finishConfidence")] public double? FinishConfidence { get; init; }
 
     /// <summary>
     /// How the catalogue settled this printing: <c>confirmed</c>, <c>corrected</c>, <c>named</c>,
@@ -241,11 +258,15 @@ public sealed record IdentifiedCard
     /// from one read off it. A printing chosen by a single unchecked reading and one chosen by
     /// nothing at all want the same thing from a person: a glance at the art.
     /// </para>
+    /// <para>Ambiguous, assumed, unresolved and missing resolutions also require review.
+    /// A measured art move or agreement that separated competing candidates places the printing
+    /// independently of the original text resolution. A lone artwork match does not.</para>
     /// </summary>
     [JsonIgnore]
     public bool PrintingWasPlaced =>
-        !string.Equals(Resolution, "unplaced", StringComparison.OrdinalIgnoreCase)
-     && !string.Equals(Resolution, "unverified", StringComparison.OrdinalIgnoreCase);
+        HasPrinting && (string.Equals(ArtVerdict, "moved", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ArtVerdict, "agrees", StringComparison.OrdinalIgnoreCase) && ArtMargin > 0
+            || Resolution?.ToLowerInvariant() is "confirmed" or "named" or "corrected" or "relocated" or "fuzzy");
 }
 
 /// <summary>Versioned result document returned by <c>GET /jobs/{id}</c> once a job completes.</summary>
@@ -265,6 +286,22 @@ public sealed record ScanResultDocument
     [JsonPropertyName("imageHeight")] public int ImageHeight { get; init; }
 
     [JsonPropertyName("cards")] public IReadOnlyList<IdentifiedCard> Cards { get; init; } = [];
+
+    [JsonPropertyName("annotatedImagePath")] public string? AnnotatedImagePath { get; init; }
+
+    [JsonPropertyName("annotationError")] public string? AnnotationError { get; init; }
+}
+
+/// <summary>Independent EUR values and source languages; missing values are not zero.</summary>
+public sealed record CardPrices
+{
+    public decimal? Nonfoil { get; init; }
+    public decimal? Foil { get; init; }
+    public string? NonfoilLanguage { get; init; }
+    public string? FoilLanguage { get; init; }
+    public DateTimeOffset RetrievedAt { get; init; }
+    public string Source { get; init; } = "Cardmarket via Scryfall";
+    public string? Error { get; init; }
 }
 
 /// <summary>Job state persisted in Cosmos DB. Partition key is <c>/jobId</c>.</summary>
@@ -286,6 +323,11 @@ public sealed record ScanJobDocument
     [JsonPropertyName("gameHint")] public string? GameHint { get; init; }
 
     [JsonPropertyName("cardsDetected")] public int CardsDetected { get; init; }
+
+    /// <summary>Cards processed, including cards that could not be identified.</summary>
+    [JsonPropertyName("cardsProcessed")] public int CardsProcessed { get; init; }
+
+    [JsonPropertyName("progressMessage")] public string? ProgressMessage { get; init; }
 
     /// <summary>
     /// How many detected cards were identified well enough to export, by the same rule as
@@ -342,6 +384,11 @@ public sealed record JobStatusResponse
     [JsonPropertyName("status")] public ScanJobStatus Status { get; init; }
 
     [JsonPropertyName("cardsDetected")] public int CardsDetected { get; init; }
+
+    /// <summary>Cards processed, including cards that could not be identified.</summary>
+    [JsonPropertyName("cardsProcessed")] public int CardsProcessed { get; init; }
+
+    [JsonPropertyName("progressMessage")] public string? ProgressMessage { get; init; }
 
     /// <summary>
     /// How many detected cards were identified well enough to export, by the same rule as

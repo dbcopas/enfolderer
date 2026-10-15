@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Enfolderer.Ai.Mcp.Shared\Enfolderer.Ai.Mcp.Shared.csproj" />
+    <ProjectReference Include="..\Enfolderer.Ai.Infrastructure\Enfolderer.Ai.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

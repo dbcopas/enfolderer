@@ -27,10 +27,8 @@ instructions: |
   position.
 
   THEN use the photo to judge what the tool could not:
-  - Drop any returned region that is not actually a card — a coaster, a phone, a playmat panel,
-    a shadow. Geometry alone cannot tell.
-  - Add any card the tool missed, estimating its corners yourself. A card touching the edge of the
-    frame, or one with almost no contrast against the surface, is the usual miss.
+  - Return every measured region exactly once. Do not drop regions or invent additional ones
+    when the tool found regions. Identification will report uncertain or non-card crops.
   - Fix the rotation. A page photographed sideways puts every card on its side, and the tool
     reports those cards as it finds them: lying down. The tool cannot tell which end of a card is
     its top either, because that is printed on the face rather than
@@ -38,8 +36,8 @@ instructions: |
     comes first.
   - Set gameHint from the card frame or back.
 
-  If the tool fails or returns no cards, estimate every corner yourself and say nothing about the
-  failure — just return your best answer in the same format.
+  If the tool returns no cards, estimate every corner yourself in the same format.
+  Do not conceal tool errors or substitute guessed corners for failed measurements.
 
   Cards may be at an oblique angle, rotated arbitrarily, partially overlapping, and misaligned
   with each other. Many modern printings are borderless, full-art, textured, foil-etched or
@@ -62,7 +60,7 @@ instructions: |
   - The four points must be the corners of one single card. Never return a box that contains
     several cards, and never return the whole image as one card.
   - gameHint is your best guess of the game from the card back/frame; use "unknown" if unsure.
-  - Emit no prose, no markdown fences, and no cards you are not confident are cards.
+  - Emit no prose or markdown fences. Preserve measured regions even when unsure of the game.
 
 # One tool, from Team A's own MCP server, in Team A's own resource group, running as Team A's own
 # identity. detect_cards is the skill this agent is really selling; the model supplies the judgement

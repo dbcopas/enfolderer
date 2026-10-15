@@ -74,6 +74,17 @@ public static class CardArtHash
     {
         ArgumentNullException.ThrowIfNull(image);
         using var loaded = Image.Load<Rgba32>(image);
+        if (loaded.Width > loaded.Height)
+        {
+            using var clockwise = loaded.Clone(c => c.Rotate(RotateMode.Rotate90));
+            using var counterclockwise = loaded.Clone(c => c.Rotate(RotateMode.Rotate270));
+            return Alignments(clockwise).Concat(Alignments(counterclockwise)).ToList();
+        }
+        return Alignments(loaded);
+    }
+
+    private static IReadOnlyList<ulong[]> Alignments(Image<Rgba32> loaded)
+    {
         using var reduced = loaded.Clone(c => c.Resize(128, 176));
         var hashes = new List<ulong[]>();
         for (var step = 0; step <= 5; step++)

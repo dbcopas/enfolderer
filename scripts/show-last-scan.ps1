@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Shows what the pipeline decided about each card in the most recent scan. No arguments.
+    Shows the most recent attempted scan, including failures before card identification.
 
 .DESCRIPTION
     A scan that comes back with the wrong edition looks, in the exported CSV, exactly like a scan
@@ -10,7 +10,8 @@
     The worker writes one line per card as it resolves it, and those lines do carry it: the
     resolution, the set and number read off the card, each art candidate's distance, and the
     comparison's measured reason for accepting or declining. This script finds the worker, pulls those lines
-    out of Log Analytics and prints them in order.
+    out of Log Analytics and prints them in order. Job lifecycle events are included so a failed
+    scan is not silently replaced by an older scan with card results.
 
     It reads logs rather than the job document in Cosmos deliberately. Cosmos has local
     authentication disabled, so querying it needs a data-plane role assignment that nobody has by
@@ -54,6 +55,7 @@
 [CmdletBinding()]
 param(
     [string] $NamePrefix,
+    [ValidateRange(1, 720)]
     [int] $Hours = 6,
     [switch] $All
 )
@@ -136,7 +138,7 @@ You can still watch the worker live while a scan runs:
 }
 Write-Note "log analytics workspace $customerId"
 
-Write-Step "2. Read the resolution lines from the last $Hours hour(s)"
+Write-Step "2. Read scan attempts and resolution lines from the last $Hours hour(s)"
 
 # ContainerAppConsoleLogs_CL is the stream the app's stdout lands in. The worker's resolution line
 # always contains " resolved as ", which is specific enough to pick those lines out of everything
@@ -150,20 +152,30 @@ ContainerAppConsoleLogs_CL
     or Log_s contains 'was dropped after' or Log_s contains 'Identification failed for card'
     or Log_s contains 'art candidate' or Log_s contains 'art compared' or Log_s contains 'art not checked'
     or Log_s contains 'could not compare candidate' or Log_s contains 'server_error; retry'
+    or Log_s contains ': finish '
+    or Log_s contains ': processing card '
+    or Log_s contains ': prices EUR' or Log_s contains ': pricing failed'
+    or Log_s contains ': annotated image unavailable'
+    or Log_s contains 'invalid reply on thread' or Log_s contains 'landscape quads'
+    or Log_s matches regex '(?i)Job [0-9a-f-]{8,} (started|completed|failed in state|identified none)'
 | project TimeGenerated, Log_s
 | order by TimeGenerated asc
 "@
 
 # az.cmd lets cmd.exe interpret KQL pipes and quotes. Send JSON from a file instead.
 $queryFile = [System.IO.Path]::GetTempFileName()
+$resultFile = [System.IO.Path]::GetTempFileName()
 try {
     [System.IO.File]::WriteAllText($queryFile, (@{ query = $query } | ConvertTo-Json))
-    $raw = az rest --method post --url "https://api.loganalytics.azure.com/v1/workspaces/$customerId/query" `
-        --resource https://api.loganalytics.io --body "@$queryFile" -o json
+    # Read UTF-8 from a file instead of Azure CLI's Windows code-page stdout.
+    az rest --method post --url "https://api.loganalytics.azure.com/v1/workspaces/$customerId/query" `
+        --resource https://api.loganalytics.io --body "@$queryFile" -o json --output-file $resultFile
     $queryExitCode = $LASTEXITCODE
+    $raw = [System.IO.File]::ReadAllText($resultFile, [System.Text.Encoding]::UTF8)
 }
 finally {
     Remove-Item -LiteralPath $queryFile
+    Remove-Item -LiteralPath $resultFile
 }
 if ($queryExitCode -ne 0 -or -not $raw) {
     throw @"
@@ -189,9 +201,9 @@ $rows = @($table[0].rows | ForEach-Object {
 })
 if (-not $rows -or $rows.Count -eq 0) {
     Write-Host ''
-    Write-Host "No card was resolved in the last $Hours hour(s)." -ForegroundColor Yellow
+    Write-Host "No scan attempt or card resolution was logged in the last $Hours hour(s)." -ForegroundColor Yellow
     Write-Host ''
-    Write-Host 'Either no scan has run, or it failed before reaching the catalogue. Widen the window:' -ForegroundColor DarkYellow
+    Write-Host 'Logs may still be arriving, or the worker has not picked up the job. Widen the window:' -ForegroundColor DarkYellow
     Write-Host "    ./scripts/show-last-scan.ps1 -Hours 48"
     Write-Host 'or watch the worker while you scan:' -ForegroundColor DarkYellow
     Write-Host "    az containerapp logs show -g $rg -n $worker --follow --tail 100"
@@ -200,16 +212,25 @@ if (-not $rows -or $rows.Count -eq 0) {
 
 # Every line names its job, so the scans separate themselves without needing to be looked up.
 $parsed = foreach ($r in $rows) {
-    $job = if ($r.Log_s -match 'job ([0-9a-fA-F-]{8,})') { $Matches[1] } else { '(unknown)' }
-    [pscustomobject] @{ Time = $r.TimeGenerated; Job = $job; Line = $r.Log_s }
+    $job = if ($r.Log_s -match '(?i)\bjob ([0-9a-fA-F-]{8,})') { $Matches[1] } else { '(unknown)' }
+    [pscustomobject] @{ Time = [datetimeoffset]$r.TimeGenerated; Job = $job; Line = $r.Log_s }
 }
 
 $uncorrelated = @($parsed | Where-Object { $_.Job -eq '(unknown)' })
 $parsed = @($parsed | Where-Object { $_.Job -ne '(unknown)' })
 $jobs = @($parsed | Select-Object -ExpandProperty Job -Unique)
+$attempts = @($jobs | ForEach-Object {
+    $events = @($parsed | Where-Object Job -eq $_ | Sort-Object Time)
+    $started = @($events | Where-Object { $_.Line -match '(?i)\bJob \S+ started' })
+    [pscustomobject]@{
+        Job = $_
+        Time = if ($started.Count) { $started[0].Time } else { $events[0].Time }
+    }
+} | Sort-Object Time)
+$jobs = @($attempts | Select-Object -ExpandProperty Job)
 if (-not $All -and $jobs.Count -gt 1) {
-    $latest = ($parsed | Select-Object -Last 1).Job
-    Write-Note "$($jobs.Count) scans in the window; showing the most recent. Pass -All for the rest."
+    $latest = $jobs[-1]
+    Write-Note "$($jobs.Count) scan attempts in the window; showing the most recent attempt. Pass -All for the rest."
     $parsed = @($parsed | Where-Object { $_.Job -eq $latest })
     $jobs = @($latest)
 }
@@ -217,13 +238,23 @@ if (-not $All -and $jobs.Count -gt 1) {
 foreach ($job in $jobs) {
     Write-Host ''
     Write-Host "Scan $job" -ForegroundColor Cyan
+    $events = @($parsed | Where-Object { $_.Job -eq $job })
+    if ($events.Line -match '(?i)failed in state') {
+        Write-Host '  FAILED - these are not results from a previous successful scan.' -ForegroundColor Red
+    }
+    elseif (-not ($events.Line -match '(?i)\bJob \S+ completed:')) {
+        Write-Note 'No completion event in this window; this scan may still be running or logs may be delayed.'
+    }
     foreach ($p in ($parsed | Where-Object { $_.Job -eq $job })) {
         # The line is already a sentence written for a person. Colour is the only thing added:
         # anything that is not plainly settled is worth the eye stopping on it.
-        $doubt = $p.Line -match 'resolved as (unverified|unplaced|ambiguous|fuzzy|relocated|corrected)' `
-              -or $p.Line -match 'could not be identified' `
-              -or $p.Line -match 'was dropped after' `
-              -or $p.Line -match 'then moved to|Identification failed|was not identified|art declined|art not checked|could not compare'
+        $doubt = (
+            $p.Line -match 'resolved as (unverified|unplaced|ambiguous|fuzzy|relocated|corrected|assumed|unresolved)' -or
+            $p.Line -match 'could not be identified' -or
+            $p.Line -match 'was dropped after' -or
+            $p.Line -match 'then moved to|Identification failed|was not identified|art declined|art not checked|could not compare' -or
+            $p.Line -match ': finish unknown|failed in state|identified none'
+        )
         $colour = if ($doubt) { 'Yellow' } else { 'Gray' }
 
         # Strip the structured-logging preamble if the runtime added one; the sentence is the point.
@@ -234,7 +265,7 @@ foreach ($job in $jobs) {
 
 if ($uncorrelated.Count -gt 0) {
     Write-Host ''
-    Write-Host 'Uncorrelated retry events in this time window (identified by thread, not job):' -ForegroundColor Yellow
+    Write-Host 'Uncorrelated agent/retry events in this time window (not assigned to a job):' -ForegroundColor Yellow
     foreach ($event in $uncorrelated) {
         Write-Host "  $($event.Time): $($event.Line)" -ForegroundColor Yellow
     }

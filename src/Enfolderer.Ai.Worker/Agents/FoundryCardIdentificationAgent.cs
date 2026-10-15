@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Enfolderer.Ai.Contracts;
+using Enfolderer.Ai.Imaging;
 using Microsoft.Extensions.Logging;
 
 namespace Enfolderer.Ai.Worker.Agents;
@@ -37,7 +38,6 @@ public sealed record GameAgentProfile(
         - Set codes are 3-5 characters. Promotional and Secret Lair printings often use a
           different code from the set the art is from.
         - Collector numbers may carry a suffix such as "a", "b", "s", "★" or "z".
-        - Foil printings show a holographic stamp near the bottom centre on modern frames.
         - Prefer the printed set code and collector number over the artwork: reprints share art.
         """,
         ResolutionTool: "resolve_printing");
@@ -121,7 +121,29 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
         // Each identification agent attaches its own game's catalogue server under this label.
         // The label is the same for every game; the server behind it is not, and an agent can only
         // ever be handed its own, so approving by label does not widen anything.
-        var reply = await _client.RunAsync(_agentId, prompt, crop.Image, CatalogueServerLabel, ct);
+        AgentImage? footer = null;
+        if (Game == CardGames.Magic)
+        {
+            try
+            {
+                footer = new AgentImage(CardFooterCropper.CropToPng(crop.Image.Content), "footer.png", "image/png");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log.LogWarning(ex, "Could not enlarge the footer for card {Index}; using the full crop.", crop.Index);
+            }
+        }
+        var reply = await _client.RunAsync(_agentId, prompt, crop.Image, CatalogueServerLabel, ct, footer,
+            text =>
+            {
+                var parsed = ParseIdentification(text, crop, Game, AgentId);
+                ValidateLanguage(parsed);
+                if (!parsed.IsIdentified && parsed.Resolution == "unresolved")
+                    throw new InvalidOperationException(
+                        "Catalogue resolution was unresolved and no usable name/set were returned. "
+                        + "Read the title again in the printed language, and inspect the enlarged footer "
+                        + "for the set and number. Try lookup_by_set_and_number if both are legible.");
+            });
 
         try
         {
@@ -178,7 +200,8 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             {{settle}}
 
             Return ONLY a JSON object, with no prose and no markdown fences:
-            {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
+            {"set":"","collectorNumber":"","name":"","language":null,"readName":null,"readLanguage":null,"finish":"nonfoil|foil|etched|unknown",
+             "finishMarker":"dot|star|absent|unknown","finishEvidence":"set_language_marker|shooting_star_watermark|visual|unknown","finishConfidence":0.0,
              "confidence":0.0,"resolution":"","readCollectorNumber":"","readSet":"","alternates":[]}
 
             "alternates" is the list of that name under the same key in the tool's reply. Copy it
@@ -189,7 +212,14 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             is plausible and whose printing is still the wrong one.
 
             "name" is the catalogue's English name, whatever language the card is printed in, and
-            "language" is the language the card itself is printed in.
+            "language" is the language the card itself is printed in, not a catalogue fallback's
+            language. Transcribe the photographed title into "readName" before translating it.
+            For Magic, put the language letters you can read beside the set code in "readLanguage",
+            normalized to API codes (JP/JPN means "ja", DE means "de", EN means "en"); otherwise null.
+            Determine "language" from that footer or the printed title/rules, and pass it to the
+            catalogue tool. Never default to English because the catalogue returns an English name
+            or printing. A Japanese title with kana cannot be English. If the photographed language
+            cannot be determined, use null, not "en".
 
             If you can read the name but not the collector number, leave "collectorNumber" null and
             answer anyway: a name and a set are enough for the card to be recorded.
@@ -226,6 +256,35 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
         var confidence = root.TryGetProperty("confidence", out var c) && c.TryGetDouble(out var cv)
             ? Math.Clamp(cv, 0d, 1d)
             : 0d;
+        var marker = Read("finishMarker")?.ToLowerInvariant();
+        var evidence = Read("finishEvidence")?.ToLowerInvariant();
+        var finishConfidence = root.TryGetProperty("finishConfidence", out var fc)
+            && fc.ValueKind == JsonValueKind.Number && fc.TryGetDouble(out var fcv) && double.IsFinite(fcv)
+                ? Math.Clamp(fcv, 0d, 1d) : 0d;
+        var finish = Read("finish")?.ToLowerInvariant();
+        if (game == CardGames.Magic)
+        {
+            marker = marker is "dot" or "star" or "absent" ? marker : "unknown";
+            if (finishConfidence >= 0.8 && (marker is "dot" or "star"))
+            {
+                finish = marker == "star" ? "foil" : "nonfoil";
+                evidence = "set_language_marker";
+            }
+            else if (finishConfidence >= 0.8 && evidence == "shooting_star_watermark" && marker == "absent")
+            {
+                finish = "foil";
+            }
+            else if (finishConfidence >= 0.8 && evidence == "visual" && (marker is "absent" or "unknown")
+                && (finish is "foil" or "etched"))
+            {
+                evidence = "visual";
+            }
+            else
+            {
+                finish = null;
+                evidence = "unknown";
+            }
+        }
 
         var card = new IdentifiedCard
         {
@@ -235,8 +294,13 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             Set = Read("set"),
             CollectorNumber = Read("collectorNumber"),
             Name = Read("name"),
-            Language = Read("language") ?? "en",
-            Finish = Read("finish") ?? "nonfoil",
+            Language = game == CardGames.Magic ? NormalizeLanguage(Read("language")) : Read("language") ?? "en",
+            ReadName = Read("readName"),
+            ReadLanguage = NormalizeLanguage(Read("readLanguage")),
+            Finish = game == CardGames.Magic ? finish : Read("finish") ?? "nonfoil",
+            FinishMarker = game == CardGames.Magic ? marker : null,
+            FinishEvidence = game == CardGames.Magic ? evidence : null,
+            FinishConfidence = game == CardGames.Magic ? finishConfidence : null,
             Resolution = Read("resolution"),
             ReadCollectorNumber = Read("readCollectorNumber"),
             ReadSet = Read("readSet"),
@@ -255,6 +319,32 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
                 Error = "Agent reply was missing the set or the name: " + AgentJson.Summarize(reply)
             };
     }
+
+    internal static void ValidateLanguage(IdentifiedCard card)
+    {
+        if (card.Game != CardGames.Magic || !card.IsIdentified) return;
+        if (card.Language is null || card.ReadName is null)
+            throw new InvalidOperationException(
+                "The Magic reply must include the photographed language and readName (the original printed title). "
+                + "Read the title/rules and enlarged footer; an English catalogue name is not language evidence.");
+        if (card.ReadLanguage is not null && card.Language != card.ReadLanguage)
+            throw new InvalidOperationException(
+                $"The photographed footer language '{card.ReadLanguage}' contradicts language '{card.Language}'. "
+                + "Use the photographed language, pass it to the catalogue, and do not copy an English fallback's language.");
+        if (card.Language != "ja" && card.ReadName.Any(c =>
+                c is >= '\u3041' and <= '\u3096' or >= '\u30a1' and <= '\u30fa' or >= '\uff66' and <= '\uff9d'))
+            throw new InvalidOperationException(
+                $"The printed title '{card.ReadName}' contains Japanese kana but language is '{card.Language}'. "
+                + "Re-read the photographed title and footer, resolve with language 'ja', and retain Japanese "
+                + "as the photographed language even if the catalogue falls back to an English printing.");
+    }
+
+    private static string? NormalizeLanguage(string? language) => language?.Trim().ToLowerInvariant() switch
+    {
+        null or "" or "unknown" => null,
+        "jp" or "jpn" => "ja",
+        var code => code
+    };
 
     /// <summary>
     /// The printings the catalogue offered pictures of, copied through by the agent.

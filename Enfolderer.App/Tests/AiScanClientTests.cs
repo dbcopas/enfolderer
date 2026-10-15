@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -26,6 +28,8 @@ public static class AiScanClientTests
         failures += TestCardMapping();
         failures += TestPollBackoff();
         failures += TestStatusDescriptions();
+        failures += Task.Run(TestPollingProgressAsync).GetAwaiter().GetResult();
+        failures += Task.Run(TestAnnotatedDownloadAsync).GetAwaiter().GetResult();
         failures += TestConfigParsing();
         failures += TestQuadBoundingBox();
         failures += TestAuthenticationRecordStore();
@@ -134,7 +138,7 @@ public static class AiScanClientTests
                 new IdentifiedCard { Index = 0, Set = "bro", CollectorNumber = "167", Name = "Ancient Silver Dragon" },
                 new IdentifiedCard { Index = 1, Set = "bro", Name = "Missing number" },
                 new IdentifiedCard { Index = 2, Error = "unreadable" },
-                new IdentifiedCard { Index = 3, Set = "sld", CollectorNumber = "1500", Name = "Lightning Bolt" },
+                new IdentifiedCard { Index = 3, Set = "sld", CollectorNumber = "1500", Name = "Lightning Bolt", Finish = "foil" },
                 new IdentifiedCard { Index = 4, Set = "neo", CollectorNumber = "268", Name = "Boseiju, Who Endures", Language = "ja" }
             ]
         };
@@ -148,6 +152,11 @@ public static class AiScanClientTests
 
         var csv = mapped.Select(BinderScanService.BuildCsvRow).ToList();
         failures += Check(csv[0] == "bro;167;;en;Ancient Silver Dragon", "CSV row format is unchanged");
+        failures += Check(csv[2] == "sld;1500;foil;en;Lightning Bolt", "foil finish reaches the modifier column");
+        failures += Check(BinderScanService.BuildCsvRow(new("mh2", "1", "Card", Finish: "etched"))
+            == "mh2;1;etched;en;Card", "etched finish is preserved separately");
+        failures += Check(BinderScanService.BuildCsvRow(new("mh2", "1", "Card", Finish: "nonfoil"))
+            == "mh2;1;;en;Card", "nonfoil preserves the existing blank modifier");
 
         // A number that could not be read leaves the column empty rather than the row absent. The
         // name is what a person can check against the binder, so it must survive the number.
@@ -203,7 +212,156 @@ public static class AiScanClientTests
                 .Contains("boom", StringComparison.Ordinal),
             "failure surfaces the server error");
 
+        var progress = AiScanClient.DescribeStatus(new JobStatusResponse
+        {
+            Status = ScanJobStatus.Identifying, CardsDetected = 7, CardsProcessed = 3, CardsIdentified = 2
+        });
+        failures += Check(progress.Contains("3/7 processed") && progress.Contains("2 identified"),
+            "progress separates processed cards from successful identifications");
+        var wire = JsonSerializer.Deserialize<JobStatusResponse>(
+            """{"status":"Identifying","cardsDetected":7,"cardsProcessed":3,"cardsIdentified":2}""", ScanJson.Options);
+        failures += Check(wire?.CardsProcessed == 3, "processed progress survives API JSON");
+        var legacy = JsonSerializer.Deserialize<JobStatusResponse>(
+            """{"status":"Identifying","cardsDetected":7}""", ScanJson.Options);
+        failures += Check(legacy?.CardsProcessed == 0, "old server responses remain compatible");
+        failures += Check(AiScanClient.DescribeStatus(new JobStatusResponse
+        {
+            Status = ScanJobStatus.Identifying, ProgressMessage = "Fetching EUR prices and rendering the annotated image..."
+        }).Contains("Fetching EUR prices"),
+            "pricing/rendering progress replaces the generic identification phase");
+        var summary = BinderScanService.DescribeResult(new BinderScanService.ScanResult(
+            1, 7, 1, @"C:\scans\results.csv", 2, ["Card A", "Card B"], ["Card C"], ["Card D"]));
+        failures += Check(summary.Contains("1 unidentified") && summary.Contains("2 missing numbers")
+            && summary.Contains("2 printings need review") && summary.Contains("1 finishes unknown")
+            && summary.Contains("1 moved by art") && summary.EndsWith("results.csv", StringComparison.Ordinal),
+            "completion status retains actionable review counts and saved filename");
+        failures += Check(BinderScanService.DescribeResult(new BinderScanService.ScanResult(
+            1, 1, 0, @"C:\scans\results.csv", AnnotatedImages: ["preview.png"], AnnotationWarnings: ["price unavailable"]))
+            .Contains("1 priced images, 1 image/price warnings"),
+            "completion status retains optional output successes and warnings independently of CSV success");
         return failures;
+    }
+
+    private static async Task<int> TestPollingProgressAsync()
+    {
+        var imagePath = Path.GetTempFileName();
+        try
+        {
+            using var handler = new ScanProgressHandler();
+            using var http = new HttpClient(handler);
+            var client = new AiScanClient(http, new Uri("https://scan.test/"), null, []);
+            var messages = new List<string>();
+            var result = await client.ScanImageAsync(imagePath, statusCallback: messages.Add);
+            int failures = 0;
+            failures += Check(messages.Any(m => m.Contains("1/3 processed"))
+                && messages.Any(m => m.Contains("2/3 processed")),
+                "polling reports changing counts even when the phase stays Identifying");
+            failures += Check(messages.Where(m => m.Contains("processed")).All(m => m.Contains("Elapsed")),
+                "poll feedback includes elapsed time");
+            failures += Check(result.JobId == "progress-test", "polling still returns the completed result");
+            return failures;
+        }
+        finally { File.Delete(imagePath); }
+    }
+
+    private sealed class ScanProgressHandler : HttpMessageHandler
+    {
+        private int _polls;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var path = request.RequestUri!.AbsolutePath;
+            string json;
+            if (path == "/jobs" && request.Method == HttpMethod.Post)
+                json = """{"jobId":"progress-test"}""";
+            else if (path == "/jobs/progress-test/content" && request.Method == HttpMethod.Put)
+                json = "{}";
+            else if (path == "/jobs/progress-test/submit" && request.Method == HttpMethod.Post)
+                json = """{"status":"Uploaded"}""";
+            else if (path == "/jobs/progress-test" && request.Method == HttpMethod.Get)
+            {
+                _polls++;
+                json = _polls < 3
+                    ? JsonSerializer.Serialize(new JobStatusResponse
+                    {
+                        Status = ScanJobStatus.Identifying, CardsDetected = 3,
+                        CardsProcessed = _polls, CardsIdentified = 1
+                    }, ScanJson.Options)
+                    : """{"status":"Completed","cardsDetected":3,"cardsProcessed":3,"cardsIdentified":2,"result":{"jobId":"progress-test","status":"Completed","cards":[]}}""";
+            }
+            else throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private static async Task<int> TestAnnotatedDownloadAsync()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"enfolderer-priced-{Guid.NewGuid():N}.png");
+        try
+        {
+            using var handler = new AnnotatedDownloadHandler();
+            using var http = new HttpClient(handler);
+            var client = new AiScanClient(http, new Uri("https://scan.test/"),
+                new ScriptedCredential { SilentFails = false }, ["scope"]);
+            var result = new ScanResultDocument
+            {
+                JobId = "test", AnnotatedImagePath = "jobs/test/annotated-image"
+            };
+            await client.DownloadAnnotatedImageAsync(result, path, default);
+            int failures = 0;
+            failures += Check(handler.RequestPath == "/jobs/test/annotated-image" && handler.Authorized
+                && File.ReadAllBytes(path).SequenceEqual(AnnotatedDownloadHandler.Png),
+                "annotated image downloads through the fixed authenticated API route");
+            File.Delete(path);
+            try
+            {
+                await client.DownloadAnnotatedImageAsync(result with
+                {
+                    AnnotatedImagePath = "https://untrusted.test/image.png"
+                }, path, default);
+                failures += Check(false, "untrusted image routes must be rejected");
+            }
+            catch (InvalidOperationException)
+            {
+                failures += Check(handler.Requests == 1 && !File.Exists(path),
+                    "server-provided external image routes cannot receive the user's bearer token");
+            }
+            handler.ReturnInvalidImage = true;
+            try
+            {
+                await client.DownloadAnnotatedImageAsync(result, path, default);
+                failures += Check(false, "non-PNG replies must fail explicitly");
+            }
+            catch (InvalidDataException)
+            {
+                failures += Check(!File.Exists(path), "invalid image responses do not create a success-shaped file");
+            }
+            return failures;
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    private sealed class AnnotatedDownloadHandler : HttpMessageHandler
+    {
+        public static readonly byte[] Png = [137, 80, 78, 71, 13, 10, 26, 10];
+        public string? RequestPath { get; private set; }
+        public bool Authorized { get; private set; }
+        public int Requests { get; private set; }
+        public bool ReturnInvalidImage { get; set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Requests++;
+            RequestPath = request.RequestUri!.AbsolutePath;
+            Authorized = request.Headers.Authorization?.Scheme == "Bearer"
+                && request.Headers.Authorization.Parameter == "token";
+            var content = new ByteArrayContent(ReturnInvalidImage ? [1, 2, 3] : Png);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
+        }
     }
 
     private static int TestConfigParsing()

@@ -36,6 +36,11 @@
     It does not scan anything. When it finishes, scan a page from the desktop app, then run
     ./scripts/show-last-scan.ps1 to read back what the pipeline decided about each card.
 
+    No session-only PowerShell variables need to survive a reboot. Discovery reads Azure resources;
+    deploy-images.ps1 replays recorded deployment parameters, with a local .deploy-images cache
+    for recovery after a failed deployment. Keep that cache. Azure CLI authentication may need
+    refreshing with az login, and the active subscription must be the one holding the demo.
+
 .PARAMETER DeploymentName
     Subscription-scope deployment to read the name prefix from. Defaults to the name used in
     docs/azure-setup.md.

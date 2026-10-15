@@ -82,6 +82,13 @@ builder.Services.AddSingleton(sp =>
 });
 
 builder.Services.AddSingleton<ScanJobProcessor>();
+builder.Services.AddSingleton(sp =>
+{
+    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ScryfallPricing");
+    http.Timeout = TimeSpan.FromSeconds(15);
+    return new Enfolderer.Ai.Infrastructure.Catalogue.ScryfallPriceClient(http);
+});
+builder.Services.AddSingleton<ScanAnnotationService>();
 builder.Services.AddHostedService<ScanJobWorker>();
 
 var app = builder.Build();

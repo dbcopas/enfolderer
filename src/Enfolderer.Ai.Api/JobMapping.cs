@@ -10,6 +10,8 @@ public static class JobMapping
         JobId = job.JobId,
         Status = job.Status,
         CardsDetected = job.CardsDetected,
+        CardsProcessed = job.CardsProcessed,
+        ProgressMessage = job.ProgressMessage,
         CardsIdentified = job.CardsIdentified,
         Error = job.Error,
         // The result document is only meaningful once the pipeline finished.
