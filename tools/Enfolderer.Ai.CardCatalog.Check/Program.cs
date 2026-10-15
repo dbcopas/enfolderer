@@ -32,9 +32,21 @@ internal static class Program
 
     private static int Main(string[] args)
     {
-        if (args.Length > 0 && (args[0] != "--photo-art" || args.Length > 2))
+        if (args.Length == 2 && args[0] == "--price-render-check")
         {
-            Console.Error.WriteLine("Usage: Enfolderer.Ai.CardCatalog.Check [--photo-art [training-directory]]");
+            PriceAnnotationChecks.RunAsync(Check, args[1]).GetAwaiter().GetResult();
+            return _failures == 0 ? 0 : 1;
+        }
+        if (args.Length == 5 && args[0] == "--live-reading")
+            return LiveReadingCheck.RunAsync(args[1], args[2], args[3], args[4]).GetAwaiter().GetResult();
+        if (args.Length == 5 && args[0] == "--live-boundary")
+            return LiveReadingCheck.RunBoundaryAsync(args[1], args[2], args[3], args[4]).GetAwaiter().GetResult();
+        if (args.Length > 0 && (args[0] is not ("--photo-art" or "--photo-multilingual" or "--photo-boundaries") || args.Length > 2))
+        {
+            Console.Error.WriteLine("Usage: Enfolderer.Ai.CardCatalog.Check [--photo-art|--photo-multilingual|--photo-boundaries [training-directory]] "
+                + "or --price-render-check <synthetic-preview.png> "
+                + "or --live-reading <project-endpoint> <agent-id> <page-directory> <comma-separated-indices> "
+                + "or --live-boundary <project-endpoint> <agent-id> <page-directory> <blob-path>");
             return 2;
         }
         NumberReadingChecks();
@@ -48,8 +60,15 @@ internal static class Program
         ArtFetchChecks();
         RecalledSetChecks().GetAwaiter().GetResult();
         ScanReliabilityChecks.RunOfflineAsync(Check).GetAwaiter().GetResult();
-        if (args.Length > 0)
+        PriceAnnotationChecks.RunAsync(Check).GetAwaiter().GetResult();
+        if (args.Length > 0 && args[0] == "--photo-art")
             ScanReliabilityChecks.RunPhotoAsync(Check, args.Length == 2 ? args[1] : null)
+                .GetAwaiter().GetResult();
+        if (args.Length > 0 && args[0] == "--photo-multilingual")
+            ScanReliabilityChecks.RunMultilingualPhotoAsync(Check, args.Length == 2 ? args[1] : null)
+                .GetAwaiter().GetResult();
+        if (args.Length > 0 && args[0] == "--photo-boundaries")
+            ScanReliabilityChecks.RunBoundaryPhotosAsync(Check, args.Length == 2 ? args[1] : null)
                 .GetAwaiter().GetResult();
 
         Console.WriteLine(_failures == 0
@@ -474,6 +493,9 @@ internal static class Program
         Check(mtg.Contains("resolve_printing"), "Magic is told which tool settles a printing");
         Check(mtg.Contains("\"resolution\""), "and to carry the resolution back");
         Check(mtg.Contains("confidence"), "and to answer with what it read rather than decline");
+        Check(mtg.Contains("\"readName\"") && mtg.Contains("\"readLanguage\"")
+            && !mtg.Contains("\"language\":\"en\""),
+            "the language contract retains photographed evidence without suggesting an English default");
 
         // The trap this prompt exists to avoid: a second copy of the agent's standing instructions
         // here would be sent as the user message, which is what a model follows when the two
@@ -547,7 +569,7 @@ internal static class Program
 
         // The export gate does not change for an unplaced card — the row is still worth writing —
         // but the caller has to be able to find it, because the CSV itself shows nothing.
-        static IdentifiedCard Settled(string resolution) =>
+        static IdentifiedCard Settled(string? resolution) =>
             new() { Set = "2x2", CollectorNumber = "147", Name = "Food Chain", Resolution = resolution };
 
         Check(Settled("unplaced").IsIdentified, "an unplaced card is still exported");
@@ -556,6 +578,11 @@ internal static class Program
         Check(Settled("confirmed").PrintingWasPlaced, "a confirmed printing was placed");
         Check(Settled("relocated").PrintingWasPlaced,
             "and so was a relocated one: the name found it, the set was merely corrected");
+        Check(!Settled("ambiguous").PrintingWasPlaced && !Settled("assumed").PrintingWasPlaced
+            && !Settled(null).PrintingWasPlaced && !Settled("invalid").PrintingWasPlaced,
+            "ambiguous, assumed, missing and invalid resolution need printing review");
+        Check((Settled("unplaced") with { ArtVerdict = "moved" }).PrintingWasPlaced,
+            "a measured art move places a previously unplaced printing");
     }
 
     private static (ScryfallCatalogue Catalogue, StubScryfall Stub) Build(Func<string, string?> reply)

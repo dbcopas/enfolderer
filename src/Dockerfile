@@ -20,6 +20,9 @@ RUN dotnet publish "src/${PROJECT}/${PROJECT}.csproj" -c Release -o /app --no-se
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 ARG PROJECT
+RUN if [ "$PROJECT" = "Enfolderer.Ai.Worker" ]; then \
+    apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*; fi
 # ENTRYPOINT cannot read a build argument, so carry it into the image as an environment variable.
 ENV PROJECT=${PROJECT}
 WORKDIR /app

@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Text.Json;
 using ModelContextProtocol.Server;
+using Enfolderer.Ai.Infrastructure.Catalogue;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Enfolderer.Ai.Mcp.CardCatalog.Mtg;
 
@@ -14,6 +16,19 @@ public sealed class MtgCatalogueTools
     private readonly ScryfallCatalogue _catalogue;
 
     public MtgCatalogueTools(ScryfallCatalogue catalogue) => _catalogue = catalogue;
+
+    [McpServerTool(Name = "get_printing_prices")]
+    [Description("Exact-printing EUR nonfoil and foil Cardmarket reference prices via Scryfall. "
+        + "Each missing foreign-language finish falls back independently to English for the same set/number. "
+        + "Null means unavailable, not zero. Returns source language per finish and retrieval time.")]
+    public static async Task<string> GetPrintingPricesAsync(
+        [FromServices] ScryfallPriceClient prices,
+        [Description("Resolved set code.")] string set,
+        [Description("Resolved collector number, including any suffix.")] string collectorNumber,
+        [Description("Photographed API language code, e.g. ja or de.")] string? language = null,
+        CancellationToken ct = default) =>
+        JsonSerializer.Serialize(await prices.GetAsync(set, collectorNumber, language, ct),
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
 
     [McpServerTool(Name = "resolve_printing")]
     [Description("""

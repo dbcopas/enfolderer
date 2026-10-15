@@ -49,11 +49,36 @@ resource cosmos 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' existing = {
   name: cosmosAccountName
 }
 
+resource outputs 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  parent: blobService
+  name: 'outputs'
+}
+
+resource apiOutputs 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: outputs
+  name: guid(outputs.id, apiPrincipalId, storageBlobDataReader)
+  properties: {
+    principalId: apiPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReader)
+  }
+}
+
+resource workerOutputs 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: outputs
+  name: guid(outputs.id, workerPrincipalId, storageBlobDataContributor)
+  properties: {
+    principalId: workerPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
+  }
+}
+
 // --- API -------------------------------------------------------------------------------------
 // The API relays the client's upload into the scans container, because the storage account is
 // private and the client cannot reach it. Contributor on that one container is the narrowest role
-// that allows the write; the API still has no access to crops, so it cannot read what Team A and
-// Team B produce.
+// that allows the write; the API has no access to intermediate crops. Its separate read-only
+// outputs grant allows it to return completed annotated images without widening crop access.
 resource apiScans 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: scans
   name: guid(scans.id, apiPrincipalId, storageBlobDataContributor)

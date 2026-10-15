@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Azure.Core;
 using Azure.Identity;
 using Enfolderer.App.Infrastructure;
+using Enfolderer.Ai.Contracts;
 
 namespace Enfolderer.App.Utilities;
 
@@ -23,7 +25,7 @@ public static class BinderScanService
     /// catalogue's English name, so this is the only record of which printing it was: a Japanese
     /// card and its English reprint share a name, a set and a number.
     /// </param>
-    public record ScannedCard(string Set, string Number, string Name, string Language = "en");
+    public record ScannedCard(string Set, string Number, string Name, string Language = "en", string? Finish = null);
     /// <param name="CardsWithoutNumber">
     /// How many of <paramref name="CardsFound"/> were exported with an empty number column. Those
     /// rows name a real card and are worth keeping, but the number is the one field nobody can
@@ -46,7 +48,9 @@ public static class BinderScanService
     /// </param>
     public record ScanResult(
         int ImagesProcessed, int CardsFound, int LookupFailures, string OutputPath, int CardsWithoutNumber = 0,
-        IReadOnlyList<string>? UnplacedCards = null, IReadOnlyList<string>? CardsMovedByArt = null);
+        IReadOnlyList<string>? UnplacedCards = null, IReadOnlyList<string>? CardsMovedByArt = null,
+        IReadOnlyList<string>? CardsWithoutFinish = null,
+        IReadOnlyList<string>? AnnotatedImages = null, IReadOnlyList<string>? AnnotationWarnings = null);
 
     private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"];
 
@@ -111,12 +115,16 @@ public static class BinderScanService
         var withoutNumber = 0;
         var unplaced = new List<string>();
         var movedByArt = new List<string>();
+        var withoutFinish = new List<string>();
+        var annotatedImages = new List<string>();
+        var annotationWarnings = new List<string>();
+        var imageResults = new List<(string Source, ScanResultDocument Result)>();
 
         for (var i = 0; i < imageFiles.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
             var file = imageFiles[i];
-            progressCallback?.Invoke(i + 1, imageFiles.Count);
+            progressCallback?.Invoke(i, imageFiles.Count);
 
             var prefix = imageFiles.Count > 1 ? $"[{i + 1}/{imageFiles.Count}] {Path.GetFileName(file)}: " : string.Empty;
             var result = await client.ScanImageAsync(
@@ -124,8 +132,11 @@ public static class BinderScanService
                 gameHint,
                 msg => statusCallback?.Invoke(prefix + msg),
                 ct);
+            imageResults.Add((file, result));
 
             allCards.AddRange(AiScanClient.MapCards(result));
+            withoutFinish.AddRange(result.Cards.Where(c => c.IsIdentified
+                && c.Finish is not ("nonfoil" or "foil" or "etched")).Select(c => c.Name!));
             unidentified += result.Cards.Count(c => !c.IsIdentified);
             withoutNumber += result.Cards.Count(c => c.IsIdentified && !c.HasPrinting);
             unplaced.AddRange(result.Cards
@@ -134,20 +145,62 @@ public static class BinderScanService
             movedByArt.AddRange(result.Cards
                 .Where(c => string.Equals(c.ArtVerdict, "moved", StringComparison.OrdinalIgnoreCase))
                 .Select(c => $"{c.Name}: {c.ArtMovedFrom} → {c.Set} {c.CollectorNumber}"));
+            progressCallback?.Invoke(i + 1, imageFiles.Count);
         }
 
+        statusCallback?.Invoke($"Saving {allCards.Count} card(s) to {Path.GetFileName(outputPath)}...");
         File.WriteAllLines(outputPath, allCards.Select(BuildCsvRow));
 
+        // Save the CSV first: an optional download must not lose successfully identified cards.
+        foreach (var (file, result) in imageResults)
+        {
+            if (result.AnnotationError is not null)
+                annotationWarnings.Add($"{Path.GetFileName(file)}: {result.AnnotationError}");
+            if (result.Cards.Any(c => c.Prices?.Error is not null))
+                annotationWarnings.Add($"{Path.GetFileName(file)}: some price lookups failed; image legend marks lookup incomplete.");
+            if (result.AnnotatedImagePath is null) continue;
+            var imageOutput = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(outputPath))!,
+                $"{Path.GetFileNameWithoutExtension(outputPath)}_{ScanBlobPaths.SanitizeSegment(result.JobId)}_priced.png");
+            statusCallback?.Invoke($"Downloading priced image for {Path.GetFileName(file)}...");
+            try
+            {
+                await client.DownloadAnnotatedImageAsync(result, imageOutput, ct);
+                annotatedImages.Add(imageOutput);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException
+                || ex is OperationCanceledException && !ct.IsCancellationRequested)
+            {
+                annotationWarnings.Add($"{Path.GetFileName(file)}: image download failed: {ex.Message}");
+            }
+        }
+
         return new ScanResult(
-            imageFiles.Count, allCards.Count, unidentified, outputPath, withoutNumber, unplaced, movedByArt);
+            imageFiles.Count, allCards.Count, unidentified, outputPath, withoutNumber, unplaced, movedByArt, withoutFinish,
+            annotatedImages, annotationWarnings);
     }
+
+    internal static string DescribeResult(ScanResult result) =>
+        $"Scan saved: {result.CardsFound} cards from {result.ImagesProcessed} image(s); "
+        + $"{result.LookupFailures} unidentified, {result.CardsWithoutNumber} missing numbers, "
+        + $"{result.UnplacedCards?.Count ?? 0} printings need review, "
+        + $"{result.CardsWithoutFinish?.Count ?? 0} finishes unknown, "
+        + $"{result.CardsMovedByArt?.Count ?? 0} moved by art; {result.AnnotatedImages?.Count ?? 0} priced images, "
+        + $"{result.AnnotationWarnings?.Count ?? 0} image/price warnings. {Path.GetFileName(result.OutputPath)}";
 
     /// <summary>
     /// One CSV row in the shape the importer already understands:
     /// <c>edition;number;modifier;language;name</c>.
     /// </summary>
     internal static string BuildCsvRow(ScannedCard card) =>
-        $"{card.Set};{card.Number};;{Normalise(card.Language)};{card.Name}";
+        $"{card.Set};{card.Number};{FinishModifier(card.Finish)};{Normalise(card.Language)};{card.Name}";
+
+    private static string FinishModifier(string? finish) => finish?.Trim().ToLowerInvariant() switch
+    {
+        "foil" => "foil",
+        "etched" => "etched",
+        null or "" or "unknown" or "nonfoil" => string.Empty,
+        _ => throw new InvalidOperationException($"Unsupported scan finish '{finish}'.")
+    };
 
     /// <summary>
     /// The language column only ever holds a two-letter code; anything else — a blank, or a model

@@ -316,6 +316,17 @@ public partial class BinderViewModel : INotifyPropertyChanged, IStatusSink
         Application.Current?.Dispatcher?.Invoke(() => { ImportProgress = 100; ImportProgressText = "Done"; ImportInProgress = false; });
     }
 
+    public void ReportScanProgress(int completed, int total)
+    {
+        if (total <= 0) return;
+        int pct = (int)Math.Round(100.0 * completed / total);
+        Application.Current?.Dispatcher?.Invoke(() =>
+        {
+            ImportProgress = Math.Clamp(pct, 0, 100);
+            ImportProgressText = $"Scan: {completed}/{total} images completed ({ImportProgress}%)";
+        });
+    }
+
         public static void SetImageUrlName(string url, string name)
         { WithVm(vm => vm._telemetry?.SetImageUrlName(url, name)); }
 
@@ -398,4 +409,3 @@ public partial class BinderViewModel : INotifyPropertyChanged, IStatusSink
             _httpFactory!.Client);
     }
 }
-

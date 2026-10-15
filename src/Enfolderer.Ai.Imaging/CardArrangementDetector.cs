@@ -131,37 +131,329 @@ public static class CardArrangementDetector
         if (proposals.Count == 0) return [];
 
         var cards = KeepOneSize(proposals, opts, (long)width * height, Upright);
+
         var aspect = Upright;
 
         var sideways = WholeCardsFromHalves(frame, cards, opts);
         if (sideways is not null) (cards, aspect) = (sideways, OnItsSide);
 
         cards = Complete(frame, cards, opts, aspect);
+        cards = Complete(frame, cards, opts, aspect);
         cards = DropEmptyPockets(cards, opts);
 
-        return cards
-            .OrderBy(b => b.Y)
-            .ThenBy(b => b.X)
+        var isSideways = aspect == OnItsSide;
+        var topOnLeft = isSideways && DetermineSidewaysOrientation(frame, cards);
+        var (_, medianTilt) = MeasureTilts(source, cards, scale, isSideways);
+
+        var orderedCards = AlignAndSortCards(cards, isSideways, topOnLeft, medianTilt);
+
+        return orderedCards
             .Select(b => new DetectedCard(
-                QuadOf(b, scale),
+                QuadOf(b, scale, isSideways, topOnLeft, medianTilt, source.Width, source.Height),
                 Math.Round(Math.Clamp(b.Edge / 2d, 0d, 1d), 3)))
             .ToList();
     }
 
-    private static CardQuad QuadOf(Box box, double scale)
+    private static List<Box> AlignAndSortCards(
+        List<Box> cards, bool isSideways, bool topOnLeft, double tilt)
+    {
+        if (cards.Count <= 1) return cards;
+
+        var norm = Math.Sqrt(1.0 + tilt * tilt);
+
+        if (!isSideways)
+        {
+            var cos = 1.0 / norm;
+            var sin = tilt / norm;
+            var hAvg = cards.Average(b => b.Height);
+
+            var withCoord = cards.Select(b =>
+            {
+                var cx = b.X + b.Width / 2.0;
+                var cy = b.Y + b.Height / 2.0;
+                var yRot = cy * cos - cx * sin;
+                var xRot = cx * cos + cy * sin;
+                return (Box: b, YRot: yRot, XRot: xRot);
+            }).OrderBy(c => c.YRot).ToList();
+
+            var rows = new List<List<(Box Box, double YRot, double XRot)>>();
+            var currentRow = new List<(Box Box, double YRot, double XRot)> { withCoord[0] };
+            for (var i = 1; i < withCoord.Count; i++)
+            {
+                if (withCoord[i].YRot - withCoord[i - 1].YRot > hAvg * 0.5)
+                {
+                    rows.Add(currentRow);
+                    currentRow = new List<(Box Box, double YRot, double XRot)>();
+                }
+                currentRow.Add(withCoord[i]);
+            }
+            rows.Add(currentRow);
+
+            var sorted = new List<Box>();
+            foreach (var row in rows)
+            {
+                var medY = Median(row.Select(r => (double)r.Box.Y).ToArray());
+                foreach (var item in row.OrderBy(r => r.XRot))
+                {
+                    var b = item.Box;
+                    if (Math.Abs(b.Y - medY) > hAvg * 0.15)
+                    {
+                        b = b with { Y = (int)Math.Round(medY) };
+                    }
+                    sorted.Add(b);
+                }
+            }
+            return sorted;
+        }
+        else
+        {
+            var cos = 1.0 / norm;
+            var sin = tilt / norm;
+            var wAvg = cards.Average(b => b.Width);
+
+            var withCoord = cards.Select(b =>
+            {
+                var cx = b.X + b.Width / 2.0;
+                var cy = b.Y + b.Height / 2.0;
+                var xRot = cx * cos + cy * sin;
+                var yRot = cy * cos - cx * sin;
+                return (Box: b, XRot: xRot, YRot: yRot);
+            }).OrderBy(c => c.XRot).ToList();
+
+            var binderRows = new List<List<(Box Box, double XRot, double YRot)>>();
+            var currentRow = new List<(Box Box, double XRot, double YRot)> { withCoord[0] };
+            for (var i = 1; i < withCoord.Count; i++)
+            {
+                if (withCoord[i].XRot - withCoord[i - 1].XRot > wAvg * 0.5)
+                {
+                    binderRows.Add(currentRow);
+                    currentRow = new List<(Box Box, double XRot, double YRot)>();
+                }
+                currentRow.Add(withCoord[i]);
+            }
+            binderRows.Add(currentRow);
+
+            if (!topOnLeft) binderRows.Reverse();
+
+            var sorted = new List<Box>();
+            foreach (var row in binderRows)
+            {
+                var medX = Median(row.Select(r => (double)r.Box.X).ToArray());
+                var orderedInRow = topOnLeft
+                    ? row.OrderBy(r => r.YRot)
+                    : row.OrderByDescending(r => r.YRot);
+
+                foreach (var item in orderedInRow)
+                {
+                    var b = item.Box;
+                    if (Math.Abs(b.X - medX) > wAvg * 0.15)
+                    {
+                        b = b with { X = (int)Math.Round(medX) };
+                    }
+                    sorted.Add(b);
+                }
+            }
+            return sorted;
+        }
+    }
+
+    private static bool DetermineSidewaysOrientation(Frame frame, List<Box> cards)
+    {
+        double leftSum = 0, rightSum = 0;
+        foreach (var b in cards)
+        {
+            var midX = b.X + b.Width / 2;
+            leftSum += frame.MeanLuminance(b.X, b.Y, midX, b.Y + b.Height);
+            rightSum += frame.MeanLuminance(midX, b.Y, b.X + b.Width, b.Y + b.Height);
+        }
+        return leftSum <= rightSum;
+    }
+
+    private static (Dictionary<Box, double> Tilts, double MedianTilt) MeasureTilts(
+        Image<Rgba32> source, List<Box> cards, double scale, bool isSideways)
+    {
+        var tilts = new Dictionary<Box, double>();
+        var tiltList = new List<double>();
+
+        foreach (var b in cards)
+        {
+            var x0 = b.X / scale;
+            var y0 = b.Y / scale;
+            var w = b.Width / scale;
+            var h = b.Height / scale;
+
+            if (!isSideways)
+            {
+                var yTop = (int)(y0 + h * 0.25);
+                var yBot = (int)(y0 + h * 0.75);
+                var search = (int)Math.Max(15, w * 0.08);
+
+                var leftTopX = FindEdgeX(source, (int)x0, yTop, search);
+                var leftBotX = FindEdgeX(source, (int)x0, yBot, search);
+                var rightTopX = FindEdgeX(source, (int)(x0 + w), yTop, search);
+                var rightBotX = FindEdgeX(source, (int)(x0 + w), yBot, search);
+
+                var tiltLeft = (leftBotX - leftTopX) / (yBot - yTop);
+                var tiltRight = (rightBotX - rightTopX) / (yBot - yTop);
+                var t = (tiltLeft + tiltRight) / 2.0;
+                if (!double.IsNaN(t) && Math.Abs(t) < 0.25)
+                {
+                    tilts[b] = t;
+                    tiltList.Add(t);
+                }
+            }
+            else
+            {
+                var xLeft = (int)(x0 + w * 0.25);
+                var xRight = (int)(x0 + w * 0.75);
+                var search = (int)Math.Max(15, h * 0.08);
+
+                var topY1 = FindEdgeY(source, xLeft, (int)y0, search);
+                var topY2 = FindEdgeY(source, xRight, (int)y0, search);
+                var botY1 = FindEdgeY(source, xLeft, (int)(y0 + h), search);
+                var botY2 = FindEdgeY(source, xRight, (int)(y0 + h), search);
+
+                var tiltTop = (topY2 - topY1) / (xRight - xLeft);
+                var tiltBot = (botY2 - botY1) / (xRight - xLeft);
+                var t = (tiltTop + tiltBot) / 2.0;
+                if (!double.IsNaN(t) && Math.Abs(t) < 0.25)
+                {
+                    tilts[b] = t;
+                    tiltList.Add(t);
+                }
+            }
+        }
+
+        var median = tiltList.Count == 0 ? 0 : Median(tiltList.ToArray());
+        return (tilts, median);
+    }
+
+    private static double FindEdgeX(Image<Rgba32> img, int targetX, int targetY, int search)
+    {
+        var minX = Math.Max(1, targetX - search);
+        var maxX = Math.Min(img.Width - 2, targetX + search);
+        var maxGrad = -1d;
+        var bestX = targetX;
+        for (var x = minX; x <= maxX; x++)
+        {
+            var p1 = img[x - 1, targetY];
+            var p2 = img[x + 1, targetY];
+            var grad = Math.Abs((p2.R + p2.G + p2.B) - (p1.R + p1.G + p1.B));
+            if (grad > maxGrad)
+            {
+                maxGrad = grad;
+                bestX = x;
+            }
+        }
+        return bestX;
+    }
+
+    private static double FindEdgeY(Image<Rgba32> img, int targetX, int targetY, int search)
+    {
+        var minY = Math.Max(1, targetY - search);
+        var maxY = Math.Min(img.Height - 2, targetY + search);
+        var maxGrad = -1d;
+        var bestY = targetY;
+        for (var y = minY; y <= maxY; y++)
+        {
+            var p1 = img[targetX, y - 1];
+            var p2 = img[targetX, y + 1];
+            var grad = Math.Abs((p2.R + p2.G + p2.B) - (p1.R + p1.G + p1.B));
+            if (grad > maxGrad)
+            {
+                maxGrad = grad;
+                bestY = y;
+            }
+        }
+        return bestY;
+    }
+
+    private static CardQuad QuadOf(
+        Box box, double scale, bool isSideways, bool topOnLeft, double tilt, int imgWidth, int imgHeight)
     {
         var x0 = box.X / scale;
         var y0 = box.Y / scale;
-        var x1 = (box.X + box.Width) / scale;
-        var y1 = (box.Y + box.Height) / scale;
+        var w = box.Width / scale;
+        var h = box.Height / scale;
 
-        return new CardQuad(
-        [
-            new ImagePoint(x0, y0),
-            new ImagePoint(x1, y0),
-            new ImagePoint(x1, y1),
-            new ImagePoint(x0, y1),
-        ]);
+        var norm = Math.Sqrt(1.0 + tilt * tilt);
+
+        if (isSideways)
+        {
+            var lx = 1.0 / norm;
+            var ly = tilt / norm;
+            var sx = -tilt / norm;
+            var sy = 1.0 / norm;
+
+            var wHalf = (h * 1.04) / 2.0;
+            var hHalf = (w * 1.08) / 2.0;
+
+            var xCenter = x0 + w / 2.0;
+            var yCenter = y0 + h / 2.0;
+
+            if (topOnLeft)
+            {
+                var shift = w * 0.035;
+                var cx = xCenter + shift * lx;
+                var cy = yCenter + shift * ly;
+
+                return new CardQuad(
+                [
+                    new ImagePoint(Math.Clamp(cx - hHalf * lx + wHalf * sx, 0, imgWidth - 1),
+                                   Math.Clamp(cy - hHalf * ly + wHalf * sy, 0, imgHeight - 1)),
+                    new ImagePoint(Math.Clamp(cx - hHalf * lx - wHalf * sx, 0, imgWidth - 1),
+                                   Math.Clamp(cy - hHalf * ly - wHalf * sy, 0, imgHeight - 1)),
+                    new ImagePoint(Math.Clamp(cx + hHalf * lx - wHalf * sx, 0, imgWidth - 1),
+                                   Math.Clamp(cy + hHalf * ly - wHalf * sy, 0, imgHeight - 1)),
+                    new ImagePoint(Math.Clamp(cx + hHalf * lx + wHalf * sx, 0, imgWidth - 1),
+                                   Math.Clamp(cy + hHalf * ly + wHalf * sy, 0, imgHeight - 1)),
+                ]);
+            }
+            else
+            {
+                var shift = w * 0.035;
+                var cx = xCenter - shift * lx;
+                var cy = yCenter - shift * ly;
+
+                return new CardQuad(
+                [
+                    new ImagePoint(Math.Clamp(cx + hHalf * lx - wHalf * sx, 0, imgWidth - 1),
+                                   Math.Clamp(cy + hHalf * ly - wHalf * sy, 0, imgHeight - 1)),
+                    new ImagePoint(Math.Clamp(cx + hHalf * lx + wHalf * sx, 0, imgWidth - 1),
+                                   Math.Clamp(cy + hHalf * ly + wHalf * sy, 0, imgHeight - 1)),
+                    new ImagePoint(Math.Clamp(cx - hHalf * lx + wHalf * sx, 0, imgWidth - 1),
+                                   Math.Clamp(cy - hHalf * ly + wHalf * sy, 0, imgHeight - 1)),
+                    new ImagePoint(Math.Clamp(cx - hHalf * lx - wHalf * sx, 0, imgWidth - 1),
+                                   Math.Clamp(cy - hHalf * ly - wHalf * sy, 0, imgHeight - 1)),
+                ]);
+            }
+        }
+        else
+        {
+            var ux = tilt / norm;
+            var uy = 1.0 / norm;
+            var vx = 1.0 / norm;
+            var vy = -tilt / norm;
+
+            var wHalf = (w * 1.04) / 2.0;
+            var hHalf = (h * 1.08) / 2.0;
+
+            var shift = h * 0.035;
+            var cx = (x0 + w / 2.0) + shift * ux;
+            var cy = (y0 + h / 2.0) + shift * uy;
+
+            return new CardQuad(
+            [
+                new ImagePoint(Math.Clamp(cx - wHalf * vx - hHalf * ux, 0, imgWidth - 1),
+                               Math.Clamp(cy - wHalf * vy - hHalf * uy, 0, imgHeight - 1)),
+                new ImagePoint(Math.Clamp(cx + wHalf * vx - hHalf * ux, 0, imgWidth - 1),
+                               Math.Clamp(cy + wHalf * vy - hHalf * uy, 0, imgHeight - 1)),
+                new ImagePoint(Math.Clamp(cx + wHalf * vx + hHalf * ux, 0, imgWidth - 1),
+                               Math.Clamp(cy + wHalf * vy + hHalf * uy, 0, imgHeight - 1)),
+                new ImagePoint(Math.Clamp(cx - wHalf * vx + hHalf * ux, 0, imgWidth - 1),
+                               Math.Clamp(cy - wHalf * vy + hHalf * uy, 0, imgHeight - 1)),
+            ]);
+        }
     }
 
     /// <summary>Every card-shaped box, at every size, whose four sides and interior hold up.</summary>
@@ -531,6 +823,27 @@ public static class CardArrangementDetector
         public double MeanDown(int x0, int y0, int x1, int y1) => Mean(_down, x0, y0, x1, y1);
 
         public double MeanAll(int x0, int y0, int x1, int y1) => Mean(_all, x0, y0, x1, y1);
+
+        public double MeanLuminance(int x0, int y0, int x1, int y1)
+        {
+            x0 = Math.Clamp(x0, 0, Width);
+            x1 = Math.Clamp(x1, 0, Width);
+            y0 = Math.Clamp(y0, 0, Height);
+            y1 = Math.Clamp(y1, 0, Height);
+            if (x1 <= x0 || y1 <= y0) return 0;
+            double sum = 0;
+            var count = 0;
+            for (var y = y0; y < y1; y++)
+            {
+                var rowStart = y * Width;
+                for (var x = x0; x < x1; x++)
+                {
+                    sum += _luminance[rowStart + x];
+                    count++;
+                }
+            }
+            return count == 0 ? 0 : sum / count;
+        }
 
         private double Mean(double[] table, int x0, int y0, int x1, int y1)
         {

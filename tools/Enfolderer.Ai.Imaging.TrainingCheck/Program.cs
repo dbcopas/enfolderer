@@ -1,5 +1,9 @@
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Imaging;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using System.Globalization;
+using System.Text;
 
 namespace Enfolderer.Ai.Imaging.TrainingCheck;
 
@@ -25,12 +29,63 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--results")
+            return CompareResults(args[1]);
         var root = args.Length > 0 ? args[0] : FindTrainingDirectory();
         if (root is null || !Directory.Exists(root))
         {
             Console.Error.WriteLine("Could not find the training directory. Pass its path as an argument.");
             return 2;
         }
+
+        static int CompareResults(string csvPath)
+        {
+            var listing = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(csvPath))!, "cards.txt");
+            var malformed = MalformedLines(listing);
+            if (malformed.Count > 0) throw new InvalidDataException(string.Join(Environment.NewLine, malformed));
+            var expected = File.ReadAllLines(listing).Where(l => !string.IsNullOrWhiteSpace(l))
+                .Select(l => l.Split(';'))
+                .Select(f => (Name: NormalizeName(f[1]), Set: f[2].Trim().ToLowerInvariant(),
+                    Number: NormalizeNumber(f[3]), Language: NormalizeLanguage(f[5]))).ToList();
+            var actual = File.ReadAllLines(csvPath).Where(l => !string.IsNullOrWhiteSpace(l))
+                .Select(l =>
+                {
+                    var f = l.Split(';');
+                    if (f.Length != 5) throw new InvalidDataException("Expected SET;NUMBER;MODIFIER;LANGUAGE;NAME: " + l);
+                    return (Name: NormalizeName(f[4]), Set: f[0].Trim().ToLowerInvariant(),
+                        Number: NormalizeNumber(f[1]), Language: NormalizeLanguage(f[3]));
+                }).ToList();
+            int Matches(IEnumerable<string> wanted, IEnumerable<string> found)
+            {
+                var counts = found.GroupBy(k => k).ToDictionary(g => g.Key, g => g.Count());
+                var matched = 0;
+                foreach (var key in wanted)
+                    if (counts.TryGetValue(key, out var count) && count > 0)
+                    {
+                        counts[key]--;
+                        matched++;
+                    }
+                return matched;
+            }
+            var identity = Matches(expected.Select(c => c.Name), actual.Select(c => c.Name));
+            var language = Matches(expected.Select(c => $"{c.Name}|{c.Language}"), actual.Select(c => $"{c.Name}|{c.Language}"));
+            var printing = Matches(expected.Select(c => $"{c.Name}|{c.Set}|{c.Number}|{c.Language}"),
+                actual.Select(c => $"{c.Name}|{c.Set}|{c.Number}|{c.Language}"));
+            Console.WriteLine($"{Path.GetFileName(Path.GetDirectoryName(csvPath))}: {actual.Count}/{expected.Count} rows; "
+                + $"identity {identity}/{expected.Count}, identity+language {language}/{expected.Count}, "
+                + $"printing+language {printing}/{expected.Count}. Finish ignored; order ignored; duplicate counts preserved.");
+            return actual.Count == expected.Count && printing == expected.Count ? 0 : 1;
+        }
+
+        static string NormalizeLanguage(string value) =>
+            value.Trim().ToLowerInvariant() is "jp" or "jpn" ? "ja" : value.Trim().ToLowerInvariant();
+
+        static string NormalizeNumber(string value) =>
+            value.Trim().TrimStart('0').ToLowerInvariant() is { Length: > 0 } number ? number : "0";
+
+        static string NormalizeName(string value) =>
+            new string(value.Split("//")[0].Trim().Normalize(NormalizationForm.FormD)
+                .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark).ToArray()).ToLowerInvariant();
 
         var failures = 0;
         var totalExpected = 0;
@@ -63,9 +118,6 @@ internal static class Program
             var detected = CardDetector.Detect(stream);
             var actual = CellsOf(detected);
 
-            totalExpected += expected.Count;
-            totalFound += detected.Count;
-
             // A page is often photographed sideways, so that the cards lie on their side in the
             // frame. The listing is written the way the cards read, so the two differ by a quarter
             // turn, and which turn it is cannot be told from the shapes alone: only the printing on
@@ -75,6 +127,20 @@ internal static class Program
                 var (_, _, w, h) = card.Quad.BoundingBox();
                 return w - h;
             }) > 0;
+
+            if (name is "04" or "05" or "06")
+            {
+                Directory.CreateDirectory(Path.Combine("artifacts", "crops", name));
+                for (int i = 0; i < detected.Count; i++)
+                {
+                    stream.Position = 0;
+                    using var cropStream = File.Create(Path.Combine("artifacts", "crops", name, $"card-{i:D2}.png"));
+                    PerspectiveCropper.CropToPng(stream, detected[i].Quad, cropStream);
+                }
+            }
+
+            totalExpected += expected.Count;
+            totalFound += detected.Count;
 
             var matches = SameLayout(expected, actual)
                 || (sideways && (SameLayout(expected, Turn(actual)) || SameLayout(expected, Turn(Turn(Turn(actual))))));

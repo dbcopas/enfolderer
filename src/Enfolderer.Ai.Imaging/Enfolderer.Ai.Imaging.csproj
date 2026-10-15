@@ -30,6 +30,7 @@
       sits at a sharp optimum at 1.0 (0.8 through 1.05 were all measured worse).
     -->
     <PackageReference Include="SixLabors.ImageSharp" Version="2.1.11" />
+    <PackageReference Include="SixLabors.ImageSharp.Drawing" Version="1.0.0" />
   </ItemGroup>
 
   <ItemGroup>

@@ -13,6 +13,10 @@ public static class ScanBlobPaths
 
     /// <summary>Container holding per-card crops produced by the worker.</summary>
     public const string CropsContainer = "crops";
+    public const string OutputsContainer = "outputs";
+
+    public static string BuildAnnotatedBlobPath(string jobId) =>
+        $"{OutputsContainer}/{SanitizeSegment(jobId)}/priced.png";
 
     private const int MaxStemLength = 64;
 

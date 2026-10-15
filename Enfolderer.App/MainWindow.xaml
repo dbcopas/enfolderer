@@ -168,7 +168,8 @@
         <StatusBar DockPanel.Dock="Bottom">
             <!-- Primary status (metadata resolving / all metadata loaded) -->
             <StatusBarItem>
-                <TextBlock Text="{Binding Status}" />
+                <TextBlock Text="{Binding Status}" ToolTip="{Binding Status}"
+                           MaxWidth="600" TextTrimming="CharacterEllipsis" />
             </StatusBarItem>
             <!-- CSV import progress -->
         <StatusBarItem Visibility="{Binding ImportInProgress, Converter={StaticResource BoolToVis}}">

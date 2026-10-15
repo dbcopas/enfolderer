@@ -73,18 +73,28 @@ public sealed class FoundryAgentClient
     /// </para>
     /// </summary>
     public async Task<string> RunAsync(
-        string agentId, string prompt, AgentImage? image, string? approvedServerLabel, CancellationToken ct)
+        string agentId, string prompt, AgentImage? image, string? approvedServerLabel, CancellationToken ct,
+        AgentImage? detailImage = null,
+        Action<string>? validateReply = null)
     {
-        string? fileId = null;
+        var fileIds = new List<string>();
         try
         {
             var content = new List<object> { new { type = "text", text = prompt } };
             if (image is not null)
             {
-                fileId = await UploadImageAsync(image, ct);
+                var fileId = await UploadImageAsync(image, ct);
+                fileIds.Add(fileId);
                 // "high" detail: a collector number is small print, and the default downsamples it
                 // to the point where the catalogue lookup has nothing to work with.
                 content.Add(new { type = "image_file", image_file = new { file_id = fileId, detail = "high" } });
+            }
+            if (detailImage is not null)
+            {
+                content.Add(new { type = "text", text = "Second image: enlarged full-width footer of the same card, not another card. For a sideways crop it contains two stacked footer views from the two possible quarter-turns; use the one whose text reads upright and ignore the other. Use the full card for context; enlargement does not restore missing detail." });
+                var detailId = await UploadImageAsync(detailImage, ct);
+                fileIds.Add(detailId);
+                content.Add(new { type = "image_file", image_file = new { file_id = detailId, detail = "high" } });
             }
 
             using var thread = await SendAsync(
@@ -94,15 +104,47 @@ public sealed class FoundryAgentClient
                 ct);
             var threadId = RequireString(thread, "id", "thread id");
 
-            await RunToCompletionAsync(agentId, threadId, approvedServerLabel, ct);
+            for (var attempt = 0; ; attempt++)
+            {
+                var runId = await RunToCompletionAsync(agentId, threadId, approvedServerLabel, ct);
+                var reply = await ReadLastAssistantMessageAsync(threadId, runId, ct);
+                try
+                {
+                    validateReply?.Invoke(reply);
+                    return reply;
+                }
+                catch (Exception ex) when (validateReply is not null
+                    && ex is InvalidOperationException or JsonException)
+                {
+                    _log.LogWarning(ex,
+                        "Agent {AgentId} returned an invalid reply on thread {ThreadId}, run {RunId}, "
+                        + "attempt {Attempt}/2. Reply: {Reply}",
+                        agentId, threadId, runId, attempt + 1, AgentJson.Summarize(reply, 600));
+                    if (attempt == 1)
+                        throw new InvalidOperationException(
+                            $"Agent '{agentId}' returned an invalid reply after 2 attempts "
+                            + $"(thread '{threadId}', run '{runId}'): {ex.Message}", ex);
 
-            return await ReadLastAssistantMessageAsync(threadId, ct);
+                    using var correction = await SendAsync(HttpMethod.Post,
+                        $"/threads/{threadId}/messages?api-version={_apiVersion}",
+                        new
+                        {
+                            role = "user",
+                            content = "Your last response could not be used: " + ex.Message
+                                + " Re-examine the original image and return the entire requested JSON object "
+                                + "again. Do not append fragments or omit cards. Close every object and array; "
+                                + "keep confidence and gameHint outside quad. For sideways cards order the corners "
+                                + "by the printed top-left, not the photo's top-left. If a name is readable, "
+                                + "retain it even when the catalogue cannot resolve its printing."
+                        }, ct);
+                }
+            }
         }
         finally
         {
             // An uploaded file outlives the thread, so without this a binder page leaves nineteen
             // images sitting in the project after every scan.
-            if (fileId is not null) await TryDeleteFileAsync(fileId);
+            foreach (var fileId in fileIds) await TryDeleteFileAsync(fileId);
         }
     }
 
@@ -123,7 +165,7 @@ public sealed class FoundryAgentClient
     /// refused again and spend the remaining attempts without the budget ever having refilled.
     /// </para>
     /// </remarks>
-    private async Task RunToCompletionAsync(
+    private async Task<string> RunToCompletionAsync(
         string agentId, string threadId, string? approvedServerLabel, CancellationToken ct)
     {
         var throttleRetries = 0;
@@ -144,7 +186,7 @@ public sealed class FoundryAgentClient
                 var runId = RequireString(run, "id", "run id");
 
                 (status, lastError, errorCode) = await WaitForRunAsync(threadId, runId, approvedServerLabel, ct);
-                if (IsCompleted(status)) return;
+                if (IsCompleted(status)) return runId;
             }
             catch (FoundryAccessException ex) when (ex.StatusCode == 429 && throttleRetries < _throttleRetries)
             {
@@ -321,6 +363,7 @@ public sealed class FoundryAgentClient
         IsCompleted(status)
         || string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase)
         || string.Equals(status, "cancelled", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(status, "incomplete", StringComparison.OrdinalIgnoreCase)
         || string.Equals(status, "expired", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
@@ -378,6 +421,9 @@ public sealed class FoundryAgentClient
                         code = c.GetString();
                     }
                 }
+                if (!IsCompleted(status) && run.RootElement.TryGetProperty("incomplete_details", out var incomplete)
+                    && incomplete.ValueKind == JsonValueKind.Object)
+                    reason = AgentJson.Summarize(incomplete.ToString());
                 return (status, reason, code);
             }
 
@@ -493,11 +539,11 @@ public sealed class FoundryAgentClient
         return decisions;
     }
 
-    private async Task<string> ReadLastAssistantMessageAsync(string threadId, CancellationToken ct)
+    private async Task<string> ReadLastAssistantMessageAsync(string threadId, string runId, CancellationToken ct)
     {
         using var messages = await SendAsync(
             HttpMethod.Get,
-            $"/threads/{threadId}/messages?api-version={_apiVersion}&order=desc&limit=10",
+            $"/threads/{threadId}/messages?api-version={_apiVersion}&order=desc&limit=10&run_id={runId}",
             null,
             ct);
 
@@ -507,16 +553,13 @@ public sealed class FoundryAgentClient
         foreach (var message in data.EnumerateArray())
         {
             if (!message.TryGetProperty("role", out var role) || role.GetString() != "assistant") continue;
+            if (message.TryGetProperty("run_id", out var messageRun) && messageRun.GetString() != runId) continue;
             if (!message.TryGetProperty("content", out var parts) || parts.ValueKind != JsonValueKind.Array) continue;
 
-            foreach (var part in parts.EnumerateArray())
-            {
-                if (part.TryGetProperty("text", out var text) && text.TryGetProperty("value", out var value))
-                {
-                    var reply = value.GetString();
-                    if (!string.IsNullOrWhiteSpace(reply)) return reply;
-                }
-            }
+            var reply = string.Concat(parts.EnumerateArray()
+                .Where(p => p.TryGetProperty("text", out var text) && text.TryGetProperty("value", out _))
+                .Select(p => p.GetProperty("text").GetProperty("value").GetString()));
+            if (!string.IsNullOrWhiteSpace(reply)) return reply;
         }
 
         throw new InvalidOperationException("Foundry run completed but produced no assistant text.");

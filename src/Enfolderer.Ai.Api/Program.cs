@@ -289,6 +289,16 @@ jobs.MapGet("/{jobId}", async (string jobId, IJobStore store, CancellationToken 
     return job is null ? Results.NotFound() : Results.Ok(JobMapping.ToStatusResponse(job));
 });
 
+jobs.MapGet("/{jobId}/annotated-image", async (
+    string jobId, IJobStore store, IScanImageStore images, CancellationToken ct) =>
+{
+    var job = await store.GetAsync(jobId, ct);
+    if (job?.Status != ScanJobStatus.Completed || job.Result?.AnnotatedImagePath is null)
+        return Results.NotFound();
+    var stream = await images.OpenReadAsync(ScanBlobPaths.BuildAnnotatedBlobPath(job.JobId), ct);
+    return Results.File(stream, "image/png", $"scan-{job.JobId}-priced.png");
+});
+
 app.Run();
 
 /// <summary>Exposed so integration tests can construct the API host.</summary>
