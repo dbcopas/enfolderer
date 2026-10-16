@@ -151,9 +151,9 @@ timeout/cancellation and retained responses are deleted after use; cleanup failu
 The legacy classic client remains available for regression checks, not as an automatic fallback.
 
 After final printing/art verification, scans also produce a priced PNG of the original photo.
-Half-card-width price-only artwork overlays show euro-symbol prices side by side, nonfoil on the
+Half-card-width artwork overlays show euro-symbol prices side by side, nonfoil on the
 left and foil (marked with a star) on the right. Text is measured and sized to fill the available
-box without overlapping the confidence circle in the
+box, with the set code and collector number in a smaller line below, without overlapping the confidence circle in the
 lower right: green for placed printings, yellow for printings needing verification, and red for
 unidentified cards or unplaced readings below 0.5 confidence. An appended
 legend includes card identity, photographed language, price-source language, printing uncertainty,
@@ -162,7 +162,8 @@ live offers or a guaranteed valuation. Each missing foreign-language price indep
 back to English for the **same set and collector number**, marked `[en fallback]` in the legend.
 A foil-only or nonfoil-only record is
 valid; unavailable prices are left blank, never zero, USD, or the other finish's price.
-The legend is ordered by descending nonfoil price, with unavailable nonfoil prices last and
+The legend is ordered by descending nonfoil price, falling back to foil only when nonfoil is
+unavailable. Cards with neither price are last, with
 ties in original card order. Card numbers still refer to the original scan; CSV order is unchanged.
 
 The desktop downloads the PNG through the authenticated job API, saves it beside the CSV as
