@@ -1,4 +1,4 @@
-# Published-data cleanup plan (approval required)
+# Published-data cleanup status and recovery plan
 
 ## Current status
 
@@ -7,15 +7,40 @@ token in the scanned tracked text and available history. This is not proof that 
 anywhere, nor a guarantee about live service access controls.
 
 The current photo in `training/05/image.jpg` has been sanitized without re-encoding its pixels.
-Earlier pushed versions still contain GPS metadata. Both `mainDb.db` and `mtgstudio.collection`
+The approved branch histories now use that sanitized version too. Both `mainDb.db` and `mtgstudio.collection`
 remain unchanged at the user's request and contain collection/ownership data. Their removal or
 sanitization is **not approved**.
 
-No Git history rewrite, force-push or release deletion has been performed. The user approved
-securing live services before any history cleanup, using genuine Foundry agent identities rather
-than worker-managed tool identities.
+Live service hardening was completed first using genuine Foundry agent identities. On 2026-10-16,
+the user then approved replacing the original photo blob on exactly two published branches and
+force-updating those branches with exact SHA leases. That rewrite is now published.
 
-## Proposed GPS-history cleanup
+## Completed GPS-history cleanup
+
+- Created and verified a local mirror backup restricted to the current Windows account.
+- Replaced only the original `training/05/image.jpg` blob with its losslessly sanitized version.
+  `git-filter-repo` was unavailable, so Git's built-in index filter ran in a separate mirror.
+- Preserved all commit authors, committers, timestamps, messages and parent topology across both
+  branches. Rewritten commit IDs change; their old cryptographic signatures cannot remain valid.
+- Verified all 205 rewritten commits: no other historical file content changed. The `ai_agents`
+  tip tree was identical before and after rewriting, including both collection databases.
+- Release build and offline security/Responses/training checks passed, retaining 57/57 cards.
+- Atomically published only `ai_agents` and `copilot/ensure-ai-service-functionality` using exact
+  expected-old-SHA leases. Main, all tags, releases and other branch refs were not changed.
+- Rewritten tips at publication were `63306279dd6051cf1bc05b73656f64ca86048a5b` and
+  `a17be10ecc5682f2fcff9e2dd1ee44514d74b722`, respectively. The second branch is PR #3's source.
+- A fresh remote clone passed integrity checks and contained only the sanitized photo across
+  all branches and tags. PR #3's head updated, but GitHub's read-only `refs/pull/3/merge` still
+  pointed to the old merge commit `bdfba24ea4c0c637079d28dc98dbfca497e8a4bc`, which contains
+  the original photo. This remaining platform-owned reference needs GitHub cleanup.
+
+Collaborators should re-clone or carefully transplant unpublished work onto the rewritten history;
+do not merge an old clone's branch back. The restricted backup and commit/ref maps contain the
+original data and must not be published. GitHub-owned PR refs and cached objects are outside the
+branch force-push scope: follow up with GitHub Support for sensitive-data cleanup as appropriate.
+No release assets were deleted, and no main merge was performed.
+
+## Procedure for any additional history cleanup
 
 1. Pause merges and pushes. Confirm repository visibility, forks, open pull requests, all branch/tag
    refs containing the original photo, and whether downloadable release assets contain it.
@@ -84,8 +109,8 @@ priced image stored, completed in 133,834 ms of worker processing. No response-c
 authorization-failure events appeared in the checked worker log window. This verifies the
 Consumer-only worker path end-to-end; it does not establish every printing as certain.
 
-Temporary staging app, agent, connection and image have been removed. No history rewrite has
-started. Two-real-user API isolation is still not live-tested; the local HTTP integration checks
+Temporary staging app, agent, connection and image have been removed. At rollout completion,
+history cleanup had not yet started. Two-real-user API isolation is still not live-tested; the local HTTP integration checks
 cover it, and the successful desktop scan verifies owner access.
 
 A fresh-shell `update-demo.ps1 -SkipImages` replay also completed successfully: it rediscovered
