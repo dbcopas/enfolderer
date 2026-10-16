@@ -13,6 +13,18 @@ namespace Enfolderer.App.Utilities;
 public sealed class AiScanConfig
 {
     public const string FileName = "aiconfig.txt";
+    public const string DefaultsFileName = "aiconfig.defaults.txt";
+
+    public static void InitializeFromDefaults(string directory)
+    {
+        var path = Path.Combine(directory, FileName);
+        var defaults = Path.Combine(directory, DefaultsFileName);
+        if (!File.Exists(path) && File.Exists(defaults))
+        {
+            _ = Load(defaults);
+            File.Copy(defaults, path, overwrite: false);
+        }
+    }
 
     public required Uri ApiBaseUrl { get; init; }
 

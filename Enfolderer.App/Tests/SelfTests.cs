@@ -7,12 +7,22 @@ namespace Enfolderer.App.Tests;
 /// </summary>
 public static class SelfTests
 {
+    public static bool IsRunning { get; private set; }
+
     public static int RunAll()
+    {
+        IsRunning = true;
+        try { return RunCore(); }
+        finally { IsRunning = false; }
+    }
+
+    private static int RunCore()
     {
         int failures = 0;
     string progressLog = Path.Combine(Path.GetTempPath(), "enfolderer_selftests_progress.txt");
     try { File.WriteAllText(progressLog, "START\n"); } catch {}
     try { Enfolderer.App.Infrastructure.AppRuntimeFlags.DisableImageFetching = true; } catch {}
+    failures += MainMenuTests.RunAll();
     int suiteFails;
     suiteFails = LayoutConfigServiceTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After LayoutConfig fails={suiteFails}\n"); } catch {}
     suiteFails = CardEntryTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After CardEntry fails={suiteFails}\n"); } catch {}

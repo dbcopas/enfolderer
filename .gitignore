@@ -25,6 +25,7 @@ paket-files/
 *.log
 *.txt
 !binder*.txt
+!Enfolderer.App/aiconfig.defaults.txt
 !training/07/cards.txt
 
 # OS junk

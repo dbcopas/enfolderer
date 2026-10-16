@@ -23,6 +23,11 @@
 
   <!-- Ship databases from repo root -->
   <ItemGroup>
+    <Content Include="aiconfig.defaults.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
     <Content Include="..\mainDb.db" Condition="Exists('..\\mainDb.db')">
       <Link>mainDb.db</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

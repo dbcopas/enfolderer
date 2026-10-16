@@ -69,7 +69,7 @@ It accepts `4x3`, `3x3`, or `2x2`; `pages=<positive number>`; and color names or
 
 ## Using the binder
 
-- Choose a 4×3, 3×3, or 2×2 layout and set pages per binder from **Tools**.
+- Choose a 4×3, 3×3, or 2×2 layout and set pages per binder from **View**.
 - Move through pages and binders with the navigation controls, or jump directly to a binder and page.
 - Search cards by name with **Ctrl+F**.
 - Click a card to cycle its quantity between 0, 1, and 2. Quantities come from `mtgstudio.collection` for MTG Studio-backed cards and `mainDb.db` for custom/imported cards.
@@ -79,19 +79,23 @@ For empty back slots, Enfolderer first looks for a local card-back image beside 
 
 ## Supporting tools
 
-The application also includes utilities for collection maintenance and exports:
+**File** contains only **Exit**. **View** contains layouts and binder navigation settings.
+**Scan** contains **Scan Single Image...** and **Scan Multiple Images in Folder...**; the latter
+scans supported images directly in the selected folder, not its subfolders.
+**Tools** always offers the **Land Viewer...** and **Token Viewer...**.
+Enable **Advanced** in the main menu bar to reveal the import, export/report and collection
+maintenance groups under **Tools**. Advanced is off each time the app starts.
+**Help > GitHub Project...** opens this repository in your default browser.
 
-- **Update mainDb from CSV** maps MTG Studio or compatible CSV data to `mainDb.db`, with a review step before applying updates.
-- **Import Scryfall Set Into mainDb** imports a set by code. Hold **Shift** while invoking it to replace existing rows for that set.
-- **Auto Import Missing Sets** imports binder-file set codes not yet found in the local database.
-- **Export Playset Needs**, **Export Want List (Moxfield)**, and **Export Collection (Moxfield)** create inventory and Moxfield-oriented exports.
-- **Match Wants CSV** compares Moxfield collection and wants exports, including price lookup.
-- **Batch Export Binder Wants (Moxfield)** produces Moxfield want-list CSVs for each `binder*.txt` file in a selected folder.
-- **Deck Pull Report** creates a pull/missing-card report from a Goldfish deck-list export.
-- **Scan Card Image** and **Scan Binder Images** identify cards from photographs through the Azure AI pipeline described below.
-- **Lands Viewer** and **Tokens Viewer** open CSV-based, searchable 3×3 binder views and let you mark entries as owned.
+The advanced utilities include:
 
-The remaining File-menu maintenance actions modify the local `mtgstudio.collection`; use them only when you understand the intended database operation. **Restore collection backup** restores its adjacent `.bak` file.
+- **Update Card Database from CSV...** maps MTG Studio or compatible CSV data to `mainDb.db`, with a review step before applying updates.
+- **Import Scryfall Set into Card Database...** imports a set by code. Hold **Shift** while invoking it to replace existing rows for that set.
+- **Import Sets Missing from Card Database** imports binder-file set codes not yet found in the local database.
+- The **Export and Reports** group creates inventory and Moxfield-oriented exports, compares collection/wants CSVs, exports wants for each `binder*.txt` in a folder, and creates deck pull/missing-card reports.
+- The land and token viewers open CSV-based, searchable 3×3 binder views and let you mark entries as owned.
+
+The advanced **Collection Maintenance** actions modify the local `mtgstudio.collection`; use them only when you understand the intended database operation. **Restore Collection from Backup (.bak)...** restores its adjacent `.bak` file. **Set All Quantities to Their Card IDs (Diagnostic)...** is a diagnostic operation, not a normal inventory update.
 
 ## Scanning cards with the Azure AI pipeline
 
@@ -107,9 +111,9 @@ or project managed identities. Run `.\scripts\update-demo.ps1` for the first mig
 identities/connections before deploying images and persists the audience and caller IDs.
 See [setup and migration](docs/azure-setup.md#4-create-the-agents).
 
-**Scan Card Image...** turns a photograph into binder entries: the app uploads a single image to a
+**Scan Single Image...** turns a photograph into binder entries: the app uploads a single image to a
 job API and polls it while a multi-agent Azure AI Foundry pipeline finds each card's outline and
-identifies it. That API is the only endpoint the app talks to, so it runs from anywhere. **Scan Binder Images...** runs the same job API once per image in
+identifies it. That API is the only endpoint the app talks to, so it runs from anywhere. **Scan Multiple Images in Folder...** runs the same job API once per image in
 a selected folder. Both write `SET;NUMBER;MODIFIER;LANGUAGE;NAME` CSV rows; the modifier is
 `foil` or `etched` when identified, and blank for nonfoil or unknown finish. Unknown finishes are
 listed in the scan summary so a blank is not mistaken for a confirmed nonfoil.
@@ -227,8 +231,12 @@ or clearly visible foil treatment as separately labelled visual evidence. A miss
 does not prove nonfoil. The bottom-centre authenticity stamp is not a foil indicator.
 
 Configuration lives in `aiconfig.txt` beside the executable and contains **no secrets** — only the
-API URL, tenant id, public client id and scope; you sign in interactively. A template is written
-for you the first time you run a scan.
+API URL, tenant id, public client id and scope; you sign in interactively.
+Builds and published packages include `aiconfig.defaults.txt` with the public demo settings.
+On the first scan, the app copies those defaults to `aiconfig.txt` if it does not already exist,
+so another PC needs no manual configuration for the demo. Existing local settings are never
+overwritten, even by a newer build. Edit the local file to use another deployment.
+If no defaults are shipped, the app writes a template instead.
 
 The services, agent definitions, and infrastructure are in `src/Enfolderer.Ai.*`, `agents/`, and
 `infra/`. See [docs/azure-setup.md](docs/azure-setup.md) to deploy the Azure resources, and

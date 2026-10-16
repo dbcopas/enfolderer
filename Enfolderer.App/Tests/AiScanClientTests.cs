@@ -31,11 +31,47 @@ public static class AiScanClientTests
         failures += Task.Run(TestPollingProgressAsync).GetAwaiter().GetResult();
         failures += Task.Run(TestAnnotatedDownloadAsync).GetAwaiter().GetResult();
         failures += TestConfigParsing();
+        failures += TestShippedDefaults();
         failures += TestQuadBoundingBox();
         failures += TestAuthenticationRecordStore();
         failures += TestStaleRecordFallsBackToPrompt();
         failures += TestUploadContentTypes();
         return failures;
+    }
+
+    private static int TestShippedDefaults()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "enfolderer-config-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            int failures = 0;
+            var shipped = Path.Combine(AppContext.BaseDirectory, AiScanConfig.DefaultsFileName);
+            var config = AiScanConfig.Load(shipped);
+            failures += Check(config.ApiBaseUrl.Scheme == "https"
+                && Guid.TryParse(config.TenantId, out var tenant) && tenant != Guid.Empty
+                && Guid.TryParse(config.ClientId, out var client) && client != Guid.Empty
+                && config.Scopes.Single() == "api://22a74a71-18e0-4057-be27-10d58462a1ad/Scan.Submit",
+                "shipped demo configuration has real public settings");
+            AiScanConfig.InitializeFromDefaults(directory);
+            var local = Path.Combine(directory, AiScanConfig.FileName);
+            failures += Check(!File.Exists(local), "missing defaults retain template fallback");
+            File.Copy(shipped, Path.Combine(directory, AiScanConfig.DefaultsFileName));
+            AiScanConfig.InitializeFromDefaults(directory);
+            failures += Check(File.ReadAllText(local) == File.ReadAllText(shipped),
+                "fresh installation initializes from shipped defaults");
+            File.AppendAllText(local, Environment.NewLine + "game_hint=pokemon");
+            var customized = File.ReadAllText(local);
+            AiScanConfig.InitializeFromDefaults(directory);
+            failures += Check(File.ReadAllText(local) == customized
+                && AiScanConfig.Load(local).GameHint == "pokemon",
+                "existing local configuration is preserved");
+            return failures;
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     /// <summary>

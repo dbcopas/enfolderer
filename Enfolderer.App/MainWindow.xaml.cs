@@ -375,7 +375,7 @@ public partial class MainWindow : Window
             if (config == null) return;
 
             // Batch mode: every image in the folder becomes its own job against the same API.
-            var folderPath = FolderPickerDialog.Show(this, "Select the folder containing binder page images");
+            var folderPath = FolderPickerDialog.Show(this, "Select the folder containing images to scan (no subfolders)");
             if (folderPath == null) return;
 
             var dlgSave = new Microsoft.Win32.SaveFileDialog
@@ -388,7 +388,7 @@ public partial class MainWindow : Window
             if (dlgSave.ShowDialog(this) != true) return;
 
             await RunScanAsync(
-                "Scanning binder images",
+                "Scanning multiple images",
                 ct => Utilities.BinderScanService.ScanFolderAsync(
                     folderPath,
                     config,
@@ -401,17 +401,26 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _vm?.FinishImportProgress();
-            MessageBox.Show(this, ex.Message, "Binder Scan Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(this, ex.Message, "Multiple Image Scan Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
     /// <summary>
-    /// Loads aiconfig.txt, writing a secret-free template the first time and reporting any
+    /// Loads aiconfig.txt, initializing from shipped defaults or a template and reporting any
     /// validation problem (including a leftover client_secret entry) to the user.
     /// </summary>
     private Utilities.AiScanConfig? LoadAiScanConfig()
     {
         var configPath = System.IO.Path.Combine(AppContext.BaseDirectory, Utilities.AiScanConfig.FileName);
+        try
+        {
+            Utilities.AiScanConfig.InitializeFromDefaults(AppContext.BaseDirectory);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Scan Config Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            return null;
+        }
         if (!System.IO.File.Exists(configPath))
         {
             try { System.IO.File.WriteAllText(configPath, Utilities.AiScanConfig.SampleContent); } catch { }
@@ -658,6 +667,8 @@ public partial class MainWindow : Window
         _vm = new BinderViewModel();
         DataContext = _vm;
 #if SELF_TESTS
+        if (!Tests.SelfTests.IsRunning)
+        {
         try
         {
             AppRuntimeFlags.DisableImageFetching = true; // suppress external HTTP during self tests
@@ -672,6 +683,7 @@ public partial class MainWindow : Window
         finally
         {
             AppRuntimeFlags.DisableImageFetching = false; // re-enable for normal runtime use
+        }
         }
 #endif
     }
@@ -701,6 +713,18 @@ public partial class MainWindow : Window
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void OpenGitHubProject_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("https://github.com/dbcopas/enfolderer") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Could Not Open GitHub Project", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
 
     private void OpenLandsViewer_Click(object sender, RoutedEventArgs e)
     {

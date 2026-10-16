@@ -124,47 +124,59 @@
         </ControlTemplate>
     </Window.Resources>
     <DockPanel>
-        <Menu DockPanel.Dock="Top">
+        <DockPanel DockPanel.Dock="Top">
+            <CheckBox x:Name="AdvancedToggle" Content="Advanced" IsChecked="False"
+                      DockPanel.Dock="Right" VerticalAlignment="Center" Margin="12,0"
+                      ToolTip="Show import, export and database maintenance tools" />
+        <Menu>
+            <Menu.Resources>
+                <Style x:Key="AdvancedMenuItem" TargetType="MenuItem">
+                    <Setter Property="Visibility" Value="{Binding IsChecked, ElementName=AdvancedToggle, Converter={StaticResource BoolToVis}}" />
+                </Style>
+            </Menu.Resources>
             <MenuItem Header="_File">
-                <MenuItem Header="Update mainDb from CSV..." Click="UpdateMainDbFromCsv_Click" />
-                <MenuItem Header="Import Scryfall Set Into mainDb" Click="ImportScryfallSet_Click" />
-                <Separator />
-                <MenuItem Header="Export _Playset Needs..." Click="ExportPlaysetNeedsGeneric_Click" />
-                <MenuItem Header="Export Want List (_Moxfield)..." Click="ExportWantListMoxfield_Click" />
-                <MenuItem Header="Export _Collection (Moxfield)..." Click="ExportWantListMoxfieldCsv_Click" />
-                <Separator />
-                <MenuItem Header="Backfill missing 0-qty rows (id &lt; 150000)" Click="BackfillZeroQty_Click" />
-                <MenuItem Header="Set Qty = CardId (all rows)" Click="SetQtyEqualsCardId_Click" />
-                <MenuItem Header="Restore collection backup (.bak)" Click="RestoreCollectionBackup_Click" />
-                <Separator />
                 <MenuItem Header="E_xit" Click="Exit_Click" />
             </MenuItem>
-            <MenuItem Header="_Tools">
+            <MenuItem Header="_View">
                 <MenuItem Header="Layout 4x3" Click="Layout4x3_Click" />
                 <MenuItem Header="Layout 3x3" Click="Layout3x3_Click" />
                 <MenuItem Header="Layout 2x2" Click="Layout2x2_Click" />
                 <Separator />
-                <MenuItem Header="Set Pages/Binder..." Click="SetPagesPerBinder_Click" />
-                <MenuItem Header="Jump to Binder/Page..." Click="JumpDialog_Click" />
-                <Separator />
-                <MenuItem Header="Auto Import Missing Sets" Click="AutoImportMissingSets_Click" />
-                <Separator />
-                <MenuItem Header="Match Wants CSV..." Click="MatchWantsCsv_Click" />
-                <MenuItem Header="Batch Export Binder Wants (Moxfield)..." Click="BatchExportBinderWantsMoxfield_Click" />
-                <MenuItem Header="Deck Pull Report..." Click="DeckPullReport_Click" />
-                <MenuItem Header="Scan Card Image..." Click="ScanCardImage_Click" />
-                <MenuItem Header="Scan Binder Images..." Click="ScanBinderImages_Click" />
+                <MenuItem Header="Pages per Binder..." Click="SetPagesPerBinder_Click" />
+                <MenuItem Header="Go to Binder and Page..." Click="JumpDialog_Click" />
             </MenuItem>
-            <MenuItem Header="_Search">
-                <MenuItem Header="Focus Search (Ctrl+F)" Command="ApplicationCommands.Find" />
+            <MenuItem Header="_Scan">
+                <MenuItem Header="Scan Single Image..." Click="ScanCardImage_Click" />
+                <MenuItem Header="Scan Multiple Images in Folder..." Click="ScanBinderImages_Click"
+                          ToolTip="Scan supported images in one folder, excluding subfolders" />
             </MenuItem>
-            <MenuItem Header="_Lands">
-                <MenuItem Header="Open Lands Viewer..." Click="OpenLandsViewer_Click" />
+            <MenuItem Header="_Tools">
+                <MenuItem Header="Land Viewer..." Click="OpenLandsViewer_Click" />
+                <MenuItem Header="Token Viewer..." Click="OpenTokensViewer_Click" />
+                <MenuItem Header="Import and Update" Style="{StaticResource AdvancedMenuItem}">
+                    <MenuItem Header="Update Card Database from CSV..." Click="UpdateMainDbFromCsv_Click" />
+                    <MenuItem Header="Import Scryfall Set into Card Database..." Click="ImportScryfallSet_Click" />
+                    <MenuItem Header="Import Sets Missing from Card Database" Click="AutoImportMissingSets_Click" />
+                </MenuItem>
+                <MenuItem Header="Export and Reports" Style="{StaticResource AdvancedMenuItem}">
+                    <MenuItem Header="Export Missing Playset Cards..." Click="ExportPlaysetNeedsGeneric_Click" />
+                    <MenuItem Header="Export Moxfield Want List (Text)..." Click="ExportWantListMoxfield_Click" />
+                    <MenuItem Header="Export Moxfield Collection (CSV)..." Click="ExportWantListMoxfieldCsv_Click" />
+                    <MenuItem Header="Compare Collection and Wants CSVs..." Click="MatchWantsCsv_Click" />
+                    <MenuItem Header="Export Moxfield Wants for Binder Files in Folder..." Click="BatchExportBinderWantsMoxfield_Click" />
+                    <MenuItem Header="Create Deck Pull and Missing Cards Report..." Click="DeckPullReport_Click" />
+                </MenuItem>
+                <MenuItem Header="Collection Maintenance" Style="{StaticResource AdvancedMenuItem}">
+                    <MenuItem Header="Add Missing Zero-Quantity Entries (Card IDs below 150000)" Click="BackfillZeroQty_Click" />
+                    <MenuItem Header="Set All Quantities to Their Card IDs (Diagnostic)..." Click="SetQtyEqualsCardId_Click" />
+                    <MenuItem Header="Restore Collection from Backup (.bak)..." Click="RestoreCollectionBackup_Click" />
+                </MenuItem>
             </MenuItem>
-            <MenuItem Header="_Tokens">
-                <MenuItem Header="Open Tokens Viewer..." Click="OpenTokensViewer_Click" />
+            <MenuItem Header="_Help">
+                <MenuItem Header="GitHub Project..." Click="OpenGitHubProject_Click" />
             </MenuItem>
         </Menu>
+        </DockPanel>
         <StatusBar DockPanel.Dock="Bottom">
             <!-- Primary status (metadata resolving / all metadata loaded) -->
             <StatusBarItem>

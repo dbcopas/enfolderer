@@ -1,0 +1,5 @@
+# Public demo configuration. Sign-in is required; no credentials belong here.
+api_base_url=https://enf-demo-api.salmonpond-68f52494.swedencentral.azurecontainerapps.io
+tenant_id=53da57a9-725d-462c-931d-d1d2a6fa189e
+client_id=dd44ec1b-d356-45ca-8960-ec063af27bf6
+scope=api://22a74a71-18e0-4057-be27-10d58462a1ad/Scan.Submit
