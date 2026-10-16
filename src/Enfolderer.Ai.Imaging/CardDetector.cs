@@ -163,8 +163,14 @@ public static class CardDetector
     private const double CardAspect = PerspectiveCropper.StandardCardAspect;
 
     public static IReadOnlyList<DetectedCard> Detect(Stream image, CardDetectorOptions? options = null)
+        => Detect(image, out _, options);
+
+    /// <summary>Reports when physical-card recovery replaces a sparse arrangement vote.</summary>
+    public static IReadOnlyList<DetectedCard> Detect(Stream image, out string? recoveryDiagnostic,
+        CardDetectorOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(image);
+        recoveryDiagnostic = null;
         var opts = options ?? new CardDetectorOptions();
 
         using var source = Image.Load<Rgba32>(image);
@@ -178,6 +184,20 @@ public static class CardDetector
         if (opts.Arrangement is not null)
         {
             var arrangement = CardArrangementDetector.Detect(source, opts.Arrangement);
+            var coverage = arrangement.Sum(card => Area(card.Quad)) / (fullWidth * (double)fullHeight);
+            if (coverage < 0.15)
+            {
+                var contours = CardContourDetector.Detect(source, opts);
+                IReadOnlyList<DetectedCard> recovered = contours.Count == 0 ? [] :
+                    CardArrangementDetector.CompleteMeasured(source, contours, opts.Arrangement);
+                var recoveredCoverage = recovered.Sum(card => Area(card.Quad)) / (fullWidth * (double)fullHeight);
+                if (recovered.Count > 0 && recoveredCoverage > Math.Max(0.15, coverage * 2))
+                {
+                    recoveryDiagnostic = FormattableString.Invariant(
+                        $"Physical-card recovery: sparse arrangement covered {coverage:P1} of the image ({arrangement.Count} regions); contours and frame anchors recovered {recovered.Count} whole-card regions.");
+                    return recovered;
+                }
+            }
             if (arrangement.Count > 0) return arrangement;
         }
 
@@ -272,6 +292,16 @@ public static class CardDetector
     {
         var (_, _, w, h) = quad.BoundingBox();
         return w * h;
+    }
+
+    public static string CheckNativeRuntime()
+    {
+        using var detector = OpenCvSharp.LineSegmentDetector.Create();
+        using var image = new OpenCvSharp.Mat(16, 16, OpenCvSharp.MatType.CV_8UC1, OpenCvSharp.Scalar.All(0));
+        detector.Detect(image, out OpenCvSharp.Vec4f[] _, out _, out _, out _);
+        using var edges = new OpenCvSharp.Mat();
+        OpenCvSharp.Cv2.Canny(image, edges, 5, 15);
+        return $"OpenCV {OpenCvSharp.Cv2.GetVersionString()}: imaging native runtime ready.";
     }
 
     private static byte[] ToLuminance(Image<Rgba32> image, int width, int height)

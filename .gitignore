@@ -25,6 +25,7 @@ paket-files/
 *.log
 *.txt
 !binder*.txt
+!training/07/cards.txt
 
 # OS junk
 [Dd]esktop.ini

@@ -154,6 +154,7 @@ ContainerAppConsoleLogs_CL
     or Log_s contains 'could not compare candidate' or Log_s contains 'server_error; retry'
     or Log_s contains ': finish '
     or Log_s contains ': processing card '
+    or Log_s contains ': timing '
     or Log_s contains ': prices EUR' or Log_s contains ': pricing failed'
     or Log_s contains ': annotated image unavailable'
     or Log_s contains 'invalid reply on thread' or Log_s contains 'landscape quads'

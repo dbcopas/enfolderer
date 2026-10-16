@@ -29,6 +29,26 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--inspect")
+        {
+            Directory.CreateDirectory(args[2]);
+            using var input = File.OpenRead(args[1]);
+            var dimensions = PerspectiveCropper.ReadDimensions(input);
+            input.Position = 0;
+            using (var original = Image.Load<Rgba32>(input))
+                Console.WriteLine($"EXIF orientation: {original.Metadata.ExifProfile?.GetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Orientation)?.Value}");
+            input.Position = 0;
+            var cards = CardDetector.Detect(input);
+            Console.WriteLine($"Source {dimensions.Width}x{dimensions.Height}; detected {cards.Count}");
+            for (var i = 0; i < cards.Count; i++)
+            {
+                Console.WriteLine($"{i}: {cards[i].Quad.BoundingBox()}");
+                input.Position = 0;
+                using var output = File.Create(Path.Combine(args[2], $"card-{i:D2}.png"));
+                PerspectiveCropper.CropToPng(input, cards[i].Quad, output);
+            }
+            return 0;
+        }
         if (args.Length == 2 && args[0] == "--results")
             return CompareResults(args[1]);
         var root = args.Length > 0 ? args[0] : FindTrainingDirectory();
@@ -95,9 +115,12 @@ internal static class Program
         {
             var listing = Path.Combine(directory, "cards.txt");
             var photo = Directory.GetFiles(directory)
-                .FirstOrDefault(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
+                .Where(f => f.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
                                   || f.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)
-                                  || f.EndsWith(".png", StringComparison.OrdinalIgnoreCase));
+                                  || f.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(f => Path.GetFileNameWithoutExtension(f).Equals("image", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(f => f, StringComparer.Ordinal)
+                .FirstOrDefault();
 
             if (!File.Exists(listing) || photo is null) continue;
 
@@ -128,7 +151,7 @@ internal static class Program
                 return w - h;
             }) > 0;
 
-            if (name is "04" or "05" or "06")
+            if (name is "04" or "05" or "06" or "07")
             {
                 Directory.CreateDirectory(Path.Combine("artifacts", "crops", name));
                 for (int i = 0; i < detected.Count; i++)

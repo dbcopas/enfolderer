@@ -363,11 +363,16 @@ back independently to English for the same printing; valid foreign values are pr
 English fallback request fails. A missing foil or nonfoil price is normal, not an error or zero.
 No currency conversion, USD fallback, or cross-finish substitution takes place.
 
-The deterministic PNG renderer places numbered price panels over the artwork and appends a
+The deterministic PNG renderer places half-card-width price-only panels over the artwork (euro
+symbols, nonfoil left, foil right, star beside foil), with measured maximum-fit text and a
+lower-right confidence circle: green for placed printings, yellow for unplaced
+readings at or above 0.5 confidence, red for lower-confidence or unidentified cards. It appends a
 legend containing identities, language/fallback provenance, uncertainty, finish, and retrieval
-time. The input photo is not overwritten; the rendered photo is limited to a 2400-pixel long edge
-before adding the legend. The worker image includes DejaVu Sans; Windows uses Arial if DejaVu is
-not installed. Labels use catalogue English names, not the original Japanese title.
+time. Legend entries are sorted by descending nonfoil price, unavailable prices last; original
+card indices and CSV order are preserved. The input photo is not overwritten; the rendered photo is limited to a 2400-pixel long edge
+before adding the legend. The worker image includes DejaVu Sans; Windows prefers Segoe UI Symbol
+when DejaVu is absent so euro and foil-star glyphs render correctly, with Arial as a final fallback.
+Labels use catalogue English names, not the original Japanese title.
 
 The private `outputs` container grants only the worker write access and API read-only access.
 The authenticated job download route derives its blob path from the stored job id, never from an
@@ -459,11 +464,29 @@ returns an empty list. This can retain false positives, which identification mus
 not solve multilingual printing accuracy. The updated adapter's live image 04 check retains 8/8.
 
 The offline real-photo adapter regression deliberately supplies an empty agent response for each
-training page and verifies that all 47 measured regions survive:
+training page and verifies that all 57 measured regions across photos 01-07 survive:
 
 ```powershell
 dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --photo-boundaries
 ```
+
+Photo 07 adds ten loose extended-art cards on a black laptop, including SPG 159 among the FRA
+cards. It checks physical-card overlap, reading order, and title/footer containment, not just
+the number of crops. A low-coverage arrangement can now be replaced by OpenCV contour/title-frame
+anchors and measured neighbour spacing. This recovery is tuned for approximately upright raw
+pixels; EXIF display rotation is removed only from the vision copy so its coordinates agree with
+the detector and cropper. The stored source remains unchanged.
+
+Rebuild both the worker and imaging MCP service with `.\scripts\update-demo.ps1 -SkipAgents`.
+No assistant prompt changes are required. Both container builds run a native OpenCV smoke check;
+a missing Linux dependency stops the build. Photo 07's answer key leaves finishes unknown.
+
+Validation of this change passed the offline checks and all 57 training regions on both Windows
+and Linux. The live boundary adapter retained all ten annotated photo 07 regions. A live MTG
+reading run recognized all ten names, including Eye of Ugin, but only seven exact printings:
+Liliana the Repentant, Solitary Cell and Guiding Hydra still had incorrect or ambiguous footer
+reads. Whole-card crop recovery is therefore verified; perfect printing recognition is not.
+Guiding Hydra's very bottom is partly outside the original photo and cannot be reconstructed.
 
 For explicitly selected live reading tests (uses Azure CLI sign-in, calls the supplied Foundry
 agent, and incurs model usage without redeploying):

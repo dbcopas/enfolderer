@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Azure;
 using Azure.Core;
 using Enfolderer.Ai.Contracts;
@@ -67,6 +68,8 @@ public sealed class ScanJobProcessor
 
         try
         {
+            var totalTimer = Stopwatch.StartNew();
+            var stageTimer = Stopwatch.StartNew();
             _log.LogInformation("Job {JobId} started: detecting boundaries.", job.JobId);
             job = await _jobs.UpsertAsync(job with
             {
@@ -77,6 +80,8 @@ public sealed class ScanJobProcessor
             // Downloaded once and reused for the dimensions and every crop: a binder page can hold
             // eighteen cards, and re-fetching the photo per card multiplies blob egress.
             using var source = await BufferAsync(job.BlobPath, ct);
+            LogTiming(job.JobId, "source_download", stageTimer);
+            stageTimer.Restart();
             var dimensions = PerspectiveCropper.ReadDimensions(source);
 
             // Team A gets the photograph and nothing else: no job id, no storage path, no hint of
@@ -84,11 +89,14 @@ public sealed class ScanJobProcessor
             var scanName = Path.GetFileName(job.BlobPath);
             var scan = new AgentImage(source.ToArray(), scanName, ScanBlobPaths.ContentTypeFor(scanName));
             var boundaries = await _boundaryAgent.DetectAsync(scan, job.BlobPath, dimensions.Width, dimensions.Height, ct);
+            LogTiming(job.JobId, "boundaries", stageTimer);
             job = await _jobs.UpsertAsync(
                 job with { Status = ScanJobStatus.Identifying, CardsDetected = boundaries.Count },
                 ct);
 
+            stageTimer.Restart();
             var cards = await IdentifyAllAsync(job, boundaries, source, ct);
+            LogTiming(job.JobId, "all_cards", stageTimer);
             var identified = cards.Count(c => c.IsIdentified);
 
             var result = new ScanResultDocument
@@ -124,6 +132,7 @@ public sealed class ScanJobProcessor
             _log.LogInformation(
                 "Job {JobId} completed: {Detected} card(s) detected, {Identified} identified.",
                 job.JobId, boundaries.Count, identified);
+            LogTiming(job.JobId, "total", totalTimer);
 
             // Detecting cards and identifying none usually means the crops are wrong rather than
             // the agents: the rectified faces are in storage, so point at them by name.
@@ -300,17 +309,37 @@ public sealed class ScanJobProcessor
         MemoryStream source,
         CancellationToken ct)
     {
-        var cards = new List<IdentifiedCard>(boundaries.Count);
-
-        for (var index = 0; index < boundaries.Count; index++)
+        if (_options.MaxConcurrentCards < 1)
+            throw new InvalidOperationException("ScanPipeline:MaxConcurrentCards must be at least 1.");
+        var cards = new IdentifiedCard[boundaries.Count];
+        var sourceBytes = source.ToArray();
+        using var progressGate = new SemaphoreSlim(1);
+        var processed = 0;
+        var identified = 0;
+        await Parallel.ForEachAsync(Enumerable.Range(0, boundaries.Count),
+            new ParallelOptions { MaxDegreeOfParallelism = _options.MaxConcurrentCards, CancellationToken = ct },
+            async (index, token) =>
         {
-            ct.ThrowIfCancellationRequested();
-            if (index > 0)
+            var card = await IdentifyOneAsync(index, token);
+            await progressGate.WaitAsync(token);
+            try
+            {
+                cards[index] = card;
+                processed++;
+                if (card.IsIdentified) identified++;
                 job = await _jobs.UpsertAsync(job with
                 {
-                    CardsProcessed = cards.Count,
-                    CardsIdentified = cards.Count(c => c.IsIdentified)
-                }, ct);
+                    CardsProcessed = processed,
+                    CardsIdentified = identified
+                }, token);
+            }
+            finally { progressGate.Release(); }
+        });
+        return cards.ToList();
+
+        async Task<IdentifiedCard> IdentifyOneAsync(int index, CancellationToken ct)
+        {
+            var cardTimer = Stopwatch.StartNew();
             _log.LogInformation("Card {Index} of job {JobId}: processing card {Current} of {Total}.",
                 index, job.JobId, index + 1, boundaries.Count);
             var boundary = boundaries[index];
@@ -321,7 +350,7 @@ public sealed class ScanJobProcessor
 
             if (!_idAgents.TryGetValue(game, out var agent))
             {
-                cards.Add(new IdentifiedCard
+                return new IdentifiedCard
                 {
                     Index = index,
                     Quad = boundary.Quad,
@@ -329,8 +358,7 @@ public sealed class ScanJobProcessor
                     Confidence = boundary.Confidence,
                     Agent = _boundaryAgent.AgentId,
                     Error = $"No identification agent is deployed for game '{game}'."
-                });
-                continue;
+                };
             }
 
             try
@@ -339,11 +367,16 @@ public sealed class ScanJobProcessor
                 // Written to storage for the audit trail — you can open the container mid-demo and
                 // see the rectified faces — and handed to the agent as bytes, because Team B cannot
                 // reach the container either.
-                var cropBytes = await WriteCropAsync(source, boundary.Quad, cropPath, ct);
+                var timer = Stopwatch.StartNew();
+                using var cardSource = new MemoryStream(sourceBytes, writable: false);
+                var cropBytes = await WriteCropAsync(cardSource, boundary.Quad, cropPath, ct);
+                LogTiming(job.JobId, "crop_and_store", timer, index);
 
                 var image = new AgentImage(cropBytes, Path.GetFileName(cropPath), "image/png");
                 var crop = new CardCrop(index, image, boundary.Quad, boundary.GameHint);
+                timer.Restart();
                 var card = await agent.IdentifyAsync(crop, ct);
+                LogTiming(job.JobId, "identify", timer, index);
 
                 // After the agent, not instead of it. The agent reads the card; this asks whether
                 // the printing it settled on looks like the thing photographed, which is the one
@@ -351,7 +384,9 @@ public sealed class ScanJobProcessor
                 // all agree, and still describe a different printing of the same card.
                 if (_artVerifier is not null)
                 {
+                    timer.Restart();
                     card = await _artVerifier.VerifyAsync(card, cropBytes, job.JobId, ct);
+                    LogTiming(job.JobId, "art_verification", timer, index);
                 }
 
                 // A card the agent declines to identify is not an exception: the run succeeded and
@@ -371,12 +406,13 @@ public sealed class ScanJobProcessor
                 LogResolution(index, job.JobId, agent.AgentId, card);
 
                 // Geometry always comes from Team A, whatever the identification agent echoed back.
-                cards.Add(card with { Index = index, Quad = boundary.Quad, Game = game });
+                return card with { Index = index, Quad = boundary.Quad, Game = game };
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _log.LogWarning(ex, "Identification failed for card {Index} of job {JobId}.", index, job.JobId);
-                cards.Add(new IdentifiedCard
+                _log.LogWarning(ex, "Identification failed for card {Index} of job {JobId}: {Error}",
+                    index, job.JobId, ex.Message);
+                return new IdentifiedCard
                 {
                     Index = index,
                     Quad = boundary.Quad,
@@ -384,12 +420,15 @@ public sealed class ScanJobProcessor
                     Confidence = boundary.Confidence,
                     Agent = agent.AgentId,
                     Error = ex.Message
-                });
+                };
             }
+            finally { LogTiming(job.JobId, "card_total", cardTimer, index); }
         }
-
-        return cards;
     }
+
+    private void LogTiming(string jobId, string stage, Stopwatch timer, int? index = null) =>
+        _log.LogInformation("Job {JobId}: timing {Stage}, card {Index}, elapsed {ElapsedMs} ms.",
+            jobId, stage, index, timer.ElapsedMilliseconds);
 
     /// <summary>Chooses the identification agent for a card. Internal so it can be self-tested.</summary>
     internal static string ResolveGame(string? jobHint, string? boundaryHint, string defaultGame)

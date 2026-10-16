@@ -2213,8 +2213,15 @@ identified as one of them; a crop of a text box cannot be identified as anything
 Job 9c1d... completed: 2 card(s) detected, 2 identified.
 ```
 
-There are two detectors, and which one answered explains a lot. Cards are looked for by their own
-borders first, as described above. Only when that finds nothing at all does the older pipeline run,
+Cards are looked for by their own borders first, as described above. When that arrangement covers
+less than 15% of the image, an OpenCV pass also measures larger contours and extended-art title
+frames, including on dark neutral surfaces. It uses measured anchors and neighbour spacing, not
+a fixed grid or known card identities, and replaces the original only if coverage exceeds 15%
+and doubles. This recovery is tuned for approximately upright cards in raw pixel axes; EXIF display
+rotation is removed from the boundary agent's vision copy without changing stored source pixels.
+Rebuild both worker and imaging MCP images; their builds smoke-test the native OpenCV dependency.
+
+Only when border detection and this recovery find nothing does the older pipeline run,
 which works the opposite way round: it floods the background inward from the edge of the photo and
 treats whatever the flood cannot reach as an object.
 

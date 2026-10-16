@@ -2,10 +2,17 @@ using Azure.Core;
 using Azure.Storage.Queues;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Infrastructure;
+using Enfolderer.Ai.Imaging;
 using Enfolderer.Ai.Worker;
 using Enfolderer.Ai.Worker.Agents;
 using Enfolderer.Ai.Worker.Pipeline;
 using Enfolderer.Ai.Worker.Queueing;
+
+if (args is ["--check-imaging-runtime"])
+{
+    Console.WriteLine(CardDetector.CheckNativeRuntime());
+    return;
+}
 
 // A web host rather than a plain worker host. The pipeline is a hosted service and needs no HTTP,
 // and on Container Apps this runs with ingress disabled, so nothing reaches the listener. It stays
@@ -17,6 +24,8 @@ builder.Services.AddScanPlatform(builder.Configuration);
 
 var pipeline = new ScanPipelineOptions();
 builder.Configuration.GetSection(ScanPipelineOptions.SectionName).Bind(pipeline);
+if (pipeline.MaxConcurrentCards < 1)
+    throw new InvalidOperationException("ScanPipeline:MaxConcurrentCards must be at least 1.");
 builder.Services.AddSingleton(pipeline);
 
 builder.Services.AddHttpClient();

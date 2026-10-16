@@ -2,6 +2,8 @@ using System.Text.Json;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Imaging;
 using Microsoft.Extensions.Logging;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 
 namespace Enfolderer.Ai.Worker.Agents;
 
@@ -103,13 +105,15 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
     {
         ct.ThrowIfCancellationRequested();
         using var source = new MemoryStream(image.Content.ToArray(), writable: false);
-        var measured = CardDetector.Detect(source);
+        var measured = CardDetector.Detect(source, out var recoveryDiagnostic);
+        if (recoveryDiagnostic is not null)
+            _log.LogInformation("{GeometryRecovery}", recoveryDiagnostic);
 
         // "imaging" is the server_label card-boundary-agent.yaml gives Team A's own MCP server.
         // Foundry pauses the run at each tool call for approval, and the orchestrator approves only
         // this label — so an agent edited to reach for a catalogue server is refused here too.
         var reply = await _client.RunAsync(
-            _agentId, BuildPrompt(width, height, scanBlobPath), image, ImagingServerLabel, ct,
+            _agentId, BuildPrompt(width, height, scanBlobPath), WithoutDisplayRotation(image), ImagingServerLabel, ct,
             validateReply: text =>
             {
                 var parsed = ParseBoundaries(text, width, height);
@@ -176,9 +180,24 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
                 quad = new CardQuad(Enumerable.Range(0, CardQuad.RequiredPointCount)
                     .Select(i => region.Quad.Points[(i + offset) % CardQuad.RequiredPointCount]).ToList());
             }
+
             result.Add(new DetectedBoundary(quad, region.Confidence, match?.GameHint ?? CardGames.Unknown));
         }
         return result;
+    }
+
+    internal static AgentImage WithoutDisplayRotation(AgentImage image)
+    {
+        using var decoded = Image.Load(image.Content.Span);
+        var orientation = decoded.Metadata.ExifProfile?.GetValue(ExifTag.Orientation)?.Value;
+        if (orientation is null or 1) return image;
+
+        // The detector, MCP tool and cropper all use raw pixel coordinates, not EXIF display axes.
+        decoded.Metadata.ExifProfile = null;
+        decoded.Metadata.XmpProfile = null;
+        using var output = new MemoryStream();
+        decoded.SaveAsPng(output);
+        return new AgentImage(output.ToArray(), Path.GetFileNameWithoutExtension(image.FileName) + ".png", "image/png");
     }
 
     private static double Overlap(CardQuad first, CardQuad second)
