@@ -91,15 +91,22 @@ internal static class PriceAnnotationChecks
             "overlay uses euro symbols and a foil star, preserving missing finishes");
         IdentifiedCard[] unsorted =
         [
+            card with { Index = 7 },
+            card with { Index = 6, Prices = new CardPrices() },
+            card with { Index = 5, Prices = new CardPrices { Nonfoil = 1, Foil = 200 } },
             card with { Index = 4, Prices = new CardPrices { Nonfoil = 0 } },
             card with { Index = 3, Prices = new CardPrices { Foil = 100 } },
             card with { Index = 2, Prices = new CardPrices { Nonfoil = 5 } },
             card with { Index = 1, Prices = new CardPrices { Nonfoil = 5 } },
             card with { Index = 0, Prices = new CardPrices { Nonfoil = 10 } }
         ];
-        check(PricedScanRenderer.OrderLegendCards(unsorted).Select(c => c.Index).SequenceEqual([0, 1, 2, 4, 3])
-            && unsorted.Select(c => c.Index).SequenceEqual([4, 3, 2, 1, 0]),
-            "legend sorts descending nonfoil, ties in card order, zero before missing, without changing CSV order");
+        check(PricedScanRenderer.OrderLegendCards(unsorted).Select(c => c.Index).SequenceEqual([3, 0, 1, 2, 5, 4, 6, 7])
+            && unsorted.Select(c => c.Index).SequenceEqual([7, 6, 5, 4, 3, 2, 1, 0]),
+            "legend uses foil only when nonfoil is missing, preserves zero, stable ties and CSV order");
+        check(PricedScanRenderer.DescribeOverlayPrinting(card) == "CLB 240"
+            && PricedScanRenderer.DescribeOverlayPrinting(card with { Set = null, CollectorNumber = null }) == ""
+            && PricedScanRenderer.DescribeOverlayPrinting(card with { CollectorNumber = "240a" }) == "CLB 240a",
+            "overlay includes uppercase set and exact collector number without inventing missing identifiers");
         check(PricedScanRenderer.OverlayConfidenceColor(card with { Resolution = "confirmed" }) == Color.LimeGreen
             && PricedScanRenderer.OverlayConfidenceColor(card) == Color.Gold
             && PricedScanRenderer.OverlayConfidenceColor(card with { Confidence = 0.2 }) == Color.Red
@@ -137,9 +144,12 @@ internal static class PriceAnnotationChecks
             check(png.Width == 800 && png.Height > image.Height && png[0, 0] == image[0, 0]
                 && png[60, 370] != image[60, 370],
                 "output preserves original photo outside labels, draws a price overlay and appends a legend");
-            check(png[373, 385] == Color.Gold.ToPixel<Rgba32>() && png[45, 45] == image[45, 45]
+            check(png[373, 429] == Color.Gold.ToPixel<Rgba32>() && png[45, 45] == image[45, 45]
                 && png[399, 340] != image[399, 340] && png[401, 340] == image[401, 340],
                 "price box occupies exactly half the card width, with lower-right circle and no number badge");
+            check(Enumerable.Range(413, 20).Any(y => Enumerable.Range(55, 150)
+                .Any(x => png[x, y].R > 180 && png[x, y].G > 180 && png[x, y].B > 180)),
+                "rendered overlay includes the smaller printing line below the price");
             foreach (var candidate in new[]
             {
                 card with { Resolution = "confirmed" },
@@ -151,7 +161,7 @@ internal static class PriceAnnotationChecks
                 PricedScanRenderer.Render(source, [candidate with { Prices = result.Cards[0].Prices }], rendered);
                 rendered.Position = 0;
                 using var confidenceImage = Image.Load<Rgba32>(rendered);
-                check(confidenceImage[373, 385] == PricedScanRenderer.OverlayConfidenceColor(candidate).ToPixel<Rgba32>(),
+                check(confidenceImage[373, 429] == PricedScanRenderer.OverlayConfidenceColor(candidate).ToPixel<Rgba32>(),
                     "rendered circle uses the actual green/red match confidence color");
             }
             check(store.Path == "outputs/price-test/priced.png" && store.ContentType == "image/png",

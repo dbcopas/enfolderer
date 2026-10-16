@@ -44,9 +44,10 @@ public static class PricedScanRenderer
                 var panel = DescribeOverlayPrices(card.Prices);
                 var padding = panelWidth * 0.04f;
                 var radius = panelWidth * 0.035f;
-                var panelHeight = panelWidth * 0.24f;
+                var priceHeight = panelWidth * 0.24f;
+                var panelHeight = panelWidth * 0.36f;
                 var textWidth = panelWidth - padding * 3 - radius * 2;
-                var textHeight = panelHeight - padding * 2;
+                var textHeight = priceHeight - padding * 2;
                 var priceFont = FitOverlayFont(family, panel, textWidth, textHeight);
                 var textBounds = panel.Length == 0 ? default : TextMeasurer.MeasureBounds(panel, new TextOptions(priceFont));
                 var panelY = Math.Clamp(y + (float)box.Height * sy * 0.28f, 0, Math.Max(0, photo.Height - panelHeight));
@@ -54,7 +55,16 @@ public static class PricedScanRenderer
                         new RectangleF(x, panelY, panelWidth, panelHeight)));
                 if (panel.Length > 0)
                     canvas.Mutate(c => c.DrawText(panel, priceFont, Color.White, new PointF(
-                        x + padding - textBounds.X, panelY + (panelHeight - textBounds.Height) / 2 - textBounds.Y)));
+                        x + padding - textBounds.X, panelY + (priceHeight - textBounds.Height) / 2 - textBounds.Y)));
+                var printing = DescribeOverlayPrinting(card);
+                if (printing.Length > 0)
+                {
+                    var printingFont = FitOverlayFont(family, printing, textWidth, panelHeight - priceHeight - padding);
+                    printingFont = family.CreateFont(Math.Min(printingFont.Size, priceFont.Size * 0.55f));
+                    var printingBounds = TextMeasurer.MeasureBounds(printing, new TextOptions(printingFont));
+                    canvas.Mutate(c => c.DrawText(printing, printingFont, Color.White,
+                        new PointF(x + padding - printingBounds.X, panelY + priceHeight - printingBounds.Y)));
+                }
                 canvas.Mutate(c => c.Fill(OverlayConfidenceColor(card), new EllipsePolygon(
                     x + panelWidth - padding - radius, panelY + panelHeight - padding - radius, radius)));
             }
@@ -68,7 +78,7 @@ public static class PricedScanRenderer
         var retrieved = cards.Select(c => c.Prices?.RetrievedAt).FirstOrDefault(d => d.HasValue);
         var footer = $"Cardmarket via Scryfall | \u20ac daily reference prices, not live offers\n"
             + $"Retrieved: {(retrieved.HasValue ? retrieved.Value.ToString("u") : "unavailable")}. Blank overlay price = unavailable.\n"
-            + "Overlay: nonfoil then foil (\u2605). Legend: descending nonfoil price, missing last.\n"
+            + "Overlay: nonfoil then foil (\u2605), set and number. Legend: nonfoil price or foil fallback, descending.\n"
             + "Circle: green = placed; yellow = needs verification; red = unidentified/low confidence.";
         canvas.Mutate(c => c.DrawText(footer, font, Color.Black, new PointF(size, photo.Height + size / 2)));
         canvas.SaveAsPng(output);
@@ -90,7 +100,11 @@ public static class PricedScanRenderer
     }
 
     public static IReadOnlyList<IdentifiedCard> OrderLegendCards(IReadOnlyList<IdentifiedCard> cards) =>
-        cards.OrderByDescending(card => card.Prices?.Nonfoil).ThenBy(card => card.Index).ToArray();
+        cards.OrderByDescending(card => card.Prices?.Nonfoil ?? card.Prices?.Foil).ThenBy(card => card.Index).ToArray();
+
+    public static string DescribeOverlayPrinting(IdentifiedCard card) =>
+        string.Join(" ", new[] { card.Set?.ToUpperInvariant(), card.CollectorNumber }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
 
     public static Color OverlayConfidenceColor(IdentifiedCard card) =>
         !card.IsIdentified ? Color.Red
