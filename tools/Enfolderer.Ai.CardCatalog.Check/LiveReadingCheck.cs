@@ -25,7 +25,7 @@ internal static class LiveReadingCheck
         using var http = new HttpClient();
         using var logs = LoggerFactory.Create(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
         var client = new FoundryAgentClient(http, new AzureCliCredential(), logs.CreateLogger<FoundryAgentClient>(),
-            endpoint, "v1", TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2));
+            endpoint, "2025-11-15-preview", TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2), useResponses: true);
         var agent = new FoundryCardBoundaryAgent(client, agentId, logs.CreateLogger<FoundryCardBoundaryAgent>());
         var boundaries = await agent.DetectAsync(new AgentImage(bytes.ToArray(), "image.jpg", "image/jpeg"),
             blobPath, size.Width, size.Height);
@@ -76,7 +76,7 @@ internal static class LiveReadingCheck
         using var http = new HttpClient();
         using var logs = LoggerFactory.Create(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
         var client = new FoundryAgentClient(http, new AzureCliCredential(), logs.CreateLogger<FoundryAgentClient>(),
-            endpoint, "v1", TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2));
+            endpoint, "2025-11-15-preview", TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2), useResponses: true);
         var agent = new FoundryCardIdentificationAgent(client, GameAgentProfile.Mtg, agentId,
             logs.CreateLogger<FoundryCardIdentificationAgent>());
         var failures = 0;

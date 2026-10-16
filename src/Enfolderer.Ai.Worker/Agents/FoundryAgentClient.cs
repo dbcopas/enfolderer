@@ -8,12 +8,13 @@ using Microsoft.Extensions.Logging;
 namespace Enfolderer.Ai.Worker.Agents;
 
 /// <summary>
-/// Thin client over the Azure AI Foundry Agents data plane (create thread → run → read reply).
+/// Client for named Foundry agent Responses endpoints, with an explicitly selected classic path
+/// retained for compatibility/regression checks and no automatic protocol fallback.
 /// One instance is created per Foundry project endpoint, which is what makes the security boundary
 /// visible: the worker holds a separate credential-scoped client for Team A and for Team B, and a
 /// missing RBAC assignment surfaces as a 401/403 from exactly one of them.
 /// </summary>
-public sealed class FoundryAgentClient
+public sealed partial class FoundryAgentClient
 {
     private static readonly string[] Scopes = ["https://ai.azure.com/.default"];
 
@@ -29,6 +30,7 @@ public sealed class FoundryAgentClient
     private readonly TimeSpan _pollInterval;
     private readonly int _throttleRetries;
     private readonly TimeSpan _throttleBackoff;
+    private readonly bool _useResponses;
 
     public FoundryAgentClient(
         HttpClient http,
@@ -39,7 +41,8 @@ public sealed class FoundryAgentClient
         TimeSpan runTimeout,
         TimeSpan pollInterval,
         int throttleRetries = 3,
-        TimeSpan throttleBackoff = default)
+        TimeSpan throttleBackoff = default,
+        bool useResponses = false)
     {
         _http = http;
         _credential = credential;
@@ -50,6 +53,7 @@ public sealed class FoundryAgentClient
         _pollInterval = pollInterval > TimeSpan.Zero ? pollInterval : TimeSpan.FromSeconds(2);
         _throttleRetries = throttleRetries >= 0 ? throttleRetries : 0;
         _throttleBackoff = throttleBackoff > TimeSpan.Zero ? throttleBackoff : TimeSpan.FromSeconds(10);
+        _useResponses = useResponses;
     }
 
     /// <summary>Project endpoint this client talks to; useful in error messages during the demo.</summary>
@@ -59,9 +63,9 @@ public sealed class FoundryAgentClient
     /// Runs <paramref name="agentId"/> against a single user message containing
     /// <paramref name="prompt"/> and, optionally, an image, then returns the agent's reply text.
     /// <para>
-    /// The image is uploaded to the project and referenced by file id rather than passed as a URL.
+    /// Responses carry inline high-detail image bytes; the classic path uploads and references a file.
     /// The storage account has no public endpoint, so no blob URL is fetchable by the Foundry
-    /// service, which runs outside our VNet. Uploading also means each project receives only
+    /// service, which runs outside our VNet. Sending bytes also means each project receives only
     /// the bytes the orchestrator chose to send it, which is a tighter boundary than a
     /// container-scoped read grant.
     /// </para>
@@ -77,6 +81,9 @@ public sealed class FoundryAgentClient
         AgentImage? detailImage = null,
         Action<string>? validateReply = null)
     {
+        if (_useResponses)
+            return await RunResponseAsync(agentId, prompt, image, approvedServerLabel, ct, detailImage, validateReply);
+
         var fileIds = new List<string>();
         var uploadTimer = Stopwatch.StartNew();
         try

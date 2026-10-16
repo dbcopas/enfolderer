@@ -34,7 +34,10 @@ public sealed class ScanPipelineOptions
     };
 
     /// <summary>Data-plane API version used for the Foundry Agents endpoints.</summary>
-    public string FoundryApiVersion { get; set; } = "v1";
+    public string FoundryApiVersion { get; set; } = "2025-11-15-preview";
+
+    /// <summary>Use named agent endpoints and Foundry-managed agent identity tool authentication.</summary>
+    public bool UseResponses { get; set; } = true;
 
     /// <summary>Game assumed when neither the caller nor the boundary agent offers a usable hint.</summary>
     public string DefaultGame { get; set; } = CardGames.Magic;

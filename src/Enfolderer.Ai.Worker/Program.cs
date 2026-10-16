@@ -115,4 +115,5 @@ static FoundryAgentClient CreateFoundryClient(IServiceProvider sp, string endpoi
     sp.GetRequiredService<ScanPipelineOptions>().AgentRunTimeout,
     sp.GetRequiredService<ScanPipelineOptions>().AgentPollInterval,
     sp.GetRequiredService<ScanPipelineOptions>().AgentThrottleRetries,
-    sp.GetRequiredService<ScanPipelineOptions>().AgentThrottleBackoff);
+    sp.GetRequiredService<ScanPipelineOptions>().AgentThrottleBackoff,
+    sp.GetRequiredService<ScanPipelineOptions>().UseResponses);

@@ -53,9 +53,9 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
    `scans/{jobId}/{filename}`. The storage account has no public endpoint, so the API is the only
    thing the client can reach — which is what lets the client run anywhere.
 4. `POST /jobs/{id}/submit` enqueues the job; the worker picks it up.
-5. Worker → `DetectingBoundaries`: uploads the photo to the `cardgeo` project and calls Team A's
-   `CardBoundaryAgent` with it as `image_file` message content. Storage is private, so an agent
-   cannot be handed a URL to fetch — and the upload is deleted as soon as the run ends.
+5. Worker → `DetectingBoundaries`: calls Team A's named `CardBoundaryAgent` Responses endpoint
+   with inline, high-detail `input_image` content. Storage is private, so an agent cannot be
+   handed a URL to fetch. Retained responses are deleted after processing.
    The agent then calls its own `detect_cards` tool to measure the corners, and reviews the result
    against the picture it was sent. The worker passes the scan's blob path along for that call: it
    is a name, not a credential, and Team A's identity could already read `scans` and nothing else.
@@ -71,7 +71,7 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
    invoke or parse the agent still fail the job rather than masquerading as a successful scan.
 6. Worker crops each quadrilateral itself (perspective-correct warp) and writes the crops to
    `crops/{jobId}/`. Team A never gets blob write access.
-7. Worker → `Identifying`: uploads each crop to the `cardid` project and fans them out to the
+7. Worker → `Identifying`: sends each crop to the `cardid` agent endpoints and fans them out to the
    per-game agents. Team B receives one card at a time and never the whole page.
 8. Worker retrieves exact-printing EUR nonfoil/foil prices after art verification, renders the
    priced photo, and writes it to private `outputs/{jobId}/priced.png`. Missing foreign-language
@@ -91,7 +91,7 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
   is the project resource. Team B cannot edit, redeploy or read the instructions of Team A's
   boundary agent even though both projects sit in the same account and the same resource group.
 * **Invoke-only cross-project access.** `infra/modules/foundry-invoke-access.bicep` grants the
-  orchestrator `Foundry User` on the `cardgeo` **project** — enough to run Team A's agent, not
+  orchestrator `Foundry Agent Consumer` on the `cardgeo` **project** — enough to run Team A's agent, not
   enough to change it. Scoping it to the project rather than the account matters: an account-scoped
   grant would hand Team B access to every project in the account, which is the opposite of the
   claim. The same module grants the orchestrator the same role on `cardid`, so the two halves of
@@ -106,14 +106,18 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
   and has no access to intermediate `crops`. Only the worker can write `outputs`; Team A can read
   `scans` and nothing else.
   Neither project has any Cosmos role assignment, so neither can read job state.
-* **Team B holds no storage role at all.** Its agents receive each card as an uploaded file, so
+* **Distinct agent identities.** Each named agent has its own Entra Agent ID and blueprint.
+  Foundry acquires MCP tokens using `AgenticIdentityToken` connections. Each server accepts only
+  its matching agent principal, not the worker, project managed identity, or sibling game's agent.
+  Agent IDs establish the identity foundation for Agent 365; onboarding/telemetry is separate.
+* **Team B holds no storage role at all.** Its agents receive each card as inline image content, so
   there is nothing to grant. This is stronger than the container-scoped read it used to have:
   read on `crops` would have let Team B enumerate *every* card of *every* job, where now it sees
   only the single crop the orchestrator chose to send it, for as long as that run takes.
-* **One public entry point.** Storage and Cosmos are both `publicNetworkAccess: Disabled` and
+* **One client entry point.** Storage and Cosmos are both `publicNetworkAccess: Disabled` and
   reached only over private endpoints; every Container Apps environment sits on a subnet of this
   VNet, so that is where their outbound traffic goes. The client's entire attack surface is one
-  authenticated HTTPS API.
+  authenticated HTTPS API. MCP servers separately expose authenticated HTTPS for Foundry calls.
 * **Each team operates its own environment.** Team A's containers run in `<prefix>-cardgeo-env` in
   Team A's resource group, with their own log workspace. Team B cannot restart them, change their
   scale, read their environment variables or read their console output.
@@ -172,8 +176,10 @@ Use the script rather than a bare `az deployment sub create`: that would deploy 
 default and send all five container apps back to the placeholder image, which breaks the demo in a
 far less interesting way.
 
-Bicep deletes the `Foundry User` assignment on the `cardgeo` project. (RBAC changes can take a
-minute or two to propagate; re-run the scan until it fails.)
+The conditional template stops creating the `Foundry Agent Consumer` assignment. Since incremental
+ARM does not delete omitted resources, the deployment script then explicitly removes that exact
+worker/project assignment through `sync-foundry-worker-access.ps1`. RBAC changes can take a minute
+or two to propagate.
 
 Then scan an image again. Expected result:
 
@@ -201,7 +207,8 @@ among the connections Team A can select.
 The stronger version of this is to hand Team A the URL anyway and call it directly:
 
 ```powershell
-$token = az account get-access-token --resource "api://$prefix-mcp" --query accessToken -o tsv
+$mcpAppId = ./scripts/configure-mcp-audience.ps1 -NamePrefix $prefix
+$token = az account get-access-token --resource "api://$mcpAppId" --query accessToken -o tsv
 $url = az containerapp show -g "$prefix-cardid" -n "$prefix-mcp-cardcatalog-mtg" `
   --query properties.configuration.ingress.fqdn -o tsv
 Invoke-WebRequest -SkipHttpErrorCheck -Method Post `

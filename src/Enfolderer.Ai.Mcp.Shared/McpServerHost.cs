@@ -15,7 +15,7 @@ namespace Enfolderer.Ai.Mcp;
 ///
 /// Every server is protected the same way, by an allow-list of caller object ids. That list is the
 /// executable form of the <c>allowed_callers</c> key in the agent YAML, and it is what makes
-/// scenario 2 of the Foundry boundary demo fail closed: Team A's project identity is not on Team
+/// scenario 2 of the Foundry boundary demo fail closed: Team A's agent identity is not on Team
 /// B's catalogue servers, so the call is rejected even though the URL is reachable.
 /// </summary>
 public static class McpServerHost
@@ -47,57 +47,43 @@ public static class McpServerHost
                 ?? throw new InvalidOperationException(
                     "MCP tools are discovered from the entry assembly, and there is none."));
 
-        // Callers are Foundry projects presenting their own managed identity, so the token is an
-        // app token: authorise on the object id of the calling principal rather than on a scope.
+        // Foundry presents the agent's identity, not the worker or project managed identity.
         var tenantId = builder.Configuration["McpServer:TenantId"];
         var audience = builder.Configuration["McpServer:Audience"];
         var allowedCallers = ReadAllowedCallers(builder.Configuration);
         var authConfigured = !string.IsNullOrWhiteSpace(tenantId) && !string.IsNullOrWhiteSpace(audience);
+        if (!authConfigured || allowedCallers.Count == 0)
+            throw new InvalidOperationException(
+                "McpServer:TenantId, McpServer:Audience and a nonempty McpServer:AllowedCallerObjectIds are required. " +
+                "The MCP server refuses to start without authentication and an explicit caller allow-list.");
 
-        if (authConfigured)
-        {
-            builder.Services
-                .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-                .AddJwtBearer(options =>
+        builder.Services
+            .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(options =>
+            {
+                options.Authority = $"https://login.microsoftonline.com/{tenantId}/v2.0";
+                options.TokenValidationParameters = new TokenValidationParameters
                 {
-                    options.Authority = $"https://login.microsoftonline.com/{tenantId}/v2.0";
-                    options.TokenValidationParameters = new TokenValidationParameters
-                    {
-                        ValidAudiences = [audience, $"api://{audience}"],
-                        ValidateIssuer = true,
-                        ValidateAudience = true,
-                        ValidateLifetime = true
-                    };
-                });
-        }
+                    ValidAudience = audience,
+                    ValidateIssuer = true,
+                    ValidateAudience = true,
+                    ValidateLifetime = true
+                };
+            });
         builder.Services.AddAuthorization();
 
         var app = builder.Build();
 
-        if (authConfigured)
-        {
-            app.UseAuthentication();
-            app.UseAuthorization();
-        }
-        else
-        {
-            app.Logger.LogWarning(
-                "McpServer:TenantId or McpServer:Audience is not configured; {ServerName} is running " +
-                "unauthenticated. This is only acceptable for local development: a public MCP endpoint " +
-                "would let any caller bypass the project boundaries the demo is about.",
-                serverName);
-        }
+        app.UseAuthentication();
+        app.UseAuthorization();
 
         app.MapGet("/healthz", () => Results.Ok(new { status = "ok", server = serverName }));
 
         var mcp = app.MapMcp("/mcp");
-        if (authConfigured)
-        {
-            mcp.RequireAuthorization();
-            // Authentication proves who the caller is; this proves they are one of the callers this
-            // server exists to serve. Without it any identity in the tenant would be accepted.
-            mcp.AddEndpointFilter(new AllowedCallerFilter(allowedCallers, serverName));
-        }
+        mcp.RequireAuthorization();
+        // Authentication proves who the caller is; this proves they are one of the callers this
+        // server exists to serve. Without it any identity in the tenant would be accepted.
+        mcp.AddEndpointFilter(new AllowedCallerFilter(allowedCallers, serverName));
 
         return app;
     }

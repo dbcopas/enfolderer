@@ -29,6 +29,13 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--strip-private-metadata")
+        {
+            var bytes = JpegMetadataSanitizer.StripPrivateMetadata(File.ReadAllBytes(args[1]));
+            File.WriteAllBytes(args[2], bytes);
+            Console.WriteLine("Removed JPEG private metadata without re-encoding pixels; display orientation retained.");
+            return 0;
+        }
         if (args.Length == 3 && args[0] == "--inspect")
         {
             Directory.CreateDirectory(args[2]);

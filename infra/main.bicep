@@ -42,8 +42,9 @@ param grantIdentificationAccessToGeometry bool = true
 @description('One Foundry account holding both projects (true, the default), or one account per team (false). True is the layout this demo is about: the boundary between the teams is then the Foundry project boundary, enforced by project-scoped role assignments. False additionally separates quota, model deployments and account settings, but the boundary becomes plain Azure RBAC between two unrelated resources — stronger isolation, weaker demonstration of Foundry itself.')
 param singleAccount bool = true
 
-@description('Audience the hosted MCP servers require in an incoming token, e.g. api://enf-demo-mcp. Leave empty to deploy them unauthenticated, which is only acceptable while you are still wiring the demo up: a public MCP endpoint lets any caller bypass the project boundaries the demo exists to show.')
-param mcpAudience string = ''
+@description('MCP resource app client ID (v2 JWT aud). Agent-identity connections request tokens for api://<this id>.')
+@minLength(1)
+param mcpAudience string
 
 @description('''
 Tag of the container images to run, e.g. "v1". Leave empty for the very first deployment: the
@@ -55,21 +56,23 @@ configuration that lets it pull as its own managed identity.
 ''')
 param imageTag string = ''
 
-// Set these once the agents exist and you have read their ids back; `agents/provision.ps1` prints
-// them. The defaults are the agent names, which the data plane only accepts if it keys agents by
-// name — usually it does not, and the worker fails every run until the real `asst_…` ids are here.
-//
-// They are template parameters rather than something you set afterwards with
-// `az containerapp update` because every deployment rewrites the container app's environment: a
-// value set by hand survives only until the next redeploy.
-@description('Agent id of Team A\'s boundary agent, e.g. asst_….')
+@description('Named Foundry agent for Team A\'s boundary detection, not a classic asst_ id.')
 param boundaryAgentId string = 'CardBoundaryAgent'
 
-@description('Agent id of Team B\'s Magic: The Gathering identification agent, e.g. asst_….')
+@description('Named Foundry agent for Magic identification.')
 param mtgAgentId string = 'MtgCardIdAgent'
 
-@description('Agent id of Team B\'s Pokemon identification agent, e.g. asst_….')
+@description('Named Foundry agent for Pokemon identification.')
 param pokemonAgentId string = 'PokemonCardIdAgent'
+
+@description('Distinct Entra agent identity principal of the boundary agent. Empty only during placeholder bootstrap.')
+param boundaryAgentPrincipalId string = ''
+
+@description('Distinct Entra agent identity principal of the Magic agent.')
+param mtgAgentPrincipalId string = ''
+
+@description('Distinct Entra agent identity principal of the Pokemon agent.')
+param pokemonAgentPrincipalId string = ''
 
 resource platformRg 'Microsoft.Resources/resourceGroups@2023-07-01' = {
   name: '${namePrefix}-platform'
@@ -321,12 +324,8 @@ module geometryMcp 'modules/mcp-servers.bicep' = {
         name: 'mcp-imaging'
         image: 'mcp-imaging'
         needsStorage: true
-        // Only Team A's own project may call it. Team B reaches Team A through the boundary
-        // agent, not by calling Team A's imaging tools directly.
-        allowedCallerObjectIds: [
-          geometryIdentity.outputs.principalId
-          geometryProject.outputs.projectPrincipalId
-        ]
+        // Neither the worker nor either project's managed identity can call this endpoint.
+        allowedCallerObjectIds: empty(boundaryAgentPrincipalId) ? [] : [boundaryAgentPrincipalId]
       }
     ]
   }
@@ -352,19 +351,13 @@ module identificationMcp 'modules/mcp-servers.bicep' = {
         name: 'mcp-cardcatalog-mtg'
         image: 'mcp-cardcatalog-mtg'
         needsStorage: false
-        allowedCallerObjectIds: [
-          identificationIdentity.outputs.principalId
-          identificationProject.outputs.projectPrincipalId
-        ]
+        allowedCallerObjectIds: empty(mtgAgentPrincipalId) ? [] : [mtgAgentPrincipalId]
       }
       {
         name: 'mcp-cardcatalog-pokemon'
         image: 'mcp-cardcatalog-pokemon'
         needsStorage: false
-        allowedCallerObjectIds: [
-          identificationIdentity.outputs.principalId
-          identificationProject.outputs.projectPrincipalId
-        ]
+        allowedCallerObjectIds: empty(pokemonAgentPrincipalId) ? [] : [pokemonAgentPrincipalId]
       }
     ]
   }

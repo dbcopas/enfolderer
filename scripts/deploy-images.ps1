@@ -51,7 +51,7 @@
     exists in the registry, for example to roll back.
 
 .PARAMETER BoundaryAgentId
-    Agent id of Team A's boundary agent, e.g. asst_…. Omit to keep whatever the last deployment
+    Named Foundry agent for Team A's boundary detection. Omit to keep whatever the last deployment
     used.
 
 .PARAMETER MtgAgentId
@@ -59,6 +59,18 @@
 
 .PARAMETER PokemonAgentId
     Agent id of Team B's Pokemon identification agent.
+
+.PARAMETER BoundaryAgentPrincipalId
+    Distinct Entra agent principal allowed on the imaging MCP server.
+
+.PARAMETER MtgAgentPrincipalId
+    Distinct Entra agent principal allowed on the MTG catalogue MCP server.
+
+.PARAMETER PokemonAgentPrincipalId
+    Distinct Entra agent principal allowed on the Pokemon catalogue MCP server.
+
+.PARAMETER McpAudience
+    Registered single-tenant resource app client ID, matching the v2 token audience.
 
 .PARAMETER GrantGeometryAccess
     Whether the orchestrator may invoke Team A's boundary agent. Pass $false to run demo scenario
@@ -77,7 +89,7 @@
     Roll the apps back to images already in the registry.
 
 .EXAMPLE
-    ./scripts/deploy-images.ps1 -SkipBuild -BoundaryAgentId asst_abc -MtgAgentId asst_def
+    ./scripts/deploy-images.ps1 -SkipBuild -BoundaryAgentId CardBoundaryAgent -MtgAgentId MtgCardIdAgent
 
     Change only the agent ids, leaving the running images alone. Use this rather than a bare
     `az deployment sub create`: that would deploy imageTag's empty default and send every app back
@@ -86,7 +98,8 @@
 .EXAMPLE
     ./scripts/deploy-images.ps1 -SkipBuild -GrantGeometryAccess $false
 
-    Revoke the orchestrator's access to Team A's project, which is demo scenario 1.
+    Stop declaring the geometry Consumer grant and explicitly remove the existing worker/project
+    assignment after deployment; incremental ARM alone does not remove omitted assignments.
 
 .NOTES
     Run from the repository root: the build context is '.', and every service project has
@@ -104,6 +117,10 @@ param(
     [string] $BoundaryAgentId,
     [string] $MtgAgentId,
     [string] $PokemonAgentId,
+    [string] $BoundaryAgentPrincipalId,
+    [string] $MtgAgentPrincipalId,
+    [string] $PokemonAgentPrincipalId,
+    [string] $McpAudience,
     [bool] $GrantGeometryAccess
 )
 
@@ -359,6 +376,32 @@ List what the registry holds with:
         Write-Note "the apps are currently on '$deployedTag' and will be moved to '$Tag'"
     }
 
+    $overrides = [ordered] @{}
+    foreach ($mapping in @{
+        BoundaryAgentId = 'boundaryAgentId'; MtgAgentId = 'mtgAgentId'; PokemonAgentId = 'pokemonAgentId'
+        BoundaryAgentPrincipalId = 'boundaryAgentPrincipalId'; MtgAgentPrincipalId = 'mtgAgentPrincipalId'
+        PokemonAgentPrincipalId = 'pokemonAgentPrincipalId'; McpAudience = 'mcpAudience'
+    }.GetEnumerator()) {
+        $value = Get-Variable -Name $mapping.Key -ValueOnly
+        if ($value) { $overrides[$mapping.Value] = $value }
+    }
+    $effective = if ($UseParametersFile) { $onFile } else { $parameters }
+    foreach ($key in 'boundaryAgentPrincipalId', 'mtgAgentPrincipalId', 'pokemonAgentPrincipalId', 'mcpAudience') {
+        $value = if ($overrides.Contains($key)) { $overrides[$key] }
+            elseif ($effective.PSObject.Properties[$key]) { $effective.$key.value } else { '' }
+        $parsed = [guid]::Empty
+        if (-not [guid]::TryParse($value, [ref]$parsed) -or $parsed -eq [guid]::Empty) {
+            throw "Missing registered $key. Run update-demo.ps1 to provision distinct agent identities before deploying secured images."
+        }
+    }
+    foreach ($key in 'boundaryAgentId', 'mtgAgentId', 'pokemonAgentId') {
+        $value = if ($overrides.Contains($key)) { $overrides[$key] }
+            elseif ($effective.PSObject.Properties[$key]) { $effective.$key.value } else { '' }
+        if (-not $value -or $value.StartsWith('asst_')) {
+            throw "$key must name a new Foundry agent, not a classic assistant. Run update-demo.ps1."
+        }
+    }
+
     if (-not $SkipBuild) {
         Write-Step "1. Build the images"
         Write-Note "Five builds in Azure, a few minutes each. Nothing is built on this machine."
@@ -388,10 +431,6 @@ List what the registry holds with:
 
     # Agent ids are deployment parameters, so they are set here rather than with
     # `az containerapp update --set-env-vars`, which the next deployment would overwrite.
-    $overrides = [ordered] @{}
-    if ($BoundaryAgentId) { $overrides['boundaryAgentId'] = $BoundaryAgentId }
-    if ($MtgAgentId)      { $overrides['mtgAgentId']      = $MtgAgentId }
-    if ($PokemonAgentId)  { $overrides['pokemonAgentId']  = $PokemonAgentId }
     if ($PSBoundParameters.ContainsKey('GrantGeometryAccess')) {
         $overrides['grantIdentificationAccessToGeometry'] = $GrantGeometryAccess
     }
@@ -467,6 +506,30 @@ List what the registry holds with:
         }
     }
     Write-Good "deployment succeeded"
+
+    $savedParameters = [ordered]@{}
+    foreach ($parameter in $effective.PSObject.Properties) {
+        $savedParameters[$parameter.Name] = @{ value = $parameter.Value.value }
+    }
+    foreach ($override in $overrides.GetEnumerator()) {
+        $savedParameters[$override.Key] = @{ value = $override.Value }
+    }
+    $savedParameters['imageTag'] = @{ value = $Tag }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $cache) | Out-Null
+    [ordered]@{
+        deployment = $DeploymentName
+        savedUtc = (Get-Date).ToUniversalTime().ToString('o')
+        location = $location
+        registryName = $registry
+        parameters = $savedParameters
+    } | ConvertTo-Json -Depth 20 | Set-Content -Path $cache -Encoding utf8
+
+    $geometryAccess = if ($overrides.Contains('grantIdentificationAccessToGeometry')) {
+        [bool]$overrides['grantIdentificationAccessToGeometry']
+    } elseif ($effective.PSObject.Properties['grantIdentificationAccessToGeometry']) {
+        [bool]$effective.grantIdentificationAccessToGeometry.value
+    } else { $true }
+    & (Join-Path $PSScriptRoot 'sync-foundry-worker-access.ps1') -NamePrefix $prefix -GrantGeometryAccess $geometryAccess
 
     Write-Step "3. Check what is running"
 

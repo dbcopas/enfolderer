@@ -312,6 +312,11 @@ public sealed record ScanJobDocument
     /// <summary>Partition key. Always equal to <see cref="Id"/>.</summary>
     [JsonPropertyName("jobId")] public string JobId { get; init; } = string.Empty;
 
+    /// <summary>Validated creator identity. Legacy jobs without an owner are not publicly accessible.</summary>
+    [JsonPropertyName("ownerTenantId")] public string? OwnerTenantId { get; init; }
+
+    [JsonPropertyName("ownerObjectId")] public string? OwnerObjectId { get; init; }
+
     [JsonPropertyName("schemaVersion")] public int SchemaVersion { get; init; } = ScanResultDocument.CurrentSchemaVersion;
 
     [JsonPropertyName("status")] public ScanJobStatus Status { get; init; } = ScanJobStatus.Pending;

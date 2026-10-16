@@ -36,10 +36,8 @@ resource account 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   location: location
   kind: 'AIServices'
   sku: { name: 'S0' }
-  // Each team's own user-assigned identity is what its project's agents present when they reach
-  // outside the project, so the data-plane roles are granted to principals that outlive this
-  // account. A system-assigned identity is kept alongside them for services that cannot yet be
-  // told which user-assigned identity to use.
+  // These are infrastructure managed identities, not the distinct Entra Agent IDs used by named
+  // agents for MCP authentication. Foundry provisions agent identities/blueprints with the agent.
   identity: {
     type: 'SystemAssigned, UserAssigned'
     userAssignedIdentities: reduce(teamIdentityIds, {}, (merged, id) => union(merged, { '${id}': {} }))

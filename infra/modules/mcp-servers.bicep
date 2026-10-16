@@ -26,11 +26,13 @@ param identityId string
 @description('Client id of that identity, so the credential knows which one to present.')
 param identityClientId string
 
-@description('Tenant whose tokens are accepted. Leave empty to run the servers unauthenticated.')
-param tenantId string = ''
+@description('Tenant whose tokens are accepted.')
+@minLength(1)
+param tenantId string
 
 @description('Audience the servers require in an incoming token, e.g. api://enf-demo-mcp.')
-param audience string = ''
+@minLength(1)
+param audience string
 
 @description('Blob service endpoint, for servers that read the uploaded scan.')
 param storageAccountUrl string = ''

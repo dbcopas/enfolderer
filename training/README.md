@@ -72,6 +72,17 @@ have found.
 
 ## Adding a photograph
 
+Remove private metadata before committing a JPEG:
+
+```powershell
+dotnet run --project tools\Enfolderer.Ai.Imaging.TrainingCheck -- --strip-private-metadata input.jpg sanitized.jpg
+```
+
+This removes EXIF/XMP, IPTC and comment metadata while retaining only display orientation;
+compressed image pixels are not re-encoded. Review the visible image for personal information
+as well. Photo 05's current copy has been sanitized, but older Git history still contains the
+original until a separately approved history cleanup is completed.
+
 Create a numbered directory, drop in `image.jpg` and `cards.txt`, and run the check. Nothing needs
 registering: the tool walks every subdirectory it finds here. Photographs that are hard for a
 reason no existing one covers are the useful ones — a twelve-pocket sheet, cards loose on a table,

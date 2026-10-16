@@ -369,6 +369,10 @@ internal static class ScanReliabilityChecks
         {
             var directory = Path.Combine(root, page.ToString("00"));
             var bytes = await File.ReadAllBytesAsync(Path.Combine(directory, "image.jpg"));
+            using (var photo = SixLabors.ImageSharp.Image.Load(bytes))
+                check(photo.Metadata.ExifProfile?.Values.Any(value =>
+                    value.Tag.ToString().StartsWith("GPS", StringComparison.Ordinal)) != true,
+                    $"page {page:00}: training photo contains no EXIF GPS data");
             using var source = new MemoryStream(bytes);
             var dimensions = PerspectiveCropper.ReadDimensions(source);
             var expected = File.ReadAllLines(Path.Combine(directory, "cards.txt"))

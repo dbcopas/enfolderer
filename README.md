@@ -95,6 +95,18 @@ The remaining File-menu maintenance actions modify the local `mtgstudio.collecti
 
 ## Scanning cards with the Azure AI pipeline
 
+The API requires Entra authentication and records each job's creator tenant/object identity.
+Only that identity can upload, submit, poll or download its job. Jobs created before ownership
+was recorded are inaccessible through these routes; create a new scan rather than claiming an
+old job by its ID. The API refuses to start without its tenant/client configuration, and public
+MCP servers refuse missing tenant/audience or caller allow-lists, including local runs.
+The worker uses named Foundry agent Responses endpoints. Each agent has its own Entra Agent ID;
+Foundry obtains short-lived MCP tokens through `AgenticIdentityToken` project connections.
+Geometry, Magic and Pokemon servers accept only their corresponding agent principal, not worker
+or project managed identities. Run `.\scripts\update-demo.ps1` for the first migration; it provisions
+identities/connections before deploying images and persists the audience and caller IDs.
+See [setup and migration](docs/azure-setup.md#4-create-the-agents).
+
 **Scan Card Image...** turns a photograph into binder entries: the app uploads a single image to a
 job API and polls it while a multi-agent Azure AI Foundry pipeline finds each card's outline and
 identifies it. That API is the only endpoint the app talks to, so it runs from anywhere. **Scan Binder Images...** runs the same job API once per image in
@@ -119,18 +131,20 @@ Values below 1 are rejected. Desktop polling is capped at three seconds during a
 
 Worker logs include `timing` events in milliseconds for source download, boundaries, each card's
 crop/store, identification and art verification, all cards, pricing, rendering, image storage,
-and total worker processing. Foundry logs separately time image uploads/thread creation and
-runs/reply retrieval. `.\scripts\show-last-scan.ps1` includes job timing events. The worker total
+and total worker processing. Foundry logs time background Responses/tool approval/reply retrieval.
+`.\scripts\show-last-scan.ps1` includes job timing events. The worker total
 excludes desktop upload, queue wait, polling lag and the final image download.
 
 Deploy the updated worker and rebuild/restart the desktop before comparing the same photos at
 concurrency 1, 2 and 3. Compare identity/printing/finish accuracy as well as elapsed time and
 throttling. Pricing remains serialized with polite Scryfall pacing. No service SKU, model,
 replica count or quota is increased by this change; consider upgrades only after measurement.
-Foundry image uploads retry HTTP 500/502/503/504 twice with one- and two-second waits, recreating
-the request for each attempt. Persistent errors remain explicit per-card failures. Authentication
-errors are not retried; HTTP 400 retains the existing upload-purpose fallback. A service may have
-accepted an upload before returning an error, so unidentified orphan files may require normal cleanup.
+Responses carry high-detail inline image bytes, not public blob URLs or persistent Files uploads.
+Transient response creation failures retry twice; quota refusals use the configured backoff.
+Authentication failures are not retried or downgraded to classic/anonymous calls. Tool failures
+remain explicit failures rather than model-only success. Background responses are cancelled on
+timeout/cancellation and retained responses are deleted after use; cleanup failures are logged.
+The legacy classic client remains available for regression checks, not as an automatic fallback.
 
 After final printing/art verification, scans also produce a priced PNG of the original photo.
 Half-card-width price-only artwork overlays show euro-symbol prices side by side, nonfoil on the

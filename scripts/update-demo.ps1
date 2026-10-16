@@ -8,7 +8,7 @@
 
       * C# changes ship inside container images, so they need a build and a redeploy.
       * Agent instructions live in agents/*.yaml, which nothing in Azure reads. They only reach
-        Foundry when agents/provision.ps1 sends them, and an agent whose prompt was edited but
+        Foundry when agents/provision-foundry.ps1 sends them, and an agent whose prompt was edited but
         never re-provisioned goes on behaving exactly as it did before, with no sign anywhere that
         the file on disk and the agent in Azure have diverged.
 
@@ -22,15 +22,14 @@
       3. Each team's MCP server URLs, read from the container apps themselves. These cannot be
          composed by hand: every team has its own Container Apps environment and so its own random
          default domain, and a URL built from the wrong one fails at agent run time with a 424.
-      4. Builds the images and redeploys (skip with -SkipImages).
-      5. Provisions Team A's agent, then Team B's, passing Team A's agent id across. Team B cannot
-         list agents in Team A's project - that is the boundary the demo exists to show - so the id
-         has to be carried over by whoever can see both, which is you.
-      6. Redeploys the apps with the three agent ids, so the worker calls the agents this run just
-         provisioned rather than whichever ones it was last told about.
+      4. Verifies the credential-free MCP resource registration and its v2 token audience.
+      5. Provisions the three live named agents with distinct agent identities and secretless
+         AgenticIdentityToken MCP connections, each restricted to its owning team's tools.
+      6. Builds and deploys images with named agent references and exact per-agent caller IDs.
+         SkipImages is allowed only after the first Responses migration.
 
-    Re-running is safe and is the normal way to use it. Agents are matched by name and updated in
-    place; images get a fresh tag each run, because ARM diffs the template and re-pushing a tag
+    Re-running is the normal way to use it. Agents receive a new version under the same name and
+    identity; images get a fresh tag each run, because ARM diffs the template and re-pushing a tag
     that is already deployed produces no new revision and no change.
 
     It does not scan anything. When it finishes, scan a page from the desktop app, then run
@@ -64,7 +63,7 @@
 .EXAMPLE
     ./scripts/update-demo.ps1 -SkipImages
 
-    Push edited agent prompts and nothing else.
+    Push edited agent prompts/connections and persist their caller IDs, without rebuilding images.
 #>
 
 [CmdletBinding()]
@@ -294,10 +293,7 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
             Write-Note "$($s.Name) -> $url"
         }
         else {
-            # Not fatal, and deliberately so: provisioning without a tool server still updates the
-            # prompt, which is often the whole point of the run. But say it plainly, because an
-            # agent silently loses its tools and gets quietly worse rather than failing.
-            Write-Bad "$($s.Name) not found in $($s.Rg) - its agent will be provisioned without that tool"
+            throw "$($s.Name) not found in $($s.Rg). Refusing to provision an agent without its required tools."
         }
     }
 
@@ -305,46 +301,35 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
     $tag = "v$((Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmm'))"
 
     if ($SkipImages) {
-        Write-Step '5. Images (skipped)'
-        Write-Note '-SkipImages was passed, so the apps keep the images they are on'
-    }
-    else {
-        Write-Step "5. Build and deploy the images as $tag"
-        Write-Note 'the build happens in Azure (ACR Tasks); this is the slow part, several minutes'
-        & (Join-Path $PSScriptRoot 'deploy-images.ps1') -DeploymentName $DeploymentName -Tag $tag
+        $responses = Invoke-Az @('containerapp', 'show', '-g', $platformRg, '-n', "$NamePrefix-worker",
+            '--query', "properties.template.containers[0].env[?name=='ScanPipeline__UseResponses'].value | [0]", '-o', 'tsv')
+        if ($responses -ne 'true') {
+            throw 'The first agent-identity migration must deploy the Responses-capable worker. Do not use -SkipImages for that migration.'
+        }
     }
 
     # ---------------------------------------------------------------- 6. agents
     if ($SkipAgents) {
         Write-Step '6. Agents (skipped)'
         Write-Note '-SkipAgents was passed, so the agents keep the prompts they already have'
+        if (-not $SkipImages) {
+            & (Join-Path $PSScriptRoot 'deploy-images.ps1') -DeploymentName $DeploymentName -Tag $tag
+        }
         Write-Host ''
         Write-Good 'Done.'
         return
     }
 
     Write-Step '6. Provision Team A (cardgeo)'
-    $provision = Join-Path $repoRoot 'agents/provision.ps1'
+    $audience = & (Join-Path $PSScriptRoot 'configure-mcp-audience.ps1') -NamePrefix $NamePrefix
+    $provision = Join-Path $repoRoot 'agents/provision-foundry.ps1'
     $teamA = @(& $provision -ProjectEndpoint $geo.Endpoint -Path (Join-Path $repoRoot 'agents/cardgeo') `
-        -McpServerUrl $geoMcp -PassThru)
+        -Only CardBoundaryAgent -McpServerUrl $geoMcp -McpAudience $audience)
     $teamA | Format-Table Name, Id, File -AutoSize
-
-    # Team B's orchestrator connects to an agent it cannot see. Foundry identifies a connected agent
-    # by id, and listing Team A's project from Team B's is exactly what the demo's RBAC forbids - so
-    # the id travels through this script, which is running as a person who belongs to both teams.
-    $boundary = $teamA | Where-Object { $_.Name -eq 'CardBoundaryAgent' } | Select-Object -First 1
-    $connected = @{}
-    if ($boundary -and $boundary.Id) {
-        $connected['cardgeo/CardBoundaryAgent'] = $boundary.Id
-        Write-Note "carrying $($boundary.Id) across to Team B"
-    }
-    else {
-        Write-Bad 'CardBoundaryAgent has no id, so the orchestrator will be provisioned without it'
-    }
 
     Write-Step '7. Provision Team B (cardid)'
     $teamB = @(& $provision -ProjectEndpoint $idn.Endpoint -Path (Join-Path $repoRoot 'agents/cardid') `
-        -McpServerUrl $idMcp -ConnectedAgentId $connected -PassThru)
+        -Only MtgCardIdAgent, PokemonCardIdAgent -McpServerUrl $idMcp -McpAudience $audience)
     $teamB | Format-Table Name, Id, File -AutoSize
 
     function Get-AgentId { param([string] $Name)
@@ -361,7 +346,14 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
         MtgAgentId      = Get-AgentId 'MtgCardIdAgent'
         PokemonAgentId  = Get-AgentId 'PokemonCardIdAgent'
     }
-    $pass = @{ DeploymentName = $DeploymentName; SkipBuild = $true }
+    $pass = @{
+        DeploymentName = $DeploymentName
+        SkipBuild = $SkipImages.IsPresent
+        McpAudience = $audience
+        BoundaryAgentPrincipalId = ($teamA | Where-Object Name -eq CardBoundaryAgent).PrincipalId
+        MtgAgentPrincipalId = ($teamB | Where-Object Name -eq MtgCardIdAgent).PrincipalId
+        PokemonAgentPrincipalId = ($teamB | Where-Object Name -eq PokemonCardIdAgent).PrincipalId
+    }
     if (-not $SkipImages) { $pass['Tag'] = $tag }
     foreach ($k in $ids.Keys) { if ($ids[$k]) { $pass[$k] = $ids[$k] } }
 

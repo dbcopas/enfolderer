@@ -9,8 +9,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Enfolderer.Ai.Api\Enfolderer.Ai.Api.csproj" />
     <ProjectReference Include="..\..\src\Enfolderer.Ai.Mcp.CardCatalog.Mtg\Enfolderer.Ai.Mcp.CardCatalog.Mtg.csproj" />
     <ProjectReference Include="..\..\src\Enfolderer.Ai.Worker\Enfolderer.Ai.Worker.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.22" />
   </ItemGroup>
 
 </Project>

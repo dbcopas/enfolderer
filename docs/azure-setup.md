@@ -9,19 +9,21 @@ PowerShell 5.1 works, but it mangles arguments containing quotes when it hands t
 which matters in [step 2](#2-register-the-api-and-the-desktop-client). The JSON arguments there are
 passed as files (`"@file.json"`) rather than inline strings specifically to sidestep that.
 
-Everything uses **user-assigned managed identities**. Nothing in this deployment has a connection
+Azure application hosts use **user-assigned managed identities**; Foundry agents use distinct
+**Microsoft Entra Agent IDs** for downstream tools. Nothing in this deployment has a connection
 string, a storage key, or a client secret: the storage account is created with
 `allowSharedKeyAccess: false` and Cosmos with `disableLocalAuth: true`, so key-based access is not
 merely discouraged, it is impossible.
 
-## One public entry point
+## One client entry point
 
-The only thing the outside world can reach is the **API**. The desktop client calls it over HTTPS
+The desktop client's only entry point is the **API**. The desktop client calls it over HTTPS
 with an Entra token and never talks to any other Azure resource — so it runs from anywhere, with no
 VPN, no private resolver and no jump host. Step 8 optionally puts API Management in front of it,
 which moves the public hostname but not the shape of this picture.
 
-Everything behind the API is private:
+Storage and Cosmos are private. MCP endpoints have authenticated public HTTPS ingress so Foundry
+can reach them; they are not anonymous services:
 
 ```text
 desktop client ──HTTPS──▶  <prefix>-api  ─┐
@@ -51,9 +53,9 @@ Two consequences are worth knowing before you read the rest of this guide:
   own compute.
 - **The agents are sent image bytes, not image URLs.** Foundry runs the agents on Microsoft's own
   service, outside your VNet, so it cannot fetch a private blob however the URL is signed. The
-  worker uploads the photo to Team A's project and each crop to Team B's project through the
-  Foundry Files API, references it as `image_file`, and deletes it when the run ends. A run that
-  dies before that leaves the upload behind; `scripts/cleanup.ps1 -FoundryFiles` sweeps them.
+  worker sends the photo to Team A and each crop to Team B as inline, high-detail `input_image`
+  content through named agent Responses endpoints. It deletes retained responses after processing.
+  Legacy Files uploads from earlier versions can still be swept with `scripts/cleanup.ps1 -FoundryFiles`.
 
 The VNet, its subnets, the private endpoints and the private DNS zones are all created by
 `infra/modules/network.bicep` as part of the main deployment; there is no separate step. Each team
@@ -439,6 +441,7 @@ Fill in `infra/main.parameters.json`. You can do it by hand, or from the variabl
 session:
 
 ```powershell
+$mcpAudience = ./scripts/configure-mcp-audience.ps1 -NamePrefix $prefix
 $params = [ordered]@{
   '$schema'      = "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#"
   contentVersion = "1.0.0.0"
@@ -448,6 +451,7 @@ $params = [ordered]@{
     teamAGroupObjectId = @{ value = $teamAGroupId }
     teamBGroupObjectId = @{ value = $teamBGroupId }
     apiClientId        = @{ value = $apiAppId }
+    mcpAudience        = @{ value = $mcpAudience }
     singleAccount      = @{ value = $true }
     grantIdentificationAccessToGeometry = @{ value = $true }
   }
@@ -516,7 +520,7 @@ $geoProjectId = az resource show `
 az role assignment list --scope $geoProjectId -o table
 ```
 
-You should see `Foundry Project Manager` for Team A's group and `Foundry User` for Team B's
+You should see `Foundry Project Manager` for Team A's group and `Foundry Agent Consumer` for the worker's
 identity, both with a scope ending in `/projects/cardgeo`. If the deployment failed on those
 assignments instead, your tenant does not accept project-scoped RBAC; redeploy with
 `singleAccount=false` to fall back to one account per team, which scopes the same roles at the
@@ -767,6 +771,52 @@ in it as a preflight check.
   project boundary as the demo's subject and fall back to plain Azure RBAC between two accounts.
 
 ## 4. Create the agents
+
+The supported demo path uses the new Foundry agent object model, stable agent Responses endpoints
+and distinct Entra agent identities. It does **not** use classic `asst_` IDs or worker-supplied
+tool tokens. After the placeholder infrastructure exists, run:
+
+```powershell
+./scripts/update-demo.ps1
+```
+
+This discovers both projects and MCP URLs, verifies/creates the credential-free MCP resource
+registration, provisions `CardBoundaryAgent`, `MtgCardIdAgent` and `PokemonCardIdAgent`, and creates
+`AgenticIdentityToken` connections in each owning project. Each tool requires approval, and each
+agent keeps its YAML `allowed_tools`. Missing URLs or a missing distinct identity stop deployment.
+Only these three live agents are provisioned; classic orchestrator/growth-slot YAML remains
+historical material, not an extra deployed service.
+
+It then builds all five images and deploys the audience, named agent references and **individual
+agent principal IDs** together. The MCP allow-lists exclude worker/project managed identities.
+MCP hosts validate the v2 JWT `aud` against the resource app's client ID; connections request
+`api://<client-id>`. No secret or bearer token is persisted by these scripts.
+
+The worker receives `Foundry Agent Consumer`, not `Foundry User`: the latter allows authoring
+and is not invoke-only. On an existing classic deployment, remove the worker's old project-scoped
+`Foundry User` assignments. Incremental ARM deployments do not delete obsolete role assignments;
+`deploy-images.ps1` therefore calls `sync-foundry-worker-access.ps1` after deployment. The script
+requires replacement Consumer grants and removes only exact worker/project obsolete assignments,
+never team authoring roles or unrelated grants. It also explicitly removes the geometry Consumer
+grant when the demo access switch is false.
+
+Do not use `-SkipImages` for the initial migration. Once migrated, `-SkipImages` updates prompts
+and connections, while `-SkipAgents` deploys only code using the recorded identity parameters.
+Reboots require no saved shell variables; Azure CLI sign-in and the correct subscription are
+still required. Keep the ignored `.deploy-images` recovery cache.
+
+Validate anonymous/wrong-audience 401, valid but unlisted agent 403, successful allowed MCP calls
+and a fresh desktop scan including its CSV and annotated image. Ownerless legacy API jobs remain
+inaccessible; do not assign them to callers who merely know the job ID. Roll back only to secured,
+ownership-enforcing images; never restore anonymous tool access.
+
+Identity alignment is not the same as Agent 365 onboarding: Agent 365 registration, telemetry,
+governance and any Microsoft 365 distribution are separate steps, not implied by an Agent ID.
+See [Foundry's new agent model](https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/migrate-agent-applications)
+and [Agent 365 identity](https://learn.microsoft.com/en-us/microsoft-agent-365/developer/identity).
+
+<details>
+<summary>Historical classic Assistants setup and troubleshooting (not the current deployment path)</summary>
 
 The YAML files in `agents/cardgeo/` and `agents/cardid/` are **this repository's own format**, not
 something Azure reads. They are the source of record for each agent's model, prompt and tool
@@ -1340,6 +1390,8 @@ orchestrator needs the boundary agent's id and cannot look it up itself.
 Re-provisioning is safe to repeat. If you are unsure whether it is needed, run it — an agent that is
 already correct is patched with identical content.
 
+</details>
+
 ## 5. Host the MCP servers
 
 The three servers under `src/Enfolderer.Ai.Mcp.*` are ASP.NET applications that expose MCP over
@@ -1490,8 +1542,7 @@ with:
 Container Apps FQDNs contain a generated suffix, so there is no hostname you can write out by
 hand — take it from `$mcp`, which you have just built.
 
-Then go back to [attaching the MCP tools](#attaching-the-mcp-tools) in step 4 and re-run
-`provision.ps1` with those URLs.
+The current [agent provisioning path](#4-create-the-agents) discovers these URLs automatically.
 
 ### Locking them down
 
@@ -1502,25 +1553,20 @@ Team B's catalogue servers, so
 [demo scenario 2](foundry-demo.md#2-call-team-bs-mtg-catalogue-from-team-as-project) fails even if
 someone hands Team A the URL.
 
-This is off until you give the deployment an audience, because the audience has to be an
-identifier URI that exists in your tenant. Create a registration for it and redeploy:
+The services refuse to start without a tenant, audience and nonempty caller allow-list.
+Use the dedicated single-tenant resource registration before deploying the service images:
 
 ```powershell
-$mcpAppId = az ad app create --display-name "Enfolderer MCP" --query appId -o tsv
-az ad app update --id $mcpAppId --identifier-uris "api://$prefix-mcp"
-az ad sp create --id $mcpAppId
+$mcpAppId = ./scripts/configure-mcp-audience.ps1 -NamePrefix $prefix
 ```
 
-Then add `"mcpAudience": { "value": "api://<prefix>-mcp" }` (the same identifier URI you just set) to
-`infra/main.parameters.json` and re-run the deployment from step 3.
+The returned client ID is the v2 JWT audience. `update-demo.ps1` records it as `mcpAudience` and
+provisions connections requesting `api://<client-id>`. It also records each distinct agent ID,
+so the next deployment cannot silently restore the old project-managed-identity allow-lists.
 
-Until you do, the servers start with a warning in their log saying they are running
-unauthenticated. Treat that warning as a blocker before demoing the security boundaries, not after:
-
-```text
-McpServer:TenantId or McpServer:Audience is not configured; mcp-cardcatalog-mtg is running
-unauthenticated. This is only acceptable for local development.
-```
+Empty `mcpAudience` values are rejected by the deployment template. Missing authentication or
+caller configuration also fails application startup, including local runs; there is no anonymous
+development fallback.
 
 Verify the lock-down took by calling `/mcp` without a token — it should be `401`, while `/healthz`
 stays `200`:
@@ -1533,11 +1579,9 @@ $response = Invoke-WebRequest -SkipHttpErrorCheck -Method Post `
 $response.StatusCode
 ```
 
-One caveat worth knowing before you rely on this: whether Foundry presents its project managed
-identity when calling a tool server depends on how the connection is configured, and if it cannot,
-these servers will refuse it. If the agents start reporting 401 from their tools, that is what has
-happened — configure the connection to send the identity, or leave `mcpAudience` empty and keep the
-endpoints off the demo's security story rather than pretending they are protected.
+The named agent Responses path uses Foundry-managed token acquisition through an
+`AgenticIdentityToken` connection. This was verified against a restricted staging MCP endpoint;
+setting an audience on the old classic client would not provide the same identity flow.
 
 The Pokémon catalogue works anonymously but is rate-limited; if you have a pokemontcg.io key, set
 it on that site. Scryfall needs no key.
@@ -1585,8 +1629,8 @@ Anything still showing `mcr.microsoft.com/k8se/quickstart` is on the placeholder
 got a deployment with `imageTag` set, or a later deployment omitted `imageTag` and reverted it —
 both are fixed by `./scripts/deploy-images.ps1`.
 
-A warning in the API log that `AzureAd:TenantId` is not configured means the API is running
-unauthenticated — acceptable locally, not in a deployment. Confirm the setting survived.
+The API refuses to start unless both `AzureAd:TenantId` and `AzureAd:ClientId` are configured.
+Confirm these settings survived deployment; local runs also require authentication.
 
 ### Redeploy after every code change
 
@@ -2590,7 +2634,7 @@ foreach ($o in 'geometryMcpServerUrls','identificationMcpServerUrls') {
 A change to this repository lands in one of two places, and they are updated by different means.
 C# ships inside container images and needs a build and a redeploy. Agent instructions live in
 `agents/*.yaml`, which nothing in Azure ever reads — they only reach Foundry when
-`agents/provision.ps1` sends them. An agent whose prompt was edited but never re-provisioned goes
+`agents/provision-foundry.ps1` sends them. An agent whose prompt was edited but never re-provisioned goes
 on behaving exactly as it did before, and nothing anywhere reports the difference. That is the
 usual reason a fix appears not to have worked.
 
@@ -2601,9 +2645,9 @@ itself:
 ./scripts/update-demo.ps1
 ```
 
-It finds your deployment, the Foundry projects, and each team's MCP server URLs; builds and deploys
-the images; provisions Team A's agent and then Team B's, carrying Team A's agent id across the
-boundary Team B cannot see past; and finally points the apps at the agents it just provisioned.
+It finds your deployment, projects and MCP URLs; provisions named agents, their distinct
+identities and secretless tool connections; then builds and deploys images with the exact
+audience/caller IDs. The worker invokes the geometry and identification agent endpoints separately.
 Re-running it is safe and is the normal way to use it.
 
 If the change was only to a prompt — which is most of them — skip the slow part:

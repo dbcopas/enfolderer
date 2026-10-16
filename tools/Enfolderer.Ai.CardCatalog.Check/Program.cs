@@ -51,6 +51,9 @@ internal static class Program
             return 2;
         }
         NumberReadingChecks();
+        SecurityChecks.RunAsync(Check).GetAwaiter().GetResult();
+        ApiOwnershipChecks.RunAsync(Check).GetAwaiter().GetResult();
+        FoundryResponseChecks.RunAsync(Check).GetAwaiter().GetResult();
         ResolutionChecks().GetAwaiter().GetResult();
         PromptChecks();
         ThrottleChecks();

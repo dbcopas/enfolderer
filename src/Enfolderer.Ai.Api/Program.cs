@@ -31,37 +31,29 @@ builder.Services.AddScanPlatform(builder.Configuration);
 
 // Entra ID protection. The desktop client signs in interactively and presents a user token; it
 // never holds a client secret or a storage key.
-var entraConfigured = !string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:TenantId"]);
-if (entraConfigured)
-{
-    builder.Services
-        .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
-}
+if (string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:TenantId"])
+    || string.IsNullOrWhiteSpace(builder.Configuration["AzureAd:ClientId"]))
+    throw new InvalidOperationException("AzureAd:TenantId and AzureAd:ClientId are required. The scan API refuses to start without authentication.");
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
-if (entraConfigured)
-{
-    app.UseAuthentication();
-    app.UseAuthorization();
-}
-else
-{
-    app.Logger.LogWarning(
-        "AzureAd:TenantId is not configured; the scan API is running unauthenticated. " +
-        "This is only acceptable for local development.");
-}
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
 // 1. Create a job and hand back a short-lived, write-only upload grant for exactly one blob.
 var jobs = app.MapGroup("/jobs");
-if (entraConfigured) jobs.RequireAuthorization();
+jobs.RequireAuthorization();
+jobs.AddEndpointFilter<JobOwnerFilter>();
 
 jobs.MapPost("/", async (
     CreateJobRequest request,
+    HttpContext context,
     IJobStore store,
     ILoggerFactory loggerFactory,
     TokenCredential credential,
@@ -69,6 +61,8 @@ jobs.MapPost("/", async (
     CancellationToken ct) =>
 {
     var jobId = Guid.NewGuid().ToString("n");
+    var owner = JobOwnerFilter.ReadOwner(context.User)
+        ?? throw new InvalidOperationException("The job ownership filter must validate the caller before job creation.");
 
     // The storage account has no public endpoint, so there is no URL that would let the client
     // write the blob itself. The path is derived here only so that the job document and the worker
@@ -82,6 +76,8 @@ jobs.MapPost("/", async (
         {
             Id = jobId,
             JobId = jobId,
+            OwnerTenantId = owner.TenantId,
+            OwnerObjectId = owner.ObjectId,
             Status = ScanJobStatus.Pending,
             BlobPath = blobPath,
             UploadExpiresAt = uploadExpiresAt,

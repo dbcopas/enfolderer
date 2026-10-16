@@ -157,7 +157,7 @@ ContainerAppConsoleLogs_CL
     or Log_s contains ': timing '
     or Log_s contains ': prices EUR' or Log_s contains ': pricing failed'
     or Log_s contains ': annotated image unavailable'
-    or Log_s contains 'invalid reply on thread' or Log_s contains 'landscape quads'
+    or Log_s contains 'returned an invalid reply' or Log_s contains 'landscape quads'
     or Log_s matches regex '(?i)Job [0-9a-f-]{8,} (started|completed|failed in state|identified none)'
 | project TimeGenerated, Log_s
 | order by TimeGenerated asc
