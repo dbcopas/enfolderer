@@ -88,9 +88,152 @@ The application also includes utilities for collection maintenance and exports:
 - **Match Wants CSV** compares Moxfield collection and wants exports, including price lookup.
 - **Batch Export Binder Wants (Moxfield)** produces Moxfield want-list CSVs for each `binder*.txt` file in a selected folder.
 - **Deck Pull Report** creates a pull/missing-card report from a Goldfish deck-list export.
+- **Scan Card Image** and **Scan Binder Images** identify cards from photographs through the Azure AI pipeline described below.
 - **Lands Viewer** and **Tokens Viewer** open CSV-based, searchable 3×3 binder views and let you mark entries as owned.
 
 The remaining File-menu maintenance actions modify the local `mtgstudio.collection`; use them only when you understand the intended database operation. **Restore collection backup** restores its adjacent `.bak` file.
+
+## Scanning cards with the Azure AI pipeline
+
+The API requires Entra authentication and records each job's creator tenant/object identity.
+Only that identity can upload, submit, poll or download its job. Jobs created before ownership
+was recorded are inaccessible through these routes; create a new scan rather than claiming an
+old job by its ID. The API refuses to start without its tenant/client configuration, and public
+MCP servers refuse missing tenant/audience or caller allow-lists, including local runs.
+The worker uses named Foundry agent Responses endpoints. Each agent has its own Entra Agent ID;
+Foundry obtains short-lived MCP tokens through `AgenticIdentityToken` project connections.
+Geometry, Magic and Pokemon servers accept only their corresponding agent principal, not worker
+or project managed identities. Run `.\scripts\update-demo.ps1` for the first migration; it provisions
+identities/connections before deploying images and persists the audience and caller IDs.
+See [setup and migration](docs/azure-setup.md#4-create-the-agents).
+
+**Scan Card Image...** turns a photograph into binder entries: the app uploads a single image to a
+job API and polls it while a multi-agent Azure AI Foundry pipeline finds each card's outline and
+identifies it. That API is the only endpoint the app talks to, so it runs from anywhere. **Scan Binder Images...** runs the same job API once per image in
+a selected folder. Both write `SET;NUMBER;MODIFIER;LANGUAGE;NAME` CSV rows; the modifier is
+`foil` or `etched` when identified, and blank for nonfoil or unknown finish. Unknown finishes are
+listed in the scan summary so a blank is not mistaken for a confirmed nonfoil.
+Both scan save dialogs suggest `scanned_cards_yyyyMMdd_HHmmss.csv`, using local date and time.
+You can change the suggested filename before saving.
+During processing, the status bar reports elapsed polling time, processed/detected cards, and
+successful identifications (processed includes unreadable cards). The final status retains the
+saved filename and counts of unidentified cards, missing numbers, printings needing review,
+unknown finishes, and art-based printing changes. Per-card progress requires the updated worker
+and API as well as the desktop app.
+The progress bar counts completed images rather than showing 100% when a scan starts. Hover over
+the status text to read the full message if it is truncated.
+
+The worker processes up to **two cards concurrently** within each scan. Each task uses its own
+source-image stream; results retain reading order and progress writes are serialized. Per-card
+failures do not discard the other cards. Set the worker environment variable
+`ScanPipeline__MaxConcurrentCards` to `1` for a sequential baseline, or `3` for a measured trial.
+Values below 1 are rejected. Desktop polling is capped at three seconds during active scans.
+
+Worker logs include `timing` events in milliseconds for source download, boundaries, each card's
+crop/store, identification and art verification, all cards, pricing, rendering, image storage,
+and total worker processing. Foundry logs time background Responses/tool approval/reply retrieval.
+`.\scripts\show-last-scan.ps1` includes job timing events. The worker total
+excludes desktop upload, queue wait, polling lag and the final image download.
+
+Deploy the updated worker and rebuild/restart the desktop before comparing the same photos at
+concurrency 1, 2 and 3. Compare identity/printing/finish accuracy as well as elapsed time and
+throttling. Pricing remains serialized with polite Scryfall pacing. No service SKU, model,
+replica count or quota is increased by this change; consider upgrades only after measurement.
+Responses carry high-detail inline image bytes, not public blob URLs or persistent Files uploads.
+Transient response creation failures retry twice; quota refusals use the configured backoff.
+Authentication failures are not retried or downgraded to classic/anonymous calls. Tool failures
+remain explicit failures rather than model-only success. Background responses are cancelled on
+timeout/cancellation and retained responses are deleted after use; cleanup failures are logged.
+The legacy classic client remains available for regression checks, not as an automatic fallback.
+
+After final printing/art verification, scans also produce a priced PNG of the original photo.
+Half-card-width price-only artwork overlays show euro-symbol prices side by side, nonfoil on the
+left and foil (marked with a star) on the right. Text is measured and sized to fill the available
+box without overlapping the confidence circle in the
+lower right: green for placed printings, yellow for printings needing verification, and red for
+unidentified cards or unplaced readings below 0.5 confidence. An appended
+legend includes card identity, photographed language, price-source language, printing uncertainty,
+finish, and retrieval time. Prices are **Cardmarket via Scryfall daily reference prices**, not
+live offers or a guaranteed valuation. Each missing foreign-language price independently falls
+back to English for the **same set and collector number**, marked `[en fallback]` in the legend.
+A foil-only or nonfoil-only record is
+valid; unavailable prices are left blank, never zero, USD, or the other finish's price.
+The legend is ordered by descending nonfoil price, with unavailable nonfoil prices last and
+ties in original card order. Card numbers still refer to the original scan; CSV order is unchanged.
+
+The desktop downloads the PNG through the authenticated job API, saves it beside the CSV as
+`<csv-stem>_<job-id>_priced.png`, and opens a preview. Batch scans save one PNG per source image.
+The original upload is unchanged. CSVs remain available if pricing, rendering, or download fails;
+the completion summary reports those warnings separately. Both prices are shown even if the
+photographed finish is unknown, and uncertain printings are explicitly marked as indicative.
+The image legend separates the exact price target (`Price for ONS 62`) from identification evidence.
+`Printing needs verification` means the photographed printing is not established, not that the
+price lookup failed. A lone artwork match is described as `Artwork matches; set/number not established`.
+A decisive artwork comparison that separates competing printings can verify either the existing
+printing or an art-based correction; shared artwork alone cannot.
+
+Deploy with `.\scripts\update-demo.ps1 -SkipAgents`, then rebuild/restart the desktop app.
+The deployment includes the private `outputs` container, API read-only access and worker write
+access scoped to that container, and the worker's Linux rendering font. No new agent/project or
+public blob URL is needed. Team B's catalogue also exposes `get_printing_prices` as an MCP tool;
+the worker calls the same deterministic pricing implementation after art verification rather
+than asking a model to copy monetary amounts.
+
+For MTG cards, the identifier receives the full crop and an enlarged full-width footer. Sideways
+crops supply both possible quarter-turn footers rather than guessing which end is the printed top.
+Retro-frame collector numbers may sit beside the copyright line, not in the modern lower-left.
+MTG language is read from the photographed footer/title/rules, independently of an English
+catalogue name or fallback printing. Results retain the original `readName` and footer
+`readLanguage` (`JP`/`JPN` becomes `ja`). Missing language/title evidence or contradictory language
+triggers one logged re-reading attempt; persistent contradictions fail rather than defaulting
+to English. Deploy the worker and identification prompt together with `.\scripts\update-demo.ps1`.
+Unplaced, ambiguous, assumed and missing-resolution printings are listed for review; a CSV's
+set and number are not automatically confirmed just because the card's name was identified.
+
+Measured card regions are authoritative: the worker runs the shared detector locally and retains
+every region even if the boundary agent omits it. Unambiguous agent matches can supply game and
+printed orientation, but cannot move measured corners or add regions. Unmatched candidates still
+go through identification and may be reported as unidentified rather than silently discarded.
+When the detector finds nothing, agent-estimated geometry remains an explicitly logged fallback.
+The boundary agent receives the same raw-pixel orientation as the detector and cropper: JPEG
+EXIF display-rotation tags are stripped from its vision copy without rotating the pixels.
+The stored original is unchanged.
+
+When the normal arrangement covers less than 15% of the photo, an OpenCV recovery pass looks
+for larger card contours and title frames, including extended-art cards on dark neutral surfaces.
+Measured anchors and their spacing can complete missing neighbours; no set, card name, or fixed
+grid is assumed. Recovery must exceed both 15% of the photo and twice the original area.
+This path is currently tuned for approximately upright cards in the raw pixel axes, not arbitrary
+physical rotations. EXIF display rotation is handled independently as described above.
+
+The imaging library includes matching Windows and Linux x64 slim OpenCV runtimes. Both the worker
+and imaging MCP service must be rebuilt together. Their container builds execute
+`--check-imaging-runtime` before succeeding, so missing Linux native dependencies fail the build
+rather than the next scan. No additional AI agent or model deployment is required.
+
+For crop diagnosis, run `dotnet run --project tools\Enfolderer.Ai.Imaging.TrainingCheck -- --inspect <image> <crop-directory>`.
+The live boundary checker accepts an optional crop-output directory and checks annotated physical
+card regions when a training photo has a `boundaries.json` file. Photo 07's annotations describe
+the ten loose cards on the laptop. The separate `cards.txt` records their names, printings and
+language; finishes are deliberately `unknown` rather than inferred from the user's description.
+
+Where the
+frame prints a separator between the set code and language, a dot indicates nonfoil and a star
+indicates foil. A blurred round separator can still be a star: the identifier compares its height
+and width with adjacent letters, not just whether its points are visible. Unreadable markers stay
+unknown; enlargement cannot recover lost detail. Older cards without that marker can use the large
+Wizards of the Coast shooting-star watermark across the lower text box as explicit foil evidence,
+or clearly visible foil treatment as separately labelled visual evidence. A missing watermark
+does not prove nonfoil. The bottom-centre authenticity stamp is not a foil indicator.
+
+Configuration lives in `aiconfig.txt` beside the executable and contains **no secrets** — only the
+API URL, tenant id, public client id and scope; you sign in interactively. A template is written
+for you the first time you run a scan.
+
+The services, agent definitions, and infrastructure are in `src/Enfolderer.Ai.*`, `agents/`, and
+`infra/`. See [docs/azure-setup.md](docs/azure-setup.md) to deploy the Azure resources, and
+[docs/foundry-demo.md](docs/foundry-demo.md) for the architecture and the security boundary
+walkthrough.
 
 ## Build and run
 

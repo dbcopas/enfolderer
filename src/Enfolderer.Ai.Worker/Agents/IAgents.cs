@@ -1,0 +1,59 @@
+using Enfolderer.Ai.Contracts;
+
+namespace Enfolderer.Ai.Worker.Agents;
+
+/// <summary>
+/// An image handed to an agent, as bytes. Storage is private, so an agent cannot be given a URL to
+/// fetch: the orchestrator uploads the bytes to the target project instead, which also means each
+/// project receives only what it was sent.
+/// </summary>
+public sealed record AgentImage(ReadOnlyMemory<byte> Content, string FileName, string ContentType);
+
+/// <summary>Result of a single boundary detection.</summary>
+public sealed record DetectedBoundary(CardQuad Quad, double Confidence, string? GameHint);
+
+/// <summary>
+/// Team A's <c>CardBoundaryAgent</c> (Foundry project <c>cardgeo</c>).
+/// It is the only component allowed to reason about card geometry, and it has no access to any
+/// card catalogue or to the job store.
+/// </summary>
+public interface ICardBoundaryAgent
+{
+    /// <summary>Agent identifier recorded on each result row, e.g. <c>cardgeo/CardBoundaryAgent</c>.</summary>
+    string AgentId { get; }
+
+    /// <summary>
+    /// Locates every collectible card in the image. The image is passed as bytes, which are
+    /// uploaded to Team A's project: the agent never receives a storage credential, and Team A
+    /// sees only the photograph it was given.
+    /// <para>
+    /// <paramref name="scanBlobPath"/> names that same photograph in storage, so Team A's own
+    /// imaging tool can open it and measure the corners properly. It is a name, not a credential —
+    /// the tool reads it as Team A's identity, which can read <c>scans</c> and nothing else.
+    /// </para>
+    /// <para>
+    /// <paramref name="width"/> and <paramref name="height"/> are the decoded pixel size of that
+    /// photograph. They are needed because the returned corners are fractions of the image, which
+    /// only the caller can turn back into pixels.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<DetectedBoundary>> DetectAsync(AgentImage image, string scanBlobPath, int width, int height, CancellationToken ct = default);
+}
+
+/// <summary>A crop handed to an identification agent.</summary>
+public sealed record CardCrop(int Index, AgentImage Image, CardQuad Quad, string? GameHint);
+
+/// <summary>
+/// Team B's per-game identification agents (Foundry project <c>cardid</c>). Each implementation owns
+/// its own catalogue MCP server and its own game-specific prompt knowledge.
+/// </summary>
+public interface ICardIdentificationAgent
+{
+    /// <summary>Normalized game this agent handles; see <see cref="CardGames"/>.</summary>
+    string Game { get; }
+
+    /// <summary>Agent identifier recorded on each result row, e.g. <c>cardid/MtgCardIdAgent</c>.</summary>
+    string AgentId { get; }
+
+    Task<IdentifiedCard> IdentifyAsync(CardCrop crop, CancellationToken ct = default);
+}

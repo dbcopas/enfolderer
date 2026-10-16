@@ -324,6 +324,213 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ScanCardImage_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var config = LoadAiScanConfig();
+            if (config == null) return;
+
+            var dlgOpen = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Select the card image to scan",
+                Filter = "Image Files (*.jpg;*.jpeg;*.png;*.bmp;*.webp;*.gif)|*.jpg;*.jpeg;*.png;*.bmp;*.webp;*.gif|All Files (*.*)|*.*",
+                CheckFileExists = true,
+                Multiselect = false
+            };
+            if (dlgOpen.ShowDialog(this) != true) return;
+
+            var dlgSave = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save scanned cards CSV as",
+                Filter = "CSV Files (*.csv)|*.csv",
+                FileName = $"scanned_cards_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
+                InitialDirectory = System.IO.Path.GetDirectoryName(dlgOpen.FileName)
+            };
+            if (dlgSave.ShowDialog(this) != true) return;
+
+            await RunScanAsync(
+                "Scanning card image",
+                ct => Utilities.BinderScanService.ScanImageAsync(
+                    dlgOpen.FileName,
+                    config,
+                    dlgSave.FileName,
+                    config.GameHint,
+                    statusCallback: msg => _vm?.SetStatus(msg),
+                    progressCallback: (done, total) => _vm?.ReportScanProgress(done, total),
+                    ct: ct));
+        }
+        catch (Exception ex)
+        {
+            _vm?.FinishImportProgress();
+            MessageBox.Show(this, ex.Message, "Card Scan Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void ScanBinderImages_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var config = LoadAiScanConfig();
+            if (config == null) return;
+
+            // Batch mode: every image in the folder becomes its own job against the same API.
+            var folderPath = FolderPickerDialog.Show(this, "Select the folder containing binder page images");
+            if (folderPath == null) return;
+
+            var dlgSave = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save scanned cards CSV as",
+                Filter = "CSV Files (*.csv)|*.csv",
+                FileName = $"scanned_cards_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
+                InitialDirectory = folderPath
+            };
+            if (dlgSave.ShowDialog(this) != true) return;
+
+            await RunScanAsync(
+                "Scanning binder images",
+                ct => Utilities.BinderScanService.ScanFolderAsync(
+                    folderPath,
+                    config,
+                    dlgSave.FileName,
+                    config.GameHint,
+                    statusCallback: msg => _vm?.SetStatus(msg),
+                    progressCallback: (done, total) => _vm?.ReportScanProgress(done, total),
+                    ct: ct));
+        }
+        catch (Exception ex)
+        {
+            _vm?.FinishImportProgress();
+            MessageBox.Show(this, ex.Message, "Binder Scan Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
+    /// Loads aiconfig.txt, writing a secret-free template the first time and reporting any
+    /// validation problem (including a leftover client_secret entry) to the user.
+    /// </summary>
+    private Utilities.AiScanConfig? LoadAiScanConfig()
+    {
+        var configPath = System.IO.Path.Combine(AppContext.BaseDirectory, Utilities.AiScanConfig.FileName);
+        if (!System.IO.File.Exists(configPath))
+        {
+            try { System.IO.File.WriteAllText(configPath, Utilities.AiScanConfig.SampleContent); } catch { }
+            MessageBox.Show(this,
+                $"Scan configuration is missing.\n\nA template has been written to:\n{configPath}\n\n" +
+                "Fill in the API URL, tenant and client id, then run the scan again. " +
+                "No client secret is required: you will be asked to sign in.",
+                "Missing Config", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return null;
+        }
+
+        try
+        {
+            var config = Utilities.AiScanConfig.Load(configPath);
+            config.DeviceCodePrompt = details => Dispatcher.Invoke(
+                () => Utilities.DeviceCodeWindow.Show(this, details));
+            return config;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Scan Config Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            return null;
+        }
+    }
+
+    /// <summary>Runs a scan with progress reporting and an offer to retry on failure.</summary>
+    private async Task RunScanAsync(
+        string progressTitle,
+        Func<System.Threading.CancellationToken, Task<Utilities.BinderScanService.ScanResult>> scan)
+    {
+        while (true)
+        {
+            try
+            {
+                _vm?.StartImportProgress(progressTitle);
+                var result = await scan(System.Threading.CancellationToken.None);
+                _vm?.FinishImportProgress();
+                _vm?.SetStatus(Utilities.BinderScanService.DescribeResult(result));
+                // A row exported without its collector number is a real card and worth keeping,
+                // but it is the one gap that cannot be filled in later without the photograph, so
+                // it is said here rather than left to be found in the file.
+                var incomplete = result.CardsWithoutNumber > 0
+                    ? $"\n  of which without a collector number: {result.CardsWithoutNumber}"
+                    : string.Empty;
+                // A card whose set code could not be read is exported as the catalogue's default
+                // printing of that name. The name is right and the row is worth keeping, but an
+                // alternate-art reprint will be exported as the original, and nothing in the file
+                // marks which rows those are. Naming them turns a silent wrong row into two
+                // minutes of checking the art.
+                var unplaced = result.UnplacedCards is { Count: > 0 } names
+                    ? "\n\nPrinting needs review (ambiguous, assumed, unplaced, unverified, or missing resolution):\n  " + string.Join("\n  ", names)
+                    : string.Empty;
+                // The other direction: not a row nobody checked, but one the pictures overruled.
+                // The name is untouched — the candidates were all printings of it — so this is
+                // only ever a change of set and number, and it is shown because software quietly
+                // overwriting something read off a card is exactly the thing to be told about.
+                var moved = result.CardsMovedByArt is { Count: > 0 } movedRows
+                    ? "\n\nMoved to the printing the art matches:\n  " + string.Join("\n  ", movedRows)
+                    : string.Empty;
+                var finish = result.CardsWithoutFinish is { Count: > 0 } finishNames
+                    ? "\n\nFinish unknown - check these cards. Their CSV modifier is blank, not proof of nonfoil:\n  "
+                        + string.Join("\n  ", finishNames)
+                    : string.Empty;
+                var images = result.AnnotatedImages is { Count: > 0 } imagePaths
+                    ? "\n\nPriced images saved:\n  " + string.Join("\n  ", imagePaths)
+                    : string.Empty;
+                var annotationWarnings = result.AnnotationWarnings is { Count: > 0 } warnings
+                    ? "\n\nImage/price warnings (CSV is saved):\n  " + string.Join("\n  ", warnings)
+                    : string.Empty;
+                MessageBox.Show(this,
+                    $"Images processed: {result.ImagesProcessed}\nCards identified: {result.CardsFound}{incomplete}\nUnidentified cards: {result.LookupFailures}{unplaced}{moved}{finish}\n\nOutput: {result.OutputPath}{images}{annotationWarnings}",
+                    "Card Scan", MessageBoxButton.OK,
+                    result.AnnotationWarnings is { Count: > 0 } ? MessageBoxImage.Warning : MessageBoxImage.Information);
+                foreach (var imagePath in result.AnnotatedImages ?? Array.Empty<string>())
+                    ShowPricedScan(imagePath);
+                return;
+            }
+            catch (Exception retryEx)
+            {
+                _vm?.FinishImportProgress();
+                _vm?.SetStatus($"Scan failed: {retryEx.Message}");
+                var retry = MessageBox.Show(this,
+                    $"{retryEx.Message}\n\nWould you like to retry? (e.g. after granting the missing Foundry or storage permission)",
+                    "Card Scan Error", MessageBoxButton.YesNo, MessageBoxImage.Error);
+                if (retry != MessageBoxResult.Yes) return;
+            }
+        }
+    }
+
+    private void ShowPricedScan(string path)
+    {
+        try
+        {
+            var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            bitmap.UriSource = new Uri(System.IO.Path.GetFullPath(path));
+            bitmap.EndInit();
+            bitmap.Freeze();
+            var window = new Window
+            {
+                Owner = this, Title = $"Cardmarket via Scryfall - {System.IO.Path.GetFileName(path)}",
+                Width = 1000, Height = 800,
+                Content = new System.Windows.Controls.ScrollViewer
+                {
+                    VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                    Content = new System.Windows.Controls.Image { Source = bitmap, Width = 950 }
+                }
+            };
+            window.Show();
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or NotSupportedException or ArgumentException)
+        {
+            MessageBox.Show(this, $"The image was saved but preview failed:\n{path}\n\n{ex.Message}",
+                "Priced scan preview", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     // Tools menu handlers (delegate to view model)
     private async void DeckPullReport_Click(object sender, RoutedEventArgs e)
     {
@@ -689,4 +896,3 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 }
-

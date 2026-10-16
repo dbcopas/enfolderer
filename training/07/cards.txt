@@ -1,0 +1,10 @@
+0,0;Liliana the Repentant;FRA;370;unknown;en
+0,1;Marwyn, the Clearcutter;FRA;310;unknown;en
+0,2;Marwyn, the Preserver;FRA;315;unknown;en
+0,3;Eye of Ugin;SPG;159;unknown;en
+0,4;Extrapolate the Impossible;FRA;364;unknown;en
+1,0;Rockfall Vale;FRA;400;unknown;en
+1,1;Solitary Cell;FRA;355;unknown;en
+1,2;Essence Burn;FRA;369;unknown;en
+1,3;Precise Redaction;FRA;362;unknown;en
+1,4;Guiding Hydra;FRA;360;unknown;en

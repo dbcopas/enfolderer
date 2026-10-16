@@ -11,6 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.5" />
   </ItemGroup>
 
@@ -34,6 +35,9 @@
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
   <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
     </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\src\Enfolderer.Ai.Contracts\Enfolderer.Ai.Contracts.csproj" />
   </ItemGroup>
 
     <!-- Enforce DB presence: fail build if either required DB file is missing at repo root -->
