@@ -42,6 +42,9 @@ public sealed class ScanPipelineOptions
     /// <summary>Height in pixels of each perspective-corrected card crop.</summary>
     public int CropHeight { get; set; } = 1024;
 
+    /// <summary>Maximum independent cards in flight within one scan. Use 1 for a sequential baseline.</summary>
+    public int MaxConcurrentCards { get; set; } = 2;
+
     /// <summary>How long a single agent run may take before the job fails.</summary>
     public TimeSpan AgentRunTimeout { get; set; } = TimeSpan.FromMinutes(5);
 

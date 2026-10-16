@@ -111,21 +111,48 @@ and API as well as the desktop app.
 The progress bar counts completed images rather than showing 100% when a scan starts. Hover over
 the status text to read the full message if it is truncated.
 
+The worker processes up to **two cards concurrently** within each scan. Each task uses its own
+source-image stream; results retain reading order and progress writes are serialized. Per-card
+failures do not discard the other cards. Set the worker environment variable
+`ScanPipeline__MaxConcurrentCards` to `1` for a sequential baseline, or `3` for a measured trial.
+Values below 1 are rejected. Desktop polling is capped at three seconds during active scans.
+
+Worker logs include `timing` events in milliseconds for source download, boundaries, each card's
+crop/store, identification and art verification, all cards, pricing, rendering, image storage,
+and total worker processing. Foundry logs separately time image uploads/thread creation and
+runs/reply retrieval. `.\scripts\show-last-scan.ps1` includes job timing events. The worker total
+excludes desktop upload, queue wait, polling lag and the final image download.
+
+Deploy the updated worker and rebuild/restart the desktop before comparing the same photos at
+concurrency 1, 2 and 3. Compare identity/printing/finish accuracy as well as elapsed time and
+throttling. Pricing remains serialized with polite Scryfall pacing. No service SKU, model,
+replica count or quota is increased by this change; consider upgrades only after measurement.
+Foundry image uploads retry HTTP 500/502/503/504 twice with one- and two-second waits, recreating
+the request for each attempt. Persistent errors remain explicit per-card failures. Authentication
+errors are not retried; HTTP 400 retains the existing upload-purpose fallback. A service may have
+accepted an upload before returning an error, so unidentified orphan files may require normal cleanup.
+
 After final printing/art verification, scans also produce a priced PNG of the original photo.
-Numbered artwork overlays show separate EUR nonfoil and foil reference prices; an appended
+Half-card-width price-only artwork overlays show euro-symbol prices side by side, nonfoil on the
+left and foil (marked with a star) on the right. Text is measured and sized to fill the available
+box without overlapping the confidence circle in the
+lower right: green for placed printings, yellow for printings needing verification, and red for
+unidentified cards or unplaced readings below 0.5 confidence. An appended
 legend includes card identity, photographed language, price-source language, printing uncertainty,
 finish, and retrieval time. Prices are **Cardmarket via Scryfall daily reference prices**, not
 live offers or a guaranteed valuation. Each missing foreign-language price independently falls
-back to English for the **same set and collector number**, marked `[en fallback]` on the image.
+back to English for the **same set and collector number**, marked `[en fallback]` in the legend.
 A foil-only or nonfoil-only record is
-valid; unavailable prices remain `N/A`, never zero, USD, or the other finish's price.
+valid; unavailable prices are left blank, never zero, USD, or the other finish's price.
+The legend is ordered by descending nonfoil price, with unavailable nonfoil prices last and
+ties in original card order. Card numbers still refer to the original scan; CSV order is unchanged.
 
 The desktop downloads the PNG through the authenticated job API, saves it beside the CSV as
 `<csv-stem>_<job-id>_priced.png`, and opens a preview. Batch scans save one PNG per source image.
 The original upload is unchanged. CSVs remain available if pricing, rendering, or download fails;
 the completion summary reports those warnings separately. Both prices are shown even if the
 photographed finish is unknown, and uncertain printings are explicitly marked as indicative.
-The image separates the exact price target (`Price for ONS 62`) from identification evidence.
+The image legend separates the exact price target (`Price for ONS 62`) from identification evidence.
 `Printing needs verification` means the photographed printing is not established, not that the
 price lookup failed. A lone artwork match is described as `Artwork matches; set/number not established`.
 A decisive artwork comparison that separates competing printings can verify either the existing
@@ -154,6 +181,27 @@ every region even if the boundary agent omits it. Unambiguous agent matches can 
 printed orientation, but cannot move measured corners or add regions. Unmatched candidates still
 go through identification and may be reported as unidentified rather than silently discarded.
 When the detector finds nothing, agent-estimated geometry remains an explicitly logged fallback.
+The boundary agent receives the same raw-pixel orientation as the detector and cropper: JPEG
+EXIF display-rotation tags are stripped from its vision copy without rotating the pixels.
+The stored original is unchanged.
+
+When the normal arrangement covers less than 15% of the photo, an OpenCV recovery pass looks
+for larger card contours and title frames, including extended-art cards on dark neutral surfaces.
+Measured anchors and their spacing can complete missing neighbours; no set, card name, or fixed
+grid is assumed. Recovery must exceed both 15% of the photo and twice the original area.
+This path is currently tuned for approximately upright cards in the raw pixel axes, not arbitrary
+physical rotations. EXIF display rotation is handled independently as described above.
+
+The imaging library includes matching Windows and Linux x64 slim OpenCV runtimes. Both the worker
+and imaging MCP service must be rebuilt together. Their container builds execute
+`--check-imaging-runtime` before succeeding, so missing Linux native dependencies fail the build
+rather than the next scan. No additional AI agent or model deployment is required.
+
+For crop diagnosis, run `dotnet run --project tools\Enfolderer.Ai.Imaging.TrainingCheck -- --inspect <image> <crop-directory>`.
+The live boundary checker accepts an optional crop-output directory and checks annotated physical
+card regions when a training photo has a `boundaries.json` file. Photo 07's annotations describe
+the ten loose cards on the laptop. The separate `cards.txt` records their names, printings and
+language; finishes are deliberately `unknown` rather than inferred from the user's description.
 
 Where the
 frame prints a separator between the set code and language, a dot indicates nonfoil and a star

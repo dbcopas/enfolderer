@@ -184,7 +184,7 @@ public static class AiScanClientTests
         failures += Check(delay == TimeSpan.FromSeconds(2), "initial poll interval is 2s");
 
         delay = AiScanClient.NextDelay(delay);
-        failures += Check(delay == TimeSpan.FromSeconds(4), "backoff doubles");
+        failures += Check(delay == TimeSpan.FromSeconds(3), "active scan polling is capped at 3s");
 
         // Iterate well past the cap and confirm it never exceeds it.
         for (int i = 0; i < 20; i++) delay = AiScanClient.NextDelay(delay);

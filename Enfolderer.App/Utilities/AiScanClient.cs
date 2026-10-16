@@ -26,7 +26,7 @@ public sealed class AiScanClient
     public static readonly TimeSpan InitialPollInterval = TimeSpan.FromSeconds(2);
 
     /// <summary>Upper bound the backoff never exceeds.</summary>
-    public static readonly TimeSpan MaxPollInterval = TimeSpan.FromSeconds(15);
+    public static readonly TimeSpan MaxPollInterval = TimeSpan.FromSeconds(3);
 
     /// <summary>Total time a single image may take before the client gives up.</summary>
     public static readonly TimeSpan DefaultOverallTimeout = TimeSpan.FromMinutes(10);

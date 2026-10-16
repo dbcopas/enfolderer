@@ -154,6 +154,67 @@ public static class CardArrangementDetector
             .ToList();
     }
 
+    internal static IReadOnlyList<DetectedCard> CompleteMeasured(
+        Image<Rgba32> source, IReadOnlyList<DetectedCard> anchors, CardArrangementOptions opts)
+    {
+        var scale = Math.Min(1d, opts.WorkingSize / (double)Math.Max(source.Width, source.Height));
+        using var working = source.Clone(c => c.Resize(
+            Math.Max(32, (int)Math.Round(source.Width * scale)), Math.Max(32, (int)Math.Round(source.Height * scale))));
+        var frame = new Frame(working, working.Width, working.Height);
+        var originals = new Dictionary<Box, DetectedCard>();
+        foreach (var anchor in anchors)
+        {
+            var b = anchor.Quad.BoundingBox();
+            var box = Measure(frame, (int)Math.Round(b.X * scale), (int)Math.Round(b.Y * scale),
+                (int)Math.Round(b.Width * scale), (int)Math.Round(b.Height * scale));
+            originals[box] = anchor;
+        }
+        var boxes = originals.Keys.ToList();
+        boxes = Complete(frame, boxes, opts, Upright, 0.1);
+        boxes = Complete(frame, boxes, opts, Upright, 0.1);
+        var (_, tilt) = MeasureTilts(source, boxes, scale, false);
+        var results = new List<DetectedCard>();
+        foreach (var box in boxes)
+        {
+            if (originals.TryGetValue(box, out var original))
+            {
+                results.Add(original);
+                continue;
+            }
+            var nearest = originals.Keys.OrderBy(b => Math.Abs(b.Y + b.Height / 2d - box.Y - box.Height / 2d)).First();
+            var row = originals.Keys.Where(b => Math.Abs(b.Y - nearest.Y) < nearest.Height * 0.35).ToList();
+            var column = originals.Keys.Where(b =>
+                Math.Abs(b.X + b.Width / 2d - box.X - box.Width / 2d) < box.Width * 0.35).ToList();
+            var columnWidth = column.Count > 0 ? Median(column.Select(b => (double)b.Width).ToArray()) : box.Width;
+            var columnCenter = column.Count > 0 ? Median(column.Select(b => b.X + b.Width / 2d).ToArray()) : box.X + box.Width / 2d;
+            var top = row.Min(b => b.Y) - box.Height * 0.03;
+            var bottom = top + Median(row.Select(b => (double)b.Height).ToArray()) * 1.06;
+            var nextRow = originals.Keys.Where(b => b.Y > top + box.Height * 0.5).ToList();
+            if (nextRow.Count > 0)
+                bottom = Math.Min(bottom, Median(nextRow.Select(b => (double)b.Y).ToArray()) - box.Height * 0.02);
+            var located = box with
+            {
+                X = (int)Math.Round(columnCenter - columnWidth / 2),
+                Y = (int)Math.Round(top),
+                Width = (int)Math.Round(columnWidth),
+                Height = (int)Math.Round(bottom - top)
+            };
+            results.Add(new DetectedCard(
+                QuadOf(located, scale, false, false, tilt, source.Width, source.Height, 0),
+                Math.Round(Math.Clamp(box.Edge / 2, 0, 1), 3)));
+        }
+        var typicalHeight = Median(results.Select(r => r.Quad.BoundingBox().Height).ToArray());
+        var ordered = results.OrderBy(r => r.Quad.BoundingBox().Y).ToList();
+        var rows = new List<List<DetectedCard>>();
+        foreach (var card in ordered)
+        {
+            if (rows.Count == 0 || card.Quad.BoundingBox().Y - rows[^1][0].Quad.BoundingBox().Y > typicalHeight * 0.5)
+                rows.Add([]);
+            rows[^1].Add(card);
+        }
+        return rows.SelectMany(row => row.OrderBy(r => r.Quad.BoundingBox().X)).ToList();
+    }
+
     private static List<Box> AlignAndSortCards(
         List<Box> cards, bool isSideways, bool topOnLeft, double tilt)
     {
@@ -369,7 +430,8 @@ public static class CardArrangementDetector
     }
 
     private static CardQuad QuadOf(
-        Box box, double scale, bool isSideways, bool topOnLeft, double tilt, int imgWidth, int imgHeight)
+        Box box, double scale, bool isSideways, bool topOnLeft, double tilt, int imgWidth, int imgHeight,
+        double centerShiftFraction = 0.035)
     {
         var x0 = box.X / scale;
         var y0 = box.Y / scale;
@@ -438,7 +500,7 @@ public static class CardArrangementDetector
             var wHalf = (w * 1.04) / 2.0;
             var hHalf = (h * 1.08) / 2.0;
 
-            var shift = h * 0.035;
+            var shift = h * centerShiftFraction;
             var cx = (x0 + w / 2.0) + shift * ux;
             var cy = (y0 + h / 2.0) + shift * uy;
 
@@ -594,7 +656,8 @@ public static class CardArrangementDetector
     /// chooses where to look: a box still has to earn its place, at a lower bar than a card found
     /// unaided but a real one, so an empty pocket in the middle of a page is not invented.
     /// </summary>
-    private static List<Box> Complete(Frame frame, List<Box> cards, CardArrangementOptions opts, double aspect)
+    private static List<Box> Complete(Frame frame, List<Box> cards, CardArrangementOptions opts, double aspect,
+        double searchWindowFraction = 0.3)
     {
         if (cards.Count < 2) return cards;
 
@@ -614,7 +677,7 @@ public static class CardArrangementDetector
         // A page photographed from one side has its far column higher in the frame than its near
         // one, so the spacing is only a hint. The window is what absorbs that, and the tilt, and
         // the few pixels a card slides inside its pocket.
-        var window = (int)(boxWidth * 0.3);
+        var window = (int)(boxWidth * searchWindowFraction);
         var bar = opts.MinEdge * opts.CompletionRelief;
 
         var completed = new List<Box>(cards);

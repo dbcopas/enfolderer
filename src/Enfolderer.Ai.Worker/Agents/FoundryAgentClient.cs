@@ -78,6 +78,7 @@ public sealed class FoundryAgentClient
         Action<string>? validateReply = null)
     {
         var fileIds = new List<string>();
+        var uploadTimer = Stopwatch.StartNew();
         try
         {
             var content = new List<object> { new { type = "text", text = prompt } };
@@ -103,6 +104,9 @@ public sealed class FoundryAgentClient
                 new { messages = new[] { new { role = "user", content } } },
                 ct);
             var threadId = RequireString(thread, "id", "thread id");
+            _log.LogInformation("Agent {AgentId}: timing uploads_and_thread, thread {ThreadId}, elapsed {ElapsedMs} ms.",
+                agentId, threadId, uploadTimer.ElapsedMilliseconds);
+            var runTimer = Stopwatch.StartNew();
 
             for (var attempt = 0; ; attempt++)
             {
@@ -111,6 +115,8 @@ public sealed class FoundryAgentClient
                 try
                 {
                     validateReply?.Invoke(reply);
+                    _log.LogInformation("Agent {AgentId}: timing runs_and_reply, thread {ThreadId}, elapsed {ElapsedMs} ms.",
+                        agentId, threadId, runTimer.ElapsedMilliseconds);
                     return reply;
                 }
                 catch (Exception ex) when (validateReply is not null
@@ -317,6 +323,22 @@ public sealed class FoundryAgentClient
     }
 
     private async Task<JsonDocument> UploadAsync(AgentImage image, string purpose, CancellationToken ct)
+    {
+        for (var retry = 0; ; retry++)
+        {
+            try { return await UploadOnceAsync(image, purpose, ct); }
+            catch (FoundryAccessException ex) when (ex.StatusCode is 500 or 502 or 503 or 504
+                && retry < MaxServerErrorRetries)
+            {
+                var delay = TimeSpan.FromSeconds(Math.Pow(2, retry));
+                _log.LogWarning("Image upload {FileName} failed with HTTP {Status}; retry {Retry} of {Max} "
+                    + "in {Delay}. {Error}", image.FileName, ex.StatusCode, retry + 1, MaxServerErrorRetries, delay, ex.Message);
+                await Task.Delay(delay, ct);
+            }
+        }
+    }
+
+    private async Task<JsonDocument> UploadOnceAsync(AgentImage image, string purpose, CancellationToken ct)
     {
         var token = await _credential.GetTokenAsync(new TokenRequestContext(Scopes), ct);
 

@@ -27,6 +27,8 @@ RUN if [ "$PROJECT" = "Enfolderer.Ai.Worker" ]; then \
 ENV PROJECT=${PROJECT}
 WORKDIR /app
 COPY --from=build /app .
+RUN if [ "$PROJECT" = "Enfolderer.Ai.Worker" ] || [ "$PROJECT" = "Enfolderer.Ai.Mcp.Imaging" ]; then \
+    dotnet "/app/${PROJECT}.dll" --check-imaging-runtime; fi
 
 # Container Apps sends HTTP to 8080; the aspnet base image already listens there.
 EXPOSE 8080

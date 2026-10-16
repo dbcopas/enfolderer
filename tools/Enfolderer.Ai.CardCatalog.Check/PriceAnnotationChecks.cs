@@ -6,6 +6,7 @@ using Enfolderer.Ai.Imaging;
 using Enfolderer.Ai.Infrastructure.Catalogue;
 using Enfolderer.Ai.Worker.Pipeline;
 using Microsoft.Extensions.Logging.Abstractions;
+using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
@@ -57,10 +58,53 @@ internal static class PriceAnnotationChecks
         var card = new IdentifiedCard
         {
             Index = 0, Game = CardGames.Magic, Set = "clb", CollectorNumber = "240",
-            Name = "Majestic Genesis", Language = "ja", Resolution = "ambiguous",
+            Name = "Majestic Genesis", Language = "ja", Resolution = "ambiguous", Confidence = 0.6,
             Quad = new CardQuad([new(40, 40), new(760, 40), new(760, 1060), new(40, 1060)])
         };
         var store = new OutputStore();
+        var family = SystemFonts.TryGet("DejaVu Sans", out var dejavu) ? dejavu : SystemFonts.Get("Segoe UI Symbol");
+        foreach (var prices in new[]
+        {
+            new CardPrices { Nonfoil = 1, Foil = 3 },
+            new CardPrices { Nonfoil = 123456.78m, Foil = 999999.99m },
+            new CardPrices()
+        })
+        {
+            var text = PricedScanRenderer.DescribeOverlayPrices(prices);
+            if (text.Length == 0)
+            {
+                check(true, "missing prices leave the overlay text empty");
+                continue;
+            }
+            var fitted = PricedScanRenderer.FitOverlayFont(family, text, 291.6f, 57.6f);
+            var bounds = TextMeasurer.MeasureBounds(text, new TextOptions(fitted));
+            var larger = TextMeasurer.MeasureBounds(text, new TextOptions(family.CreateFont(fitted.Size * 1.01f)));
+            check(bounds.Width <= 292 && bounds.Height <= 58
+                && (larger.Width > 291.6f || larger.Height > 57.6f),
+                "measured font fits both dimensions and uses the maximum available space for short, long and missing prices");
+        }
+        check(PricedScanRenderer.DescribeOverlayPrices(new CardPrices { Nonfoil = 1.23m, Foil = 4.56m })
+            == "\u20ac1.23    \u20ac4.56\u2605"
+            && PricedScanRenderer.DescribeOverlayPrices(new CardPrices { Foil = 4.56m }) == "\u20ac4.56\u2605"
+            && PricedScanRenderer.DescribeOverlayPrices(new CardPrices { Nonfoil = 1.23m }) == "\u20ac1.23"
+            && PricedScanRenderer.DescribeOverlayPrices(null) == "",
+            "overlay uses euro symbols and a foil star, preserving missing finishes");
+        IdentifiedCard[] unsorted =
+        [
+            card with { Index = 4, Prices = new CardPrices { Nonfoil = 0 } },
+            card with { Index = 3, Prices = new CardPrices { Foil = 100 } },
+            card with { Index = 2, Prices = new CardPrices { Nonfoil = 5 } },
+            card with { Index = 1, Prices = new CardPrices { Nonfoil = 5 } },
+            card with { Index = 0, Prices = new CardPrices { Nonfoil = 10 } }
+        ];
+        check(PricedScanRenderer.OrderLegendCards(unsorted).Select(c => c.Index).SequenceEqual([0, 1, 2, 4, 3])
+            && unsorted.Select(c => c.Index).SequenceEqual([4, 3, 2, 1, 0]),
+            "legend sorts descending nonfoil, ties in card order, zero before missing, without changing CSV order");
+        check(PricedScanRenderer.OverlayConfidenceColor(card with { Resolution = "confirmed" }) == Color.LimeGreen
+            && PricedScanRenderer.OverlayConfidenceColor(card) == Color.Gold
+            && PricedScanRenderer.OverlayConfidenceColor(card with { Confidence = 0.2 }) == Color.Red
+            && PricedScanRenderer.OverlayConfidenceColor(card with { Name = null }) == Color.Red,
+            "confidence circle is green for placed printings, yellow for review, red for low confidence/unidentified");
         var loneMatch = card with { ArtVerdict = "agrees", ArtMargin = 0 };
         check(!loneMatch.PrintingWasPlaced
             && PricedScanRenderer.DescribePrintingEvidence(loneMatch).Contains("Artwork matches; set/number not established"),
@@ -93,13 +137,30 @@ internal static class PriceAnnotationChecks
             check(png.Width == 800 && png.Height > image.Height && png[0, 0] == image[0, 0]
                 && png[60, 370] != image[60, 370],
                 "output preserves original photo outside labels, draws a price overlay and appends a legend");
+            check(png[373, 385] == Color.Gold.ToPixel<Rgba32>() && png[45, 45] == image[45, 45]
+                && png[399, 340] != image[399, 340] && png[401, 340] == image[401, 340],
+                "price box occupies exactly half the card width, with lower-right circle and no number badge");
+            foreach (var candidate in new[]
+            {
+                card with { Resolution = "confirmed" },
+                card with { Confidence = 0.2 }
+            })
+            {
+                source.Position = 0;
+                using var rendered = new MemoryStream();
+                PricedScanRenderer.Render(source, [candidate with { Prices = result.Cards[0].Prices }], rendered);
+                rendered.Position = 0;
+                using var confidenceImage = Image.Load<Rgba32>(rendered);
+                check(confidenceImage[373, 385] == PricedScanRenderer.OverlayConfidenceColor(candidate).ToPixel<Rgba32>(),
+                    "rendered circle uses the actual green/red match confidence color");
+            }
             check(store.Path == "outputs/price-test/priced.png" && store.ContentType == "image/png",
                 "output uses a job-scoped private container path and PNG content type");
             var roundTrip = JsonSerializer.Deserialize<ScanResultDocument>(JsonSerializer.Serialize(result, ScanJson.Options), ScanJson.Options);
             check(roundTrip?.Cards[0].Prices?.Nonfoil == 1m && roundTrip.AnnotatedImagePath == result.AnnotatedImagePath,
                 "image route and nullable prices/provenance survive API JSON");
             check(PricedScanRenderer.DescribePrices(new CardPrices { Nonfoil = 1.23m, NonfoilLanguage = "en" })
-                .Contains("Foil: N/A"), "one-finish price labels retain N/A instead of borrowing the other finish");
+                .EndsWith("Foil: "), "missing finish labels stay blank without borrowing another finish or showing a star");
             check(PricedScanRenderer.DescribePrices(result.Cards[0].Prices, "ja").Contains("en fallback"),
                 "the image labels an English fallback without changing photographed language");
         }

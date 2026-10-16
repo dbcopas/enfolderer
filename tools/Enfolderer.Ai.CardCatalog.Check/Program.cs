@@ -39,14 +39,15 @@ internal static class Program
         }
         if (args.Length == 5 && args[0] == "--live-reading")
             return LiveReadingCheck.RunAsync(args[1], args[2], args[3], args[4]).GetAwaiter().GetResult();
-        if (args.Length == 5 && args[0] == "--live-boundary")
-            return LiveReadingCheck.RunBoundaryAsync(args[1], args[2], args[3], args[4]).GetAwaiter().GetResult();
+        if (args.Length is 5 or 6 && args[0] == "--live-boundary")
+            return LiveReadingCheck.RunBoundaryAsync(args[1], args[2], args[3], args[4],
+                args.Length == 6 ? args[5] : null).GetAwaiter().GetResult();
         if (args.Length > 0 && (args[0] is not ("--photo-art" or "--photo-multilingual" or "--photo-boundaries") || args.Length > 2))
         {
             Console.Error.WriteLine("Usage: Enfolderer.Ai.CardCatalog.Check [--photo-art|--photo-multilingual|--photo-boundaries [training-directory]] "
                 + "or --price-render-check <synthetic-preview.png> "
                 + "or --live-reading <project-endpoint> <agent-id> <page-directory> <comma-separated-indices> "
-                + "or --live-boundary <project-endpoint> <agent-id> <page-directory> <blob-path>");
+                + "or --live-boundary <project-endpoint> <agent-id> <page-directory> <blob-path> [crop-directory]");
             return 2;
         }
         NumberReadingChecks();

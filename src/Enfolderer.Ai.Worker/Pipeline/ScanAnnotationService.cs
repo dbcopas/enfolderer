@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Imaging;
@@ -11,6 +12,7 @@ public sealed class ScanAnnotationService(
 {
     public async Task<ScanResultDocument> CreateAsync(ScanResultDocument result, Stream source, CancellationToken ct)
     {
+        var timer = Stopwatch.StartNew();
         var enriched = new List<IdentifiedCard>();
         var cache = new Dictionary<(string Set, string Number, string Language), CardPrices>();
         foreach (var card in result.Cards)
@@ -43,13 +45,18 @@ public sealed class ScanAnnotationService(
             enriched.Add(updated);
         }
         result = result with { Cards = enriched };
+        log.LogInformation("Job {JobId}: timing pricing, elapsed {ElapsedMs} ms.", result.JobId, timer.ElapsedMilliseconds);
         try
         {
+            timer.Restart();
             source.Position = 0;
             using var png = new MemoryStream();
             PricedScanRenderer.Render(source, enriched, png);
+            log.LogInformation("Job {JobId}: timing rendering, elapsed {ElapsedMs} ms.", result.JobId, timer.ElapsedMilliseconds);
             png.Position = 0;
+            timer.Restart();
             await images.WriteAsync(ScanBlobPaths.BuildAnnotatedBlobPath(result.JobId), png, "image/png", ct);
+            log.LogInformation("Job {JobId}: timing image_store, elapsed {ElapsedMs} ms.", result.JobId, timer.ElapsedMilliseconds);
             return result with { AnnotatedImagePath = $"jobs/{Uri.EscapeDataString(result.JobId)}/annotated-image" };
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)

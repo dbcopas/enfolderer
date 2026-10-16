@@ -1,4 +1,5 @@
 using Azure.Identity;
+using System.Text.Json;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Imaging;
 using Enfolderer.Ai.Worker.Agents;
@@ -8,12 +9,17 @@ namespace Enfolderer.Ai.CardCatalog.Check;
 
 internal static class LiveReadingCheck
 {
-    public static async Task<int> RunBoundaryAsync(string endpoint, string agentId, string directory, string blobPath)
+    public static async Task<int> RunBoundaryAsync(string endpoint, string agentId, string directory, string blobPath,
+        string? outputDirectory = null)
     {
-        var expectedCount = File.ReadAllLines(Path.Combine(directory, "cards.txt"))
-            .Count(l => !string.IsNullOrWhiteSpace(l));
+        var listing = Path.Combine(directory, "cards.txt");
         using var source = File.OpenRead(Path.Combine(directory, "image.jpg"));
         var size = PerspectiveCropper.ReadDimensions(source);
+        source.Position = 0;
+        var expectedRegions = File.Exists(Path.Combine(directory, "boundaries.json"))
+            ? FoundryCardBoundaryAgent.ParseBoundaries(await File.ReadAllTextAsync(Path.Combine(directory, "boundaries.json")),
+                size.Width, size.Height) : null;
+        var expectedCount = expectedRegions?.Count ?? File.ReadAllLines(listing).Count(l => !string.IsNullOrWhiteSpace(l));
         using var bytes = new MemoryStream();
         await source.CopyToAsync(bytes);
         using var http = new HttpClient();
@@ -24,7 +30,37 @@ internal static class LiveReadingCheck
         var boundaries = await agent.DetectAsync(new AgentImage(bytes.ToArray(), "image.jpg", "image/jpeg"),
             blobPath, size.Width, size.Height);
         Console.WriteLine($"Live boundary adapter check: {boundaries.Count}/{expectedCount} retained candidates; valid quads.");
-        return boundaries.Count == expectedCount ? 0 : 1;
+        var matched = expectedRegions is null ? expectedCount : expectedRegions.Count(expected =>
+            boundaries.Count(actual => Overlap(expected.Quad, actual.Quad) > 0.75) == 1);
+        Console.WriteLine($"Whole-card geometry: {matched}/{expectedCount} match annotated physical-card regions.");
+        if (outputDirectory is not null)
+        {
+            Directory.CreateDirectory(outputDirectory);
+            await File.WriteAllTextAsync(Path.Combine(outputDirectory, "boundaries.json"), JsonSerializer.Serialize(new
+            {
+                cards = boundaries.Select(b => new
+                {
+                    quad = new { points = b.Quad.Points.Select(p => new { x = p.X, y = p.Y }) },
+                    confidence = b.Confidence, gameHint = b.GameHint
+                })
+            }));
+            for (var i = 0; i < boundaries.Count; i++)
+            {
+                source.Position = 0;
+                using var crop = File.Create(Path.Combine(outputDirectory, $"card-{i:D2}.png"));
+                PerspectiveCropper.CropToPng(source, boundaries[i].Quad, crop);
+            }
+        }
+        return boundaries.Count == expectedCount && matched == expectedCount ? 0 : 1;
+    }
+
+    private static double Overlap(CardQuad first, CardQuad second)
+    {
+        var a = first.BoundingBox();
+        var b = second.BoundingBox();
+        var intersection = Math.Max(0, Math.Min(a.X + a.Width, b.X + b.Width) - Math.Max(a.X, b.X))
+            * Math.Max(0, Math.Min(a.Y + a.Height, b.Y + b.Height) - Math.Max(a.Y, b.Y));
+        return intersection / (a.Width * a.Height + b.Width * b.Height - intersection);
     }
 
     public static async Task<int> RunAsync(string endpoint, string agentId, string directory, string indices)

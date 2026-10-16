@@ -18,6 +18,7 @@ internal static class ScanReliabilityChecks
 {
     public static async Task RunOfflineAsync(Action<bool, string> check)
     {
+        BoundaryOrientationChecks(check);
         Console.WriteLine("\nAuthoritative measured geometry");
         static CardQuad Box(double x) => new([new(x, 0), new(x + 100, 0), new(x + 100, 140), new(x, 140)]);
         var first = Box(0);
@@ -41,6 +42,41 @@ internal static class ScanReliabilityChecks
 
         await LanguageChecksAsync(check);
         await FinishChecksAsync(check);
+        await ConcurrencyChecks.RunAsync(check);
+        foreach (var status in new[] { HttpStatusCode.InternalServerError, HttpStatusCode.ServiceUnavailable,
+            HttpStatusCode.BadRequest, HttpStatusCode.Forbidden })
+        {
+            using var uploadHandler = new RunHandler(["completed"], uploadFailure: status, uploadFailures: 1);
+            using var uploadHttp = new HttpClient(uploadHandler);
+            var uploadLog = new ListLogger<FoundryAgentClient>();
+            try
+            {
+                var reply = await Client(uploadHttp, uploadLog).RunAsync("agent", "identify", Image(), "catalogue", default);
+                check(reply == "identified" && uploadHandler.Uploads == 2 && uploadHandler.Runs == 1
+                    && uploadHandler.Deletes == 1, "transient upload or purpose rejection recovers before identification");
+            }
+            catch (FoundryAccessException ex)
+            {
+                check(status == HttpStatusCode.Forbidden && ex.StatusCode == 403 && uploadHandler.Uploads == 1,
+                    "upload authorization failures are not retried");
+            }
+        }
+        using (var uploadHandler = new RunHandler(["completed"], uploadFailure: HttpStatusCode.InternalServerError,
+            uploadFailures: 5))
+        using (var uploadHttp = new HttpClient(uploadHandler))
+        {
+            try
+            {
+                await Client(uploadHttp, new ListLogger<FoundryAgentClient>())
+                    .RunAsync("agent", "identify", Image(), "catalogue", default);
+                check(false, "persistent upload failures must fail");
+            }
+            catch (FoundryAccessException ex)
+            {
+                check(ex.StatusCode == 500 && uploadHandler.Uploads == 3 && uploadHandler.Runs == 0,
+                    "persistent upload errors stop after two retries without running identification");
+            }
+        }
         Console.WriteLine("\nResolution-specific diagnostic explanations");
         var ambiguousExplanation = ScanJobProcessor.DescribeResolution(new IdentifiedCard
         {
@@ -289,12 +325,47 @@ internal static class ScanReliabilityChecks
         check(distant.Verdict == ArtVerdict.Inconclusive, "an unrelated picture still fails the unchanged distance gate");
     }
 
+    private static void BoundaryOrientationChecks(Action<bool, string> check)
+    {
+        Console.WriteLine("\nBoundary image pixel-coordinate contract");
+        using var source = new Image<Rgba32>(64, 32);
+        for (var y = 0; y < source.Height; y++)
+        for (var x = 0; x < source.Width; x++)
+            source[x, y] = new Rgba32((byte)(x * 4), (byte)(y * 8), (byte)(x + y));
+
+        for (ushort orientation = 2; orientation <= 8; orientation++)
+        {
+            source.Metadata.ExifProfile = new SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifProfile();
+            source.Metadata.ExifProfile.SetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Orientation, orientation);
+            using var jpeg = new MemoryStream();
+            source.SaveAsJpeg(jpeg);
+            var original = new AgentImage(jpeg.ToArray(), "photo.jpg", "image/jpeg");
+            var prepared = FoundryCardBoundaryAgent.WithoutDisplayRotation(original);
+            using var before = SixLabors.ImageSharp.Image.Load<Rgba32>(original.Content.Span);
+            using var after = SixLabors.ImageSharp.Image.Load<Rgba32>(prepared.Content.Span);
+            check(after.Width == before.Width && after.Height == before.Height
+                && Enumerable.Range(0, before.Height).All(y => Enumerable.Range(0, before.Width)
+                    .All(x => before[x, y] == after[x, y])),
+                $"EXIF {orientation}: vision receives the exact raw pixels used by the detector and cropper");
+            check(after.Metadata.ExifProfile?.GetValue(
+                SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Orientation) is null
+                && prepared.ContentType == "image/png" && prepared.FileName == "photo.png",
+                $"EXIF {orientation}: display rotation is removed without rotating or mirroring the image");
+        }
+        source.Metadata.ExifProfile = null;
+        using var png = new MemoryStream();
+        source.SaveAsPng(png);
+        var plain = new AgentImage(png.ToArray(), "plain.png", "image/png");
+        check(ReferenceEquals(plain, FoundryCardBoundaryAgent.WithoutDisplayRotation(plain)),
+            "images without display rotation retain their original encoded content");
+    }
+
     public static async Task RunBoundaryPhotosAsync(Action<bool, string> check, string? trainingDirectory)
     {
-        Console.WriteLine("\nReal photographs 01-06: measured regions survive empty agent responses");
+        Console.WriteLine("\nReal photographs 01-07: measured regions survive empty agent responses");
         var root = trainingDirectory ?? FindTrainingDirectory();
         var total = 0;
-        for (var page = 1; page <= 6; page++)
+        for (var page = 1; page <= 7; page++)
         {
             var directory = Path.Combine(root, page.ToString("00"));
             var bytes = await File.ReadAllBytesAsync(Path.Combine(directory, "image.jpg"));
@@ -308,13 +379,59 @@ internal static class ScanReliabilityChecks
             var agent = new FoundryCardBoundaryAgent(Client(http, new ListLogger<FoundryAgentClient>()), "agent", log);
             var boundaries = await agent.DetectAsync(new AgentImage(bytes, "image.jpg", "image/jpeg"),
                 "scans/test/image.jpg", dimensions.Width, dimensions.Height);
-            check(boundaries.Count == expected && boundaries.All(b => b.Quad.IsValid),
+            check(boundaries.Count == expected && boundaries.All(b => b.Quad.IsValid
+                && b.Quad.Points.All(p => p.X >= 0 && p.Y >= 0 && p.X < dimensions.Width && p.Y < dimensions.Height)),
                 $"page {page:00}: {boundaries.Count}/{expected} measured regions reach the real boundary adapter");
             check(log.Lines.Any(l => l.Contains("Measured regions are authoritative")),
                 $"page {page:00}: omitted metadata is explicitly logged");
+            if (page == 7)
+            {
+                check(log.Lines.Any(l => l.Contains("Physical-card recovery") && l.Contains("10 whole-card")),
+                    "loose-card recovery is explicitly logged instead of silently trusting artwork fragments");
+                var references = FoundryCardBoundaryAgent.ParseBoundaries(
+                    await File.ReadAllTextAsync(Path.Combine(directory, "boundaries.json")), dimensions.Width, dimensions.Height);
+                for (var index = 0; index < references.Count; index++)
+                {
+                    var reference = references[index].Quad;
+                    if (index >= boundaries.Count) { check(false, $"page 07 card {index}: missing physical card"); continue; }
+                    var actual = boundaries[index].Quad;
+                    var a = actual.BoundingBox();
+                    var b = reference.BoundingBox();
+                    var intersection = Math.Max(0, Math.Min(a.X + a.Width, b.X + b.Width) - Math.Max(a.X, b.X))
+                        * Math.Max(0, Math.Min(a.Y + a.Height, b.Y + b.Height) - Math.Max(a.Y, b.Y));
+                    var iou = intersection / (a.Width * a.Height + b.Width * b.Height - intersection);
+                    check(iou >= 0.75 && intersection / (b.Width * b.Height) >= 0.9,
+                        $"page 07 card {index}: whole physical card in reading order (IoU {iou:F3}, coverage {intersection / (b.Width * b.Height):P1})");
+                    foreach (var position in new[] { (X: 0.25, Y: 0.07), (X: 0.15, Y: 0.96) })
+                    {
+                        var p = reference.Points;
+                        var target = new ImagePoint(
+                            p[0].X * (1 - position.X) * (1 - position.Y) + p[1].X * position.X * (1 - position.Y)
+                            + p[2].X * position.X * position.Y + p[3].X * (1 - position.X) * position.Y,
+                            p[0].Y * (1 - position.X) * (1 - position.Y) + p[1].Y * position.X * (1 - position.Y)
+                            + p[2].Y * position.X * position.Y + p[3].Y * (1 - position.X) * position.Y);
+                        var cross = Enumerable.Range(0, 4).Select(i =>
+                        {
+                            var first = actual.Points[i];
+                            var second = actual.Points[(i + 1) % 4];
+                            return (second.X - first.X) * (target.Y - first.Y) - (second.Y - first.Y) * (target.X - first.X);
+                        }).ToList();
+                        check(cross.All(c => c >= 0) || cross.All(c => c <= 0),
+                            $"page 07 card {index}: {(position.Y < 0.5 ? "title" : "collector/language footer")} stays inside the actual crop quad");
+                    }
+                }
+            }
             total += boundaries.Count;
         }
-        check(total == 47, $"all six photos retain 47/47 measured candidates (actual {total})");
+        check(total == 57, $"all seven photos retain 57/57 measured candidates (actual {total})");
+        foreach (var color in new[] { Color.Black, Color.White })
+        {
+            using var blank = new SixLabors.ImageSharp.Image<Rgba32>(256, 192, color);
+            using var encoded = new MemoryStream();
+            blank.SaveAsPng(encoded);
+            encoded.Position = 0;
+            check(CardDetector.Detect(encoded).Count == 0, $"blank {color} surface does not invent a card grid");
+        }
     }
 
     public static async Task RunPhotoAsync(Action<bool, string> check, string? trainingDirectory)
@@ -672,7 +789,8 @@ internal static class ScanReliabilityChecks
     }
 
     private sealed class RunHandler(string[] outcomes, HttpStatusCode? startFailure = null,
-        string[]? replies = null, bool splitReply = false) : HttpMessageHandler
+        string[]? replies = null, bool splitReply = false,
+        HttpStatusCode? uploadFailure = null, int uploadFailures = 0) : HttpMessageHandler
     {
         public int Runs { get; private set; }
         public int Threads { get; private set; }
@@ -687,7 +805,13 @@ internal static class ScanReliabilityChecks
             var path = request.RequestUri!.AbsolutePath;
             string json;
             if (request.Method == HttpMethod.Delete) { Deletes++; json = "{}"; }
-            else if (path == "/files") { Uploads++; json = """{"id":"file-1"}"""; }
+            else if (path == "/files")
+            {
+                Uploads++;
+                if (uploadFailure is not null && Uploads <= uploadFailures)
+                    return new HttpResponseMessage(uploadFailure.Value) { Content = new StringContent("{}") };
+                json = """{"id":"file-1"}""";
+            }
             else if (path == "/threads")
             {
                 Threads++;
