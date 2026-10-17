@@ -12,6 +12,45 @@ internal static class FoundryResponseChecks
     public static async Task RunAsync(Action<bool, string> check)
     {
         Console.WriteLine("\nFoundry agent-identity Responses transport");
+        using (var handler = new FlowHandler(pollDelay: TimeSpan.FromMilliseconds(100)))
+        using (var http = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(20) })
+        {
+            var reply = await Client(http).RunAsync("CardAgent", "identify", null, "catalogue", default);
+            check(reply == "identified" && handler.Deletes == 2,
+                "a slow Foundry request outlives the HTTP timeout but completes within the agent deadline");
+        }
+        using (var handler = new FlowHandler(pollDelay: TimeSpan.FromSeconds(10)))
+        using (var http = new HttpClient(handler))
+        {
+            try
+            {
+                await Client(http, TimeSpan.FromMilliseconds(100)).RunAsync(
+                    "CardAgent", "identify", null, "catalogue", default);
+                check(false, "a stalled HTTP request must respect the agent deadline");
+            }
+            catch (TimeoutException ex)
+            {
+                check(ex.Message.Contains("CardAgent") && handler.Cancels == 1 && handler.Deletes == 1,
+                    "agent deadline interrupts a stalled HTTP request and cleans up the background response");
+            }
+        }
+        using (var handler = new FlowHandler(pollDelay: TimeSpan.FromSeconds(10)))
+        using (var http = new HttpClient(handler))
+        using (var cancellation = new CancellationTokenSource())
+        {
+            var run = Client(http).RunAsync("CardAgent", "identify", null, "catalogue", cancellation.Token);
+            cancellation.Cancel();
+            try
+            {
+                await run;
+                check(false, "caller cancellation must interrupt the request");
+            }
+            catch (OperationCanceledException)
+            {
+                check(handler.Cancels == 1 && handler.Deletes == 1,
+                    "caller cancellation remains cancellation and cleanup uses an independent token");
+            }
+        }
         using (var handler = new FlowHandler())
         using (var http = new HttpClient(handler))
         {
@@ -114,7 +153,8 @@ internal static class FoundryResponseChecks
     }
 
     private sealed class FlowHandler(string label = "catalogue", bool malformed = false,
-        HttpStatusCode? failure = null, bool toolError = false, bool pending = false) : HttpMessageHandler
+        HttpStatusCode? failure = null, bool toolError = false, bool pending = false,
+        TimeSpan pollDelay = default) : HttpMessageHandler
     {
         public int Creates { get; private set; }
         public int Deletes { get; private set; }
@@ -160,6 +200,7 @@ internal static class FoundryResponseChecks
             else
             {
                 Polls++;
+                if (pollDelay > TimeSpan.Zero) await Task.Delay(pollDelay, ct);
                 if (pending || Polls == 1)
                     json = """{"status":"in_progress"}""";
                 else if (_responses == 1)

@@ -71,8 +71,7 @@ public static class PricedScanRenderer
             var top = photo.Height + footerHeight + rowHeight * i;
             var title = $"{label}. {card.Name ?? "Unidentified"} | {card.Set} {card.CollectorNumber} | {card.Language}";
             var text = $"{Fit(title, photo.Width, size)}\n{DescribePriceTarget(card)}\n"
-                + $"{DescribePrices(card.Prices, card.Language)}\n{DescribePrintingEvidence(card)}\n"
-                + $"Finish: {card.Finish ?? "unknown"}";
+                + $"{DescribePrices(card.Prices, card.Language)}\n{DescribePrintingEvidence(card)}";
             canvas.Mutate(c => c.DrawText(text, font, Color.Black, new PointF(size, top)));
         }
         var retrieved = cards.Select(c => c.Prices?.RetrievedAt).FirstOrDefault(d => d.HasValue);

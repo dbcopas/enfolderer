@@ -41,7 +41,7 @@ internal static class ScanReliabilityChecks
             "duplicate agent matches do not guess orientation or game metadata");
 
         await LanguageChecksAsync(check);
-        await FinishChecksAsync(check);
+        await FooterDetailChecksAsync(check);
         await ConcurrencyChecks.RunAsync(check);
         foreach (var status in new[] { HttpStatusCode.InternalServerError, HttpStatusCode.ServiceUnavailable,
             HttpStatusCode.BadRequest, HttpStatusCode.Forbidden })
@@ -171,55 +171,9 @@ internal static class ScanReliabilityChecks
             }
         }
 
-        static async Task FinishChecksAsync(Action<bool, string> check)
+        static async Task FooterDetailChecksAsync(Action<bool, string> check)
         {
-            Console.WriteLine("\nFinish determined from the printing marker");
-            var crop = new CardCrop(0, Image(),
-                new CardQuad([new(0, 0), new(1, 0), new(1, 1), new(0, 1)]), CardGames.Magic);
-            IdentifiedCard Parse(string fields, string game = CardGames.Magic) =>
-                FoundryCardIdentificationAgent.ParseIdentification(
-                    "{\"set\":\"sos\",\"collectorNumber\":\"80\",\"name\":\"Card\"," + fields + "}",
-                    crop, game, "test-agent");
-            var star = Parse("\"finishMarker\":\"star\",\"finishConfidence\":0.9,\"finish\":\"nonfoil\"");
-            check(star.Finish == "foil" && star.FinishEvidence == "set_language_marker",
-                "a reliable star overrules a contradictory model finish");
-            var dot = Parse("\"finishMarker\":\"dot\",\"finishConfidence\":0.8,\"finish\":\"foil\"");
-            check(dot.Finish == "nonfoil", "a reliable dot means nonfoil at the confidence boundary");
-            var blurred = Parse("\"finishMarker\":\"star\",\"finishConfidence\":0.79,\"finish\":\"foil\"");
-            check(blurred.Finish is null && blurred.FinishEvidence == "unknown",
-                "a blurred marker below the confidence gate remains unknown");
-            check(Parse("\"finishMarker\":\"unknown\",\"finishConfidence\":1,\"finish\":\"nonfoil\"").Finish is null,
-                "an unreadable marker cannot silently establish nonfoil");
-            check(Parse("\"finishMarker\":\"absent\",\"finishConfidence\":1,\"finish\":\"nonfoil\"").Finish is null,
-                "a frame without this marker cannot establish nonfoil");
-            check(Parse("\"finish\":\"nonfoil\"").Finish is null, "legacy MTG replies without finish evidence remain unknown");
-            check(Parse("\"finishMarker\":\"star\",\"finishConfidence\":\"high\"").Finish is null,
-                "invalid confidence cannot endorse a finish");
-            check(Parse("\"finishMarker\":\"star\",\"finishConfidence\":0.9,\"finish\":\"etched\"").Finish == "foil",
-                "a star alone does not claim an etched finish");
-            var old = Parse("\"finishMarker\":\"absent\",\"finishEvidence\":\"visual\",\"finishConfidence\":0.9,\"finish\":\"foil\"");
-            check(old.Finish == "foil" && old.FinishEvidence == "visual",
-                "clearly visible foil on an older frame retains separately labelled visual evidence");
-            var shootingStar = Parse("\"finishMarker\":\"absent\",\"finishEvidence\":\"shooting_star_watermark\",\"finishConfidence\":0.8,\"finish\":\"nonfoil\"");
-            check(shootingStar.Finish == "foil" && shootingStar.FinishEvidence == "shooting_star_watermark"
-                && shootingStar.FinishMarker == "absent",
-                "an old-frame shooting-star watermark establishes foil without a footer marker or sheen");
-            check(Parse("\"finishMarker\":\"absent\",\"finishEvidence\":\"shooting_star_watermark\",\"finishConfidence\":0.9,\"finish\":\"etched\"").Finish == "foil",
-                "a shooting-star watermark does not establish etched foil");
-            check(Parse("\"finishMarker\":\"absent\",\"finishEvidence\":\"shooting_star_watermark\",\"finishConfidence\":0.79,\"finish\":\"foil\"").Finish is null,
-                "an uncertain shooting-star watermark remains unknown");
-            check(Parse("\"finishMarker\":\"unknown\",\"finishEvidence\":\"shooting_star_watermark\",\"finishConfidence\":1,\"finish\":\"foil\"").Finish is null,
-                "shooting-star evidence requires an explicitly absent footer marker");
-            var oldRoundTrip = JsonSerializer.Deserialize<IdentifiedCard>(
-                JsonSerializer.Serialize(shootingStar, ScanJson.Options), ScanJson.Options);
-            check(oldRoundTrip?.FinishEvidence == "shooting_star_watermark" && oldRoundTrip.Finish == "foil",
-                "shooting-star evidence survives result JSON");
-            check(Parse("\"finish\":\"foil\"", CardGames.Pokemon).Finish == "foil",
-                "non-MTG finish parsing is unchanged");
-            var roundTrip = JsonSerializer.Deserialize<IdentifiedCard>(JsonSerializer.Serialize(star, ScanJson.Options), ScanJson.Options);
-            check(roundTrip is not null && roundTrip.Finish == "foil" && roundTrip.FinishMarker == "star"
-                && roundTrip.FinishConfidence == 0.9, "finish evidence survives result JSON");
-
+            Console.WriteLine("\nEnlarged footer identification details");
             using var image = new Image<Rgba32>(100, 200, new Rgba32(255, 0, 0));
             for (var y = 150; y < 200; y++)
             for (var x = 0; x < 65; x++) image[x, y] = new Rgba32(0, 255, 0);
@@ -674,6 +628,14 @@ internal static class ScanReliabilityChecks
             JsonSerializer.Serialize(japanese, ScanJson.Options), ScanJson.Options);
         check(roundTrip?.ReadName == japaneseTitle && roundTrip.ReadLanguage == "ja",
             "photographed title and footer language survive result JSON");
+        foreach (var game in new[] { CardGames.Magic, CardGames.Pokemon, CardGames.YuGiOh, CardGames.Lorcana })
+        {
+            var identified = Parse(valid, game);
+            using var wire = JsonDocument.Parse(JsonSerializer.Serialize(identified, ScanJson.Options));
+            check(identified.IsIdentified && identified.Set == "clb" && identified.CollectorNumber == "240"
+                && !wire.RootElement.EnumerateObject().Any(p => p.Name.StartsWith("finish", StringComparison.OrdinalIgnoreCase)),
+                $"{game}: identity results do not emit unrequested treatment fields");
+        }
 
         using (var handler = new RunHandler(["completed"], replies: [wrong, valid]))
         using (var http = new HttpClient(handler))

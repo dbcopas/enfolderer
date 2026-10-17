@@ -54,6 +54,8 @@ public sealed partial class FoundryAgentClient
         _throttleRetries = throttleRetries >= 0 ? throttleRetries : 0;
         _throttleBackoff = throttleBackoff > TimeSpan.Zero ? throttleBackoff : TimeSpan.FromSeconds(10);
         _useResponses = useResponses;
+        // Responses requests share the run deadline; cleanup has its own bounded token.
+        if (_useResponses) _http.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     /// <summary>Project endpoint this client talks to; useful in error messages during the demo.</summary>

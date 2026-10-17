@@ -25,7 +25,7 @@ public static class BinderScanService
     /// catalogue's English name, so this is the only record of which printing it was: a Japanese
     /// card and its English reprint share a name, a set and a number.
     /// </param>
-    public record ScannedCard(string Set, string Number, string Name, string Language = "en", string? Finish = null);
+    public record ScannedCard(string Set, string Number, string Name, string Language = "en");
     /// <param name="CardsWithoutNumber">
     /// How many of <paramref name="CardsFound"/> were exported with an empty number column. Those
     /// rows name a real card and are worth keeping, but the number is the one field nobody can
@@ -49,10 +49,18 @@ public static class BinderScanService
     public record ScanResult(
         int ImagesProcessed, int CardsFound, int LookupFailures, string OutputPath, int CardsWithoutNumber = 0,
         IReadOnlyList<string>? UnplacedCards = null, IReadOnlyList<string>? CardsMovedByArt = null,
-        IReadOnlyList<string>? CardsWithoutFinish = null,
         IReadOnlyList<string>? AnnotatedImages = null, IReadOnlyList<string>? AnnotationWarnings = null);
 
     private static readonly string[] ImageExtensions = [".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"];
+
+    internal static string DefaultOutputPath(string directory, DateTime timestamp)
+    {
+        var stem = $"scanned_cards_{timestamp:yyyyMMdd_HHmmss}";
+        var path = Path.Combine(directory, stem + ".csv");
+        for (var suffix = 2; File.Exists(path); suffix++)
+            path = Path.Combine(directory, $"{stem}_{suffix}.csv");
+        return path;
+    }
 
     /// <summary>Scans a single image and writes the CSV. This is the primary entry point.</summary>
     public static Task<ScanResult> ScanImageAsync(
@@ -67,7 +75,7 @@ public static class BinderScanService
         if (!File.Exists(imagePath))
             throw new FileNotFoundException("Image not found.", imagePath);
 
-        outputPath ??= Path.ChangeExtension(imagePath, ".scanned_cards.csv");
+        outputPath ??= DefaultOutputPath(Path.GetDirectoryName(Path.GetFullPath(imagePath))!, DateTime.Now);
         return ScanImagesAsync([imagePath], config, outputPath, gameHint, statusCallback, progressCallback, ct);
     }
 
@@ -92,7 +100,7 @@ public static class BinderScanService
         if (imageFiles.Count == 0)
             throw new InvalidOperationException("No image files found in the selected folder.");
 
-        outputPath ??= Path.Combine(folderPath, "scanned_cards.csv");
+        outputPath ??= DefaultOutputPath(Path.GetFullPath(folderPath), DateTime.Now);
         return ScanImagesAsync(imageFiles, config, outputPath, gameHint, statusCallback, progressCallback, ct);
     }
 
@@ -115,7 +123,6 @@ public static class BinderScanService
         var withoutNumber = 0;
         var unplaced = new List<string>();
         var movedByArt = new List<string>();
-        var withoutFinish = new List<string>();
         var annotatedImages = new List<string>();
         var annotationWarnings = new List<string>();
         var imageResults = new List<(string Source, ScanResultDocument Result)>();
@@ -135,8 +142,6 @@ public static class BinderScanService
             imageResults.Add((file, result));
 
             allCards.AddRange(AiScanClient.MapCards(result));
-            withoutFinish.AddRange(result.Cards.Where(c => c.IsIdentified
-                && c.Finish is not ("nonfoil" or "foil" or "etched")).Select(c => c.Name!));
             unidentified += result.Cards.Count(c => !c.IsIdentified);
             withoutNumber += result.Cards.Count(c => c.IsIdentified && !c.HasPrinting);
             unplaced.AddRange(result.Cards
@@ -152,6 +157,12 @@ public static class BinderScanService
         File.WriteAllLines(outputPath, allCards.Select(BuildCsvRow));
 
         // Save the CSV first: an optional download must not lose successfully identified cards.
+        Collection.ScanOwnershipIndex? inventory = null;
+        try { inventory = new Collection.ScanOwnershipIndex(AppContext.BaseDirectory); }
+        catch (Exception ex) when (ex is IOException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            annotationWarnings.Add($"Local ownership unavailable: {ex.Message}");
+        }
         foreach (var (file, result) in imageResults)
         {
             if (result.AnnotationError is not null)
@@ -166,6 +177,16 @@ public static class BinderScanService
             {
                 await client.DownloadAnnotatedImageAsync(result, imageOutput, ct);
                 annotatedImages.Add(imageOutput);
+                try
+                {
+                    annotationWarnings.AddRange(Imaging.ScanOwnershipRenderer.Render(imageOutput, result, inventory)
+                        .Select(warning => $"{Path.GetFileName(file)}: {warning}"));
+                }
+                catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException
+                    or NotSupportedException)
+                {
+                    annotationWarnings.Add($"{Path.GetFileName(file)}: ownership annotation failed: {ex.Message}");
+                }
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidOperationException
                 || ex is OperationCanceledException && !ct.IsCancellationRequested)
@@ -175,7 +196,7 @@ public static class BinderScanService
         }
 
         return new ScanResult(
-            imageFiles.Count, allCards.Count, unidentified, outputPath, withoutNumber, unplaced, movedByArt, withoutFinish,
+            imageFiles.Count, allCards.Count, unidentified, outputPath, withoutNumber, unplaced, movedByArt,
             annotatedImages, annotationWarnings);
     }
 
@@ -183,24 +204,16 @@ public static class BinderScanService
         $"Scan saved: {result.CardsFound} cards from {result.ImagesProcessed} image(s); "
         + $"{result.LookupFailures} unidentified, {result.CardsWithoutNumber} missing numbers, "
         + $"{result.UnplacedCards?.Count ?? 0} printings need review, "
-        + $"{result.CardsWithoutFinish?.Count ?? 0} finishes unknown, "
         + $"{result.CardsMovedByArt?.Count ?? 0} moved by art; {result.AnnotatedImages?.Count ?? 0} priced images, "
         + $"{result.AnnotationWarnings?.Count ?? 0} image/price warnings. {Path.GetFileName(result.OutputPath)}";
 
     /// <summary>
     /// One CSV row in the shape the importer already understands:
     /// <c>edition;number;modifier;language;name</c>.
+    /// The modifier column is empty for compatibility; scanning does not assign it.
     /// </summary>
     internal static string BuildCsvRow(ScannedCard card) =>
-        $"{card.Set};{card.Number};{FinishModifier(card.Finish)};{Normalise(card.Language)};{card.Name}";
-
-    private static string FinishModifier(string? finish) => finish?.Trim().ToLowerInvariant() switch
-    {
-        "foil" => "foil",
-        "etched" => "etched",
-        null or "" or "unknown" or "nonfoil" => string.Empty,
-        _ => throw new InvalidOperationException($"Unsupported scan finish '{finish}'.")
-    };
+        $"{card.Set};{card.Number};;{Normalise(card.Language)};{card.Name}";
 
     /// <summary>
     /// The language column only ever holds a two-letter code; anything else — a blank, or a model

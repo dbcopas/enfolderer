@@ -32,7 +32,8 @@ internal static class PriceAnnotationChecks
             var result = await new ScryfallPriceClient(http).GetAsync("clb", "240", "JP", default);
             check(result.Nonfoil == item.Nf && result.Foil == item.Foil
                 && result.NonfoilLanguage == item.NfLang && result.FoilLanguage == item.FoilLang
-                && handler.Paths.Count == item.Requests && result.Error is null,
+                && handler.Paths.Count == item.Requests && result.Error is null
+                && result.Layout == "normal" && result.CardName == "Majestic Genesis",
                 $"independent finish fallback: local {item.LocalNf ?? "N/A"}/{item.LocalFoil ?? "N/A"}, "
                 + $"English {item.EnglishNf ?? "N/A"}/{item.EnglishFoil ?? "N/A"}");
             check(handler.Paths[0].EndsWith("/clb/240/ja")
@@ -167,8 +168,9 @@ internal static class PriceAnnotationChecks
             check(store.Path == "outputs/price-test/priced.png" && store.ContentType == "image/png",
                 "output uses a job-scoped private container path and PNG content type");
             var roundTrip = JsonSerializer.Deserialize<ScanResultDocument>(JsonSerializer.Serialize(result, ScanJson.Options), ScanJson.Options);
-            check(roundTrip?.Cards[0].Prices?.Nonfoil == 1m && roundTrip.AnnotatedImagePath == result.AnnotatedImagePath,
-                "image route and nullable prices/provenance survive API JSON");
+            check(roundTrip?.Cards[0].Prices?.Nonfoil == 1m && roundTrip.AnnotatedImagePath == result.AnnotatedImagePath
+                && roundTrip.Cards[0].Prices?.Layout == "normal" && roundTrip.Cards[0].Prices?.CardName == "Majestic Genesis",
+                "image route, nullable prices, layout and catalogue name survive API JSON");
             check(PricedScanRenderer.DescribePrices(new CardPrices { Nonfoil = 1.23m, NonfoilLanguage = "en" })
                 .EndsWith("Foil: "), "missing finish labels stay blank without borrowing another finish or showing a star");
             check(PricedScanRenderer.DescribePrices(result.Cards[0].Prices, "ja").Contains("en fallback"),
@@ -241,6 +243,7 @@ internal static class PriceAnnotationChecks
             var json = rawJson ?? JsonSerializer.Serialize(new
             {
                 set = "clb", collector_number = wrongPrinting ? "999" : "240", lang = foreign ? "ja" : "en",
+                layout = "normal", name = "Majestic Genesis",
                 prices = new { eur = foreign ? localNf : englishNf, eur_foil = foreign ? localFoil : englishFoil, usd = "99.00" }
             });
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)

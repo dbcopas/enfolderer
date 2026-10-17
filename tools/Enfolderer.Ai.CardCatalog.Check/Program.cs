@@ -510,6 +510,14 @@ internal static class Program
         var pokemon = FoundryCardIdentificationAgent.BuildPrompt(GameAgentProfile.Pokemon);
         Check(!pokemon.Contains("resolve_printing"), "a game without the tool is not told to call it");
         Check(pokemon.Contains("mcp-cardcatalog-pokemon"), "but is still pointed at its own catalogue");
+        foreach (var profile in new[] { GameAgentProfile.Mtg, GameAgentProfile.Pokemon,
+            GameAgentProfile.YuGiOh, GameAgentProfile.Lorcana })
+        {
+            var prompt = FoundryCardIdentificationAgent.BuildPrompt(profile);
+            Check(!prompt.Contains("\"finish", StringComparison.OrdinalIgnoreCase)
+                && prompt.Contains("\"collectorNumber\"") && prompt.Contains("\"language\""),
+                $"{profile.Game}: the response schema requests identity and language only");
+        }
     }
 
     /// <summary>

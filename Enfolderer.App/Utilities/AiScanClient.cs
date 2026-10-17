@@ -242,6 +242,6 @@ public sealed class AiScanClient
         (result?.Cards ?? Array.Empty<IdentifiedCard>())
             .Where(c => c.IsIdentified)
             .Select(c => new BinderScanService.ScannedCard(
-                c.Set!, c.CollectorNumber ?? string.Empty, c.Name!, c.Language ?? "en", c.Finish))
+                c.Set!, c.CollectorNumber ?? string.Empty, c.Name!, c.Language ?? "en"))
             .ToList();
 }

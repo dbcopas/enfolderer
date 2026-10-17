@@ -285,7 +285,6 @@ Frozen in `src/Enfolderer.Ai.Contracts/ScanContracts.cs` as `schemaVersion: 1`:
       "collectorNumber": "167",
       "name": "Ancient Silver Dragon",
       "language": "en",
-      "finish": "nonfoil",
       "confidence": 0.94,
       "agent": "cardid/MtgCardIdAgent"
     }
@@ -374,7 +373,7 @@ The deterministic PNG renderer places half-card-width price-only panels over the
 symbols, nonfoil left, foil right, star beside foil), with measured maximum-fit text and a
 lower-right confidence circle: green for placed printings, yellow for unplaced
 readings at or above 0.5 confidence, red for lower-confidence or unidentified cards. It appends a
-legend containing identities, language/fallback provenance, uncertainty, finish, and retrieval
+legend containing identities, language/fallback provenance, uncertainty, and retrieval
 time. Legend entries are sorted by descending nonfoil price, unavailable prices last; original
 card indices and CSV order are preserved. The input photo is not overwritten; the rendered photo is limited to a 2400-pixel long edge
 before adding the legend. The worker image includes DejaVu Sans; Windows prefers Segoe UI Symbol
@@ -432,7 +431,7 @@ code-page loss of Japanese and accented text. Test it offline with:
 .\scripts\test-show-last-scan.ps1
 ```
 
-Compare a new exported CSV with its sibling `cards.txt`, ignoring finish and row order while
+Compare a new exported CSV with its sibling `cards.txt`, ignoring the legacy modifier and row order while
 preserving duplicate counts. Japanese `jp`/`jpn` annotations normalize to API `ja`; the two
 Undercity Sewers annotations on page 06 are Spanish `es`, as printed:
 
@@ -486,7 +485,7 @@ the detector and cropper. The stored source remains unchanged.
 
 Rebuild both the worker and imaging MCP service with `.\scripts\update-demo.ps1 -SkipAgents`.
 No assistant prompt changes are required. Both container builds run a native OpenCV smoke check;
-a missing Linux dependency stops the build. Photo 07's answer key leaves finishes unknown.
+a missing Linux dependency stops the build. Photo 07's answer key leaves the legacy modifier unassigned.
 
 Validation of this change passed the offline checks and all 57 training regions on both Windows
 and Linux. The live boundary adapter retained all ten annotated photo 07 regions. A live MTG
@@ -505,46 +504,24 @@ dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --live-reading <pr
 Indices refer to local detector order, not annotation order. Each selected result must match a
 listed name/set/number/language and be placed; otherwise the check fails.
 
-## MTG finish evidence
+## MTG footer detail
 
 MTG identification uploads an additional nearest-neighbour enlargement of the full-width
 bottom quarter of the rectified card (two stacked candidate footers if sideways). It is supplied in the same message as the full card,
 not treated as another card. Both uploads are reused during run retries and deleted afterwards.
 The enlargement does not sharpen, reconstruct, or restore details lost in the original photograph.
 
-The MTG prompt asks for `finishMarker` (`dot`, `star`, `absent`, or `unknown`), `finishEvidence`,
-and `finishConfidence` separately from identity confidence. A reliable dot between the set code
-and language establishes `nonfoil`; a reliable star establishes `foil`, not `etched`. Symbol size
-relative to the height and width of neighbouring letters on the same line can distinguish a
-blurred round star from a small dot without visible star points. The footprint must be isolated
-from adjacent letters and reflections; no absolute pixel threshold is used. Each identifier sees
-only its own card, so this comparison does not use neighbouring cards on the binder page.
-Rarity letters, collector suffixes, other punctuation, glare, sleeve reflections,
-and the holographic authenticity stamp must not be mistaken for the finish marker.
+The enlarged footer supports reading the set code, collector number and printed language.
+Scanning does not infer the photographed copy's foiling or treatment. Results, diagnostics and
+image legends contain no detected finish. Both nonfoil and foil EUR reference prices remain
+available for a person to choose between.
 
-The worker accepts a marker only at finish confidence `0.8` or above, and derives the finish
-itself rather than trusting a contradictory model finish. Without other accepted finish evidence,
-absent, unreadable, invalid or low-confidence readings leave finish null and evidence `unknown`.
-On older frames, the full-card image is inspected for the large Wizards of the Coast shooting-star
-watermark with its sweeping trail across the lower text box. Evidence `shooting_star_watermark`
-with marker `absent` is accepted at the same confidence threshold and establishes `foil`, not
-`etched`, without requiring visible rainbow sheen. Missing or unreadable watermarks never prove
-nonfoil. Other explicitly reported visual foil/etched treatment can be retained at the same
-threshold with evidence `visual`; absence of visible sheen never proves nonfoil.
-These are model-reported evidence and confidence, not a calibrated pixel classifier.
+The desktop retains the compatible `edition;number;modifier;language;name` CSV shape, with an
+empty modifier column on every scan row. That column is unassigned, not an assertion of nonfoil.
+Existing manual collection and import modifiers are unchanged.
 
-The result contract preserves these fields, the worker logs them per job/card, and
-`scripts/show-last-scan.ps1` displays them. The desktop exports `foil`/`etched` into the existing
-modifier column. Unknown and nonfoil both use the compatible blank modifier, but unknown finishes
-are named in the completion dialog for manual review.
-
-Offline checks cover marker interpretation, uncertainty, JSON round-tripping, footer extraction,
-two-image message construction and retry/cleanup, plus desktop CSV mapping. Actual marker-reading
-accuracy on blurry photographs still needs a fresh deployed scan.
-
-This change needs both updated images and re-provisioned MTG instructions: run
-`.\scripts\update-demo.ps1 -NamePrefix enf-demo` without `-SkipAgents`, then rebuild/restart the
-desktop app to get finish-aware CSV output and warnings.
+Offline checks cover footer extraction, two-image message construction and retry/cleanup,
+identity/language JSON round-tripping, independent prices, and desktop CSV mapping.
 
 ## Running locally without Azure
 

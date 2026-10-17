@@ -208,11 +208,6 @@ public sealed class ScanJobProcessor
     /// </summary>
     private void LogResolution(int index, string jobId, string agentId, IdentifiedCard card)
     {
-        if (card.IsIdentified)
-            _log.Log(card.Finish is null ? LogLevel.Warning : LogLevel.Information,
-                "Card {Index} of job {JobId}: finish {Finish}, marker {Marker}, evidence {Evidence}, confidence {Confidence}.",
-                index, jobId, card.Finish ?? "unknown", card.FinishMarker ?? "(none)",
-                card.FinishEvidence ?? "(none)", card.FinishConfidence);
         if (string.IsNullOrWhiteSpace(card.Resolution))
         {
             // Nothing to say about an unidentified card that the warning above has not said: with
@@ -266,7 +261,7 @@ public sealed class ScanJobProcessor
 
     internal static string DescribeResolution(IdentifiedCard card) => card.Resolution?.ToLowerInvariant() switch
     {
-        "confirmed" => " - the catalogue reports agreement between the name and collector number; this does not confirm finish",
+        "confirmed" => " - the catalogue reports agreement between the name and collector number",
         "corrected" => " - the name won over the number reading; the exported number is the catalogue's",
         "relocated" => " - the catalogue selected a printing outside the read set; the read set was not retained",
         "ambiguous" => " - multiple printings match the name; the available readings did not distinguish them. Check the printing",

@@ -100,7 +100,7 @@ internal static class Program
                 actual.Select(c => $"{c.Name}|{c.Set}|{c.Number}|{c.Language}"));
             Console.WriteLine($"{Path.GetFileName(Path.GetDirectoryName(csvPath))}: {actual.Count}/{expected.Count} rows; "
                 + $"identity {identity}/{expected.Count}, identity+language {language}/{expected.Count}, "
-                + $"printing+language {printing}/{expected.Count}. Finish ignored; order ignored; duplicate counts preserved.");
+                + $"printing+language {printing}/{expected.Count}. Legacy modifier ignored; order ignored; duplicate counts preserved.");
             return actual.Count == expected.Count && printing == expected.Count ? 0 : 1;
         }
 

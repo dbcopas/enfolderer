@@ -23,6 +23,8 @@ public static class SelfTests
     try { File.WriteAllText(progressLog, "START\n"); } catch {}
     try { Enfolderer.App.Infrastructure.AppRuntimeFlags.DisableImageFetching = true; } catch {}
     failures += MainMenuTests.RunAll();
+    try { failures += ScanOwnershipTests.RunAll(); }
+    catch (Exception ex) { Console.Error.WriteLine($"Scan ownership tests failed: {ex}"); failures++; }
     int suiteFails;
     suiteFails = LayoutConfigServiceTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After LayoutConfig fails={suiteFails}\n"); } catch {}
     suiteFails = CardEntryTests.RunAll(); failures += suiteFails; try { File.AppendAllText(progressLog, $"After CardEntry fails={suiteFails}\n"); } catch {}

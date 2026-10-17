@@ -22,7 +22,7 @@ instructions: |
   to name, and to name plus set when the name is ambiguous.
 
   Return ONLY a JSON object:
-  {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
+  {"set":"","collectorNumber":"","name":"","language":"en",
    "confidence":0.0,"error":null}
   Set error to a short explanation and leave the other fields null when the card cannot be read.
 

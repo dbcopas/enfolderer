@@ -114,15 +114,16 @@ See [setup and migration](docs/azure-setup.md#4-create-the-agents).
 **Scan Single Image...** turns a photograph into binder entries: the app uploads a single image to a
 job API and polls it while a multi-agent Azure AI Foundry pipeline finds each card's outline and
 identifies it. That API is the only endpoint the app talks to, so it runs from anywhere. **Scan Multiple Images in Folder...** runs the same job API once per image in
-a selected folder. Both write `SET;NUMBER;MODIFIER;LANGUAGE;NAME` CSV rows; the modifier is
-`foil` or `etched` when identified, and blank for nonfoil or unknown finish. Unknown finishes are
-listed in the scan summary so a blank is not mistaken for a confirmed nonfoil.
-Both scan save dialogs suggest `scanned_cards_yyyyMMdd_HHmmss.csv`, using local date and time.
-You can change the suggested filename before saving.
+a selected folder. Both write `SET;NUMBER;MODIFIER;LANGUAGE;NAME` CSV rows; the modifier column is
+always blank for import compatibility. Scanning does not determine whether a card is foiled.
+Scans automatically save `scanned_cards_yyyyMMdd_HHmmss.csv`, using local date and time, beside
+the selected image (or inside the selected folder for a batch). There is no output save dialog.
+If that filename already exists, a numeric suffix preserves the earlier CSV. The completion
+dialog shows the saved path; priced images are saved alongside it.
 During processing, the status bar reports elapsed polling time, processed/detected cards, and
 successful identifications (processed includes unreadable cards). The final status retains the
 saved filename and counts of unidentified cards, missing numbers, printings needing review,
-unknown finishes, and art-based printing changes. Per-card progress requires the updated worker
+and art-based printing changes. Per-card progress requires the updated worker
 and API as well as the desktop app.
 The progress bar counts completed images rather than showing 100% when a scan starts. Hover over
 the status text to read the full message if it is truncated.
@@ -140,7 +141,7 @@ and total worker processing. Foundry logs time background Responses/tool approva
 excludes desktop upload, queue wait, polling lag and the final image download.
 
 Deploy the updated worker and rebuild/restart the desktop before comparing the same photos at
-concurrency 1, 2 and 3. Compare identity/printing/finish accuracy as well as elapsed time and
+concurrency 1, 2 and 3. Compare identity/printing accuracy as well as elapsed time and
 throttling. Pricing remains serialized with polite Scryfall pacing. No service SKU, model,
 replica count or quota is increased by this change; consider upgrades only after measurement.
 Responses carry high-detail inline image bytes, not public blob URLs or persistent Files uploads.
@@ -148,6 +149,9 @@ Transient response creation failures retry twice; quota refusals use the configu
 Authentication failures are not retried or downgraded to classic/anonymous calls. Tool failures
 remain explicit failures rather than model-only success. Background responses are cancelled on
 timeout/cancellation and retained responses are deleted after use; cleanup failures are logged.
+Responses HTTP calls use the configured `ScanPipeline__AgentRunTimeout` (five minutes by default)
+and caller cancellation, rather than HttpClient's shorter default 100-second timeout. Cleanup
+requests have a separate 30-second deadline per retained response.
 The legacy classic client remains available for regression checks, not as an automatic fallback.
 
 After final printing/art verification, scans also produce a priced PNG of the original photo.
@@ -157,7 +161,7 @@ box, with the set code and collector number in a smaller line below, without ove
 lower right: green for placed printings, yellow for printings needing verification, and red for
 unidentified cards or unplaced readings below 0.5 confidence. An appended
 legend includes card identity, photographed language, price-source language, printing uncertainty,
-finish, and retrieval time. Prices are **Cardmarket via Scryfall daily reference prices**, not
+and retrieval time. Prices are **Cardmarket via Scryfall daily reference prices**, not
 live offers or a guaranteed valuation. Each missing foreign-language price independently falls
 back to English for the **same set and collector number**, marked `[en fallback]` in the legend.
 A foil-only or nonfoil-only record is
@@ -169,8 +173,8 @@ ties in original card order. Card numbers still refer to the original scan; CSV 
 The desktop downloads the PNG through the authenticated job API, saves it beside the CSV as
 `<csv-stem>_<job-id>_priced.png`, and opens a preview. Batch scans save one PNG per source image.
 The original upload is unchanged. CSVs remain available if pricing, rendering, or download fails;
-the completion summary reports those warnings separately. Both prices are shown even if the
-photographed finish is unknown, and uncertain printings are explicitly marked as indicative.
+the completion summary reports those warnings separately. Both prices are shown for human
+comparison; no automatic foil detection is performed. Uncertain printings are explicitly marked as indicative.
 The image legend separates the exact price target (`Price for ONS 62`) from identification evidence.
 `Printing needs verification` means the photographed printing is not established, not that the
 price lookup failed. A lone artwork match is described as `Artwork matches; set/number not established`.
@@ -220,16 +224,7 @@ For crop diagnosis, run `dotnet run --project tools\Enfolderer.Ai.Imaging.Traini
 The live boundary checker accepts an optional crop-output directory and checks annotated physical
 card regions when a training photo has a `boundaries.json` file. Photo 07's annotations describe
 the ten loose cards on the laptop. The separate `cards.txt` records their names, printings and
-language; finishes are deliberately `unknown` rather than inferred from the user's description.
-
-Where the
-frame prints a separator between the set code and language, a dot indicates nonfoil and a star
-indicates foil. A blurred round separator can still be a star: the identifier compares its height
-and width with adjacent letters, not just whether its points are visible. Unreadable markers stay
-unknown; enlargement cannot recover lost detail. Older cards without that marker can use the large
-Wizards of the Coast shooting-star watermark across the lower text box as explicit foil evidence,
-or clearly visible foil treatment as separately labelled visual evidence. A missing watermark
-does not prove nonfoil. The bottom-centre authenticity stamp is not a foil indicator.
+language.
 
 Configuration lives in `aiconfig.txt` beside the executable and contains **no secrets** — only the
 API URL, tenant id, public client id and scope; you sign in interactively.
@@ -243,6 +238,40 @@ The services, agent definitions, and infrastructure are in `src/Enfolderer.Ai.*`
 `infra/`. See [docs/azure-setup.md](docs/azure-setup.md) to deploy the Azure resources, and
 [docs/foundry-demo.md](docs/foundry-demo.md) for the architecture and the security boundary
 walkthrough.
+
+## Local collection annotations on scan images
+
+After downloading a priced scan image, the desktop reads `mainDb.db` and `mtgstudio.collection`
+beside its executable. These databases and ownership counts are not uploaded to Azure.
+Collection rows are matched through `Cards.MtgsId = CollectionCards.CardId` and summed across
+collection entries. If a mapped collection entry exists, its quantity (including zero) wins;
+otherwise the desktop uses `Cards.Qty` in the main database.
+
+A pink-tinted price-overlay background marks an exact printing with fewer than one copy, or fewer than two for a card
+with distinct front/back faces. Split/adventure/prepare cards with a normal card back require only one.
+Missing cards do not show a quantity, including double-faced printings with only one copy.
+Otherwise, `Owned: N | All: M` below the prices identifies the exact set/collector-number
+quantity and a separate total across printings with that card name. The all-printings total
+never determines whether a card is missing. Collector-number suffixes remain distinct.
+All inventory variants within the same set/number count toward that printing.
+
+Set code and collector number are authoritative for ownership. The desktop looks up that exact
+printing in `mainDb.db`, then uses its local database name to find the all-printings total.
+Scanned and Scryfall names are not compared or fuzzy-matched for ownership, so differences in
+diacritics, punctuation, and adventure/sub-card notation cannot block the quantity lookup.
+Full local names are retained to avoid combining different cards that share a front-name prefix.
+
+The price lookup also returns the catalogue name and layout; no extra catalogue request is
+needed. A worker built before this metadata was added cannot supply the front/back requirement:
+the desktop reports an ownership warning rather than guessing. Missing databases, missing local
+catalogue entries and unsupported layouts likewise produce warnings. Where card
+geometry is available, unknown ownership is shown with an amber overlay and `Owned: ?`, never a blank
+ownership panel that could be mistaken for confirmed ownership. Cards are not outlined. CSVs and the priced image remain
+available. Identification confidence does not suppress ownership counts.
+Ownership is evaluated when downloading, not when reopening a saved image.
+
+The selftests use both synthetic databases and the read-only fixtures in `training/testing dbs`
+when running from the repository. They never replace or modify the user's working databases.
 
 ## Build and run
 

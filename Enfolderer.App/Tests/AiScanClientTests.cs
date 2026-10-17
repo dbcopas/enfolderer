@@ -36,7 +36,31 @@ public static class AiScanClientTests
         failures += TestAuthenticationRecordStore();
         failures += TestStaleRecordFallsBackToPrompt();
         failures += TestUploadContentTypes();
+        failures += TestDefaultOutputPath();
         return failures;
+    }
+
+    private static int TestDefaultOutputPath()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "enfolderer-scan-path-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var timestamp = new DateTime(2026, 10, 17, 10, 29, 27);
+            var path = BinderScanService.DefaultOutputPath(directory, timestamp);
+            var failures = Check(path == Path.Combine(directory, "scanned_cards_20261017_102927.csv"),
+                "automatic scan CSV uses local timestamp in the source image directory");
+            File.WriteAllText(path, "existing");
+            var second = BinderScanService.DefaultOutputPath(directory, timestamp);
+            failures += Check(second == Path.Combine(directory, "scanned_cards_20261017_102927_2.csv")
+                && File.ReadAllText(path) == "existing", "same-second scans do not select an existing CSV");
+            File.WriteAllText(second, "another");
+            failures += Check(BinderScanService.DefaultOutputPath(directory, timestamp)
+                == Path.Combine(directory, "scanned_cards_20261017_102927_3.csv"),
+                "automatic scan filenames skip all existing collision suffixes");
+            return failures;
+        }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 
     private static int TestShippedDefaults()
@@ -115,7 +139,6 @@ public static class AiScanClientTests
               "collectorNumber": "167",
               "name": "Ancient Silver Dragon",
               "language": "en",
-              "finish": "nonfoil",
               "confidence": 0.94,
               "agent": "cardid/MtgCardIdAgent"
             },
@@ -174,7 +197,7 @@ public static class AiScanClientTests
                 new IdentifiedCard { Index = 0, Set = "bro", CollectorNumber = "167", Name = "Ancient Silver Dragon" },
                 new IdentifiedCard { Index = 1, Set = "bro", Name = "Missing number" },
                 new IdentifiedCard { Index = 2, Error = "unreadable" },
-                new IdentifiedCard { Index = 3, Set = "sld", CollectorNumber = "1500", Name = "Lightning Bolt", Finish = "foil" },
+                new IdentifiedCard { Index = 3, Set = "sld", CollectorNumber = "1500", Name = "Lightning Bolt" },
                 new IdentifiedCard { Index = 4, Set = "neo", CollectorNumber = "268", Name = "Boseiju, Who Endures", Language = "ja" }
             ]
         };
@@ -188,11 +211,10 @@ public static class AiScanClientTests
 
         var csv = mapped.Select(BinderScanService.BuildCsvRow).ToList();
         failures += Check(csv[0] == "bro;167;;en;Ancient Silver Dragon", "CSV row format is unchanged");
-        failures += Check(csv[2] == "sld;1500;foil;en;Lightning Bolt", "foil finish reaches the modifier column");
-        failures += Check(BinderScanService.BuildCsvRow(new("mh2", "1", "Card", Finish: "etched"))
-            == "mh2;1;etched;en;Card", "etched finish is preserved separately");
-        failures += Check(BinderScanService.BuildCsvRow(new("mh2", "1", "Card", Finish: "nonfoil"))
-            == "mh2;1;;en;Card", "nonfoil preserves the existing blank modifier");
+        failures += Check(csv.All(row => row.Split(';')[2] == string.Empty),
+            "every scan row retains an unassigned modifier column");
+        failures += Check(csv[2] == "sld;1500;;en;Lightning Bolt",
+            "scan export retains the legacy five-column CSV shape");
 
         // A number that could not be read leaves the column empty rather than the row absent. The
         // name is what a person can check against the binder, so it must survive the number.
@@ -266,9 +288,9 @@ public static class AiScanClientTests
         }).Contains("Fetching EUR prices"),
             "pricing/rendering progress replaces the generic identification phase");
         var summary = BinderScanService.DescribeResult(new BinderScanService.ScanResult(
-            1, 7, 1, @"C:\scans\results.csv", 2, ["Card A", "Card B"], ["Card C"], ["Card D"]));
+            1, 7, 1, @"C:\scans\results.csv", 2, ["Card A", "Card B"], ["Card C"]));
         failures += Check(summary.Contains("1 unidentified") && summary.Contains("2 missing numbers")
-            && summary.Contains("2 printings need review") && summary.Contains("1 finishes unknown")
+            && summary.Contains("2 printings need review")
             && summary.Contains("1 moved by art") && summary.EndsWith("results.csv", StringComparison.Ordinal),
             "completion status retains actionable review counts and saved filename");
         failures += Check(BinderScanService.DescribeResult(new BinderScanService.ScanResult(

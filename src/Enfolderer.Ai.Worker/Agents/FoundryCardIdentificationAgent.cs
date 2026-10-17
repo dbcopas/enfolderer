@@ -64,7 +64,6 @@ public sealed record GameAgentProfile(
         This is a Yu-Gi-Oh! card.
         - The passcode is printed in the bottom-left; the set code (e.g. "LOB-EN005") is in the
           bottom-right of the artwork area.
-        - Rarity is conveyed by foiling on the name and artwork rather than by any printed text.
         """);
 
     public static readonly GameAgentProfile Lorcana = new(
@@ -200,8 +199,7 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             {{settle}}
 
             Return ONLY a JSON object, with no prose and no markdown fences:
-            {"set":"","collectorNumber":"","name":"","language":null,"readName":null,"readLanguage":null,"finish":"nonfoil|foil|etched|unknown",
-             "finishMarker":"dot|star|absent|unknown","finishEvidence":"set_language_marker|shooting_star_watermark|visual|unknown","finishConfidence":0.0,
+            {"set":"","collectorNumber":"","name":"","language":null,"readName":null,"readLanguage":null,
              "confidence":0.0,"resolution":"","readCollectorNumber":"","readSet":"","alternates":[]}
 
             "alternates" is the list of that name under the same key in the tool's reply. Copy it
@@ -256,35 +254,6 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
         var confidence = root.TryGetProperty("confidence", out var c) && c.TryGetDouble(out var cv)
             ? Math.Clamp(cv, 0d, 1d)
             : 0d;
-        var marker = Read("finishMarker")?.ToLowerInvariant();
-        var evidence = Read("finishEvidence")?.ToLowerInvariant();
-        var finishConfidence = root.TryGetProperty("finishConfidence", out var fc)
-            && fc.ValueKind == JsonValueKind.Number && fc.TryGetDouble(out var fcv) && double.IsFinite(fcv)
-                ? Math.Clamp(fcv, 0d, 1d) : 0d;
-        var finish = Read("finish")?.ToLowerInvariant();
-        if (game == CardGames.Magic)
-        {
-            marker = marker is "dot" or "star" or "absent" ? marker : "unknown";
-            if (finishConfidence >= 0.8 && (marker is "dot" or "star"))
-            {
-                finish = marker == "star" ? "foil" : "nonfoil";
-                evidence = "set_language_marker";
-            }
-            else if (finishConfidence >= 0.8 && evidence == "shooting_star_watermark" && marker == "absent")
-            {
-                finish = "foil";
-            }
-            else if (finishConfidence >= 0.8 && evidence == "visual" && (marker is "absent" or "unknown")
-                && (finish is "foil" or "etched"))
-            {
-                evidence = "visual";
-            }
-            else
-            {
-                finish = null;
-                evidence = "unknown";
-            }
-        }
 
         var card = new IdentifiedCard
         {
@@ -297,10 +266,6 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             Language = game == CardGames.Magic ? NormalizeLanguage(Read("language")) : Read("language") ?? "en",
             ReadName = Read("readName"),
             ReadLanguage = NormalizeLanguage(Read("readLanguage")),
-            Finish = game == CardGames.Magic ? finish : Read("finish") ?? "nonfoil",
-            FinishMarker = game == CardGames.Magic ? marker : null,
-            FinishEvidence = game == CardGames.Magic ? evidence : null,
-            FinishConfidence = game == CardGames.Magic ? finishConfidence : null,
             Resolution = Read("resolution"),
             ReadCollectorNumber = Read("readCollectorNumber"),
             ReadSet = Read("readSet"),

@@ -340,22 +340,13 @@ public partial class MainWindow : Window
             };
             if (dlgOpen.ShowDialog(this) != true) return;
 
-            var dlgSave = new Microsoft.Win32.SaveFileDialog
-            {
-                Title = "Save scanned cards CSV as",
-                Filter = "CSV Files (*.csv)|*.csv",
-                FileName = $"scanned_cards_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
-                InitialDirectory = System.IO.Path.GetDirectoryName(dlgOpen.FileName)
-            };
-            if (dlgSave.ShowDialog(this) != true) return;
-
             await RunScanAsync(
                 "Scanning card image",
                 ct => Utilities.BinderScanService.ScanImageAsync(
                     dlgOpen.FileName,
                     config,
-                    dlgSave.FileName,
-                    config.GameHint,
+                    outputPath: null,
+                    gameHint: config.GameHint,
                     statusCallback: msg => _vm?.SetStatus(msg),
                     progressCallback: (done, total) => _vm?.ReportScanProgress(done, total),
                     ct: ct));
@@ -378,22 +369,13 @@ public partial class MainWindow : Window
             var folderPath = FolderPickerDialog.Show(this, "Select the folder containing images to scan (no subfolders)");
             if (folderPath == null) return;
 
-            var dlgSave = new Microsoft.Win32.SaveFileDialog
-            {
-                Title = "Save scanned cards CSV as",
-                Filter = "CSV Files (*.csv)|*.csv",
-                FileName = $"scanned_cards_{DateTime.Now:yyyyMMdd_HHmmss}.csv",
-                InitialDirectory = folderPath
-            };
-            if (dlgSave.ShowDialog(this) != true) return;
-
             await RunScanAsync(
                 "Scanning multiple images",
                 ct => Utilities.BinderScanService.ScanFolderAsync(
                     folderPath,
                     config,
-                    dlgSave.FileName,
-                    config.GameHint,
+                    outputPath: null,
+                    gameHint: config.GameHint,
                     statusCallback: msg => _vm?.SetStatus(msg),
                     progressCallback: (done, total) => _vm?.ReportScanProgress(done, total),
                     ct: ct));
@@ -480,10 +462,6 @@ public partial class MainWindow : Window
                 var moved = result.CardsMovedByArt is { Count: > 0 } movedRows
                     ? "\n\nMoved to the printing the art matches:\n  " + string.Join("\n  ", movedRows)
                     : string.Empty;
-                var finish = result.CardsWithoutFinish is { Count: > 0 } finishNames
-                    ? "\n\nFinish unknown - check these cards. Their CSV modifier is blank, not proof of nonfoil:\n  "
-                        + string.Join("\n  ", finishNames)
-                    : string.Empty;
                 var images = result.AnnotatedImages is { Count: > 0 } imagePaths
                     ? "\n\nPriced images saved:\n  " + string.Join("\n  ", imagePaths)
                     : string.Empty;
@@ -491,7 +469,7 @@ public partial class MainWindow : Window
                     ? "\n\nImage/price warnings (CSV is saved):\n  " + string.Join("\n  ", warnings)
                     : string.Empty;
                 MessageBox.Show(this,
-                    $"Images processed: {result.ImagesProcessed}\nCards identified: {result.CardsFound}{incomplete}\nUnidentified cards: {result.LookupFailures}{unplaced}{moved}{finish}\n\nOutput: {result.OutputPath}{images}{annotationWarnings}",
+                    $"Images processed: {result.ImagesProcessed}\nCards identified: {result.CardsFound}{incomplete}\nUnidentified cards: {result.LookupFailures}{unplaced}{moved}\n\nOutput: {result.OutputPath}{images}{annotationWarnings}",
                     "Card Scan", MessageBoxButton.OK,
                     result.AnnotationWarnings is { Count: > 0 } ? MessageBoxImage.Warning : MessageBoxImage.Information);
                 foreach (var imagePath in result.AnnotatedImages ?? Array.Empty<string>())

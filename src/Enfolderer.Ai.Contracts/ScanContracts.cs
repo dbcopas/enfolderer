@@ -111,18 +111,6 @@ public sealed record IdentifiedCard
 
     [JsonPropertyName("prices")] public CardPrices? Prices { get; init; }
 
-    /// <summary>Printing finish: "nonfoil", "foil", "etched", or null when not determined.</summary>
-    [JsonPropertyName("finish")] public string? Finish { get; init; }
-
-    /// <summary>MTG set/language separator reading: dot, star, absent, or unknown.</summary>
-    [JsonPropertyName("finishMarker")] public string? FinishMarker { get; init; }
-
-    /// <summary>Evidence for finish: set_language_marker, shooting_star_watermark, visual, or unknown.</summary>
-    [JsonPropertyName("finishEvidence")] public string? FinishEvidence { get; init; }
-
-    /// <summary>Confidence in the finish evidence, separate from card identification, 0..1.</summary>
-    [JsonPropertyName("finishConfidence")] public double? FinishConfidence { get; init; }
-
     /// <summary>
     /// How the catalogue settled this printing: <c>confirmed</c>, <c>corrected</c>, <c>named</c>,
     /// <c>assumed</c>, <c>fuzzy</c>, <c>unplaced</c>, <c>relocated</c>, <c>ambiguous</c> or
@@ -295,6 +283,8 @@ public sealed record ScanResultDocument
 /// <summary>Independent EUR values and source languages; missing values are not zero.</summary>
 public sealed record CardPrices
 {
+    public string? Layout { get; init; }
+    public string? CardName { get; init; }
     public decimal? Nonfoil { get; init; }
     public decimal? Foil { get; init; }
     public string? NonfoilLanguage { get; init; }

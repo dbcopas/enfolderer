@@ -40,40 +40,6 @@ instructions: |
     place it: an unknown code you transcribed is useful, and a known code you substituted is worse
     than leaving it blank.
   - Collector numbers may carry a suffix such as "a", "b", "s", "★" or "z".
-  - Determine finish separately from card identity. Where the footer has a set code followed by
-    language, inspect the separator BETWEEN them: a small dot means nonfoil; a star means foil.
-    Use the enlarged footer image, when supplied, together with the full card. Compare the
-    separator's HEIGHT and WIDTH to the adjacent set-code and language letters on the SAME line.
-    A dot is a small punctuation mark occupying much less of the letters' height; a star is
-    substantially larger relative to those letters. A blurred star may be round: visible points
-    are NOT required when its isolated footprint relative to legible neighbouring text clearly
-    distinguishes it from a small dot. Do not classify every round blob as a dot.
-    Check that the footprint is the separator itself, not letters merged by blur, glare or a
-    sleeve reflection. Use local letter scale, not absolute enlarged pixels or collector-number
-    text on another line. If neither shape nor relative size distinguishes it, report unknown.
-    There is no universal size cutoff: fonts, perspective and blur vary.
-  - Report finishMarker as "dot", "star", "absent" (this frame has no such marking), or "unknown"
-    (blur, glare, crop or overlap prevents a reliable reading). Never treat an unreadable or
-    missing separator as a dot. The rarity letter, expansion symbol, collector-number suffix
-    and artist separator are not this marker.
-  - A bottom-centre holographic authenticity stamp is NOT evidence of foil: nonfoil rares and
-    mythics have one too. Sleeve reflections and glare alone are not evidence either.
-    Older cards may have no set/language separator. Inspect the FULL card's lower rules/text box
-    for the large Wizards of the Coast shooting-star foil watermark: a star with a long sweeping
-    trail across the text box. A clearly visible old-frame shooting-star watermark establishes
-    "foil", finishMarker "absent", and finishEvidence "shooting_star_watermark", even without
-    visible rainbow sheen. This is NOT the small footer separator, expansion symbol, a star in
-    the artwork, or the bottom-centre authenticity stamp. Its absence or illegibility does NOT
-    establish nonfoil. Do not infer it merely from the card's age, name or catalogue picture.
-    Other clearly visible foil treatment may support "foil" with finishEvidence "visual";
-    otherwise leave finish "unknown".
-    A star establishes foil, not whether it is etched; do not infer an etched treatment from it.
-  - With a reliable separator reading use finishEvidence "set_language_marker", and finish
-    "nonfoil" for a dot or "foil" for a star. Report finishConfidence independently of card
-    confidence. Only a clear reading warrants 0.8 or higher; do not raise it to avoid uncertainty.
-    If finish cannot be determined, use finish "unknown", finishEvidence "unknown", and low
-    finishConfidence. Catalogue pictures and a printing's available finishes do not establish
-    the photographed copy's finish.
   - Prefer the printed set code and name over the artwork: reprints share art.
   - Never supply a set code you did not read off this card. You will recognise many of these
     cards, and recognising one tells you which card it is but not which printing: a staple has a
@@ -169,9 +135,7 @@ instructions: |
   you want to check against another set — but resolve_printing is the one to reach for first.
 
   Return ONLY a JSON object:
-  {"set":"","collectorNumber":"","name":"","language":null,"readName":null,"readLanguage":null,"finish":"nonfoil|foil|etched|unknown",
-   "finishMarker":"dot|star|absent|unknown","finishEvidence":"set_language_marker|shooting_star_watermark|visual|unknown",
-   "finishConfidence":0.0,
+  {"set":"","collectorNumber":"","name":"","language":null,"readName":null,"readLanguage":null,
    "confidence":0.0,"resolution":"","readCollectorNumber":null,"readSet":null,"error":null}
   Set error, and leave the other fields null, only when the card itself cannot be read — a crop
   that is blurred past legibility, cut off, face down or empty. Being unsure which printing it is

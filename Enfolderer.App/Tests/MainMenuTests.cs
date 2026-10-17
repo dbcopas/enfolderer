@@ -17,7 +17,15 @@ public static class MainMenuTests
             Console.Error.WriteLine("Main menu: " + message);
         }
 
-        var window = new MainWindow();
+        var application = Application.Current;
+        var originalMainWindow = application.MainWindow;
+        var originalShutdownMode = application.ShutdownMode;
+        var originalWindowCount = application.Windows.Count;
+        application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        MainWindow? window = null;
+        try
+        {
+        window = new MainWindow();
         var panel = (DockPanel)window.Content;
         var bar = panel.Children.OfType<DockPanel>().Single();
         var menu = bar.Children.OfType<Menu>().Single();
@@ -51,7 +59,16 @@ public static class MainMenuTests
                 $"advanced groups follow the toggle ({enabled})");
         }
         // Do not show the window or invoke actions that access files, services or the browser.
-        window.Content = null;
+        }
+        finally
+        {
+            window?.Close();
+            application.MainWindow = originalMainWindow;
+            application.ShutdownMode = originalShutdownMode;
+        }
+        Check(application.Windows.Count == originalWindowCount, "menu tests leave no hidden windows alive");
+        Check(application.MainWindow == originalMainWindow && application.ShutdownMode == originalShutdownMode,
+            "menu tests preserve application lifetime settings");
         return failures;
     }
 }

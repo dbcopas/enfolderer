@@ -152,7 +152,6 @@ ContainerAppConsoleLogs_CL
     or Log_s contains 'was dropped after' or Log_s contains 'Identification failed for card'
     or Log_s contains 'art candidate' or Log_s contains 'art compared' or Log_s contains 'art not checked'
     or Log_s contains 'could not compare candidate' or Log_s contains 'server_error; retry'
-    or Log_s contains ': finish '
     or Log_s contains ': processing card '
     or Log_s contains ': timing '
     or Log_s contains ': prices EUR' or Log_s contains ': pricing failed'
@@ -254,7 +253,7 @@ foreach ($job in $jobs) {
             $p.Line -match 'could not be identified' -or
             $p.Line -match 'was dropped after' -or
             $p.Line -match 'then moved to|Identification failed|was not identified|art declined|art not checked|could not compare' -or
-            $p.Line -match ': finish unknown|failed in state|identified none'
+            $p.Line -match 'failed in state|identified none'
         )
         $colour = if ($doubt) { 'Yellow' } else { 'Gray' }
 

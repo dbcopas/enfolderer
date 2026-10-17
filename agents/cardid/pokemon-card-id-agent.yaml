@@ -39,7 +39,7 @@ instructions: |
   settles the printing itself, and leave readSet null for the same reason.
 
   Return ONLY a JSON object:
-  {"set":"","collectorNumber":"","name":"","language":"en","finish":"nonfoil|foil|etched",
+  {"set":"","collectorNumber":"","name":"","language":"en",
    "confidence":0.0,"resolution":null,"readCollectorNumber":null,"readSet":null,"error":null}
   When the catalogue cannot confirm the printing, answer with what you read off the card and set a
   low confidence rather than declining: a card recorded from your own reading can be checked
