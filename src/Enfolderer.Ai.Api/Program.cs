@@ -38,11 +38,43 @@ builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 builder.Services.AddAuthorization();
+builder.Services.AddProblemDetails();
+var webClientId = builder.Configuration["MobileWeb:ClientId"];
+var pilotUsers = (builder.Configuration["MobileWeb:AllowedUserObjectIds"] ?? "")
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+if (!string.IsNullOrWhiteSpace(webClientId)
+    && (!Guid.TryParse(webClientId, out var browserId) || browserId == Guid.Empty || pilotUsers.Length == 0
+        || pilotUsers.Any(value => !Guid.TryParse(value, out var id) || id == Guid.Empty)))
+    throw new InvalidOperationException("Mobile web access requires an explicit pilot user allowlist.");
+
+var diagnosticUsers = (builder.Configuration["Diagnostics:AllowedUserObjectIds"] ?? "")
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+if (diagnosticUsers.Any(value => !Guid.TryParse(value, out var id) || id == Guid.Empty
+        || !pilotUsers.Contains(value, StringComparer.OrdinalIgnoreCase)))
+    throw new InvalidOperationException("Diagnostics operators must be valid users in the explicit scan pilot allowlist.");
 
 var app = builder.Build();
 
+app.UseExceptionHandler();
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    context.Response.Headers["Content-Security-Policy"] =
+        "default-src 'self'; script-src 'self'; style-src 'self'; " +
+        "img-src 'self' blob:; connect-src 'self' https://login.microsoftonline.com; " +
+        "frame-src 'self' https://login.microsoftonline.com https://login.live.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self'";
+    if (context.Request.Path.StartsWithSegments("/jobs") || context.Request.Path.StartsWithSegments("/collection")
+        || context.Request.Path.StartsWithSegments("/diagnostics"))
+        context.Response.Headers.CacheControl = "no-store";
+    await next(context);
+});
+app.UseDefaultFiles();
+app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
+app.MapMobileWeb();
+app.MapScanDiagnostics();
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
@@ -55,6 +87,7 @@ jobs.MapPost("/", async (
     CreateJobRequest request,
     HttpContext context,
     IJobStore store,
+    ICollectionSnapshotStore collections,
     ILoggerFactory loggerFactory,
     TokenCredential credential,
     ScanPlatformOptions platform,
@@ -63,6 +96,8 @@ jobs.MapPost("/", async (
     var jobId = Guid.NewGuid().ToString("n");
     var owner = JobOwnerFilter.ReadOwner(context.User)
         ?? throw new InvalidOperationException("The job ownership filter must validate the caller before job creation.");
+    if (request.UseCollection && await collections.ReadAsync(owner.TenantId, owner.ObjectId, ct) is null)
+        return Results.BadRequest(new { error = "Upload a collection snapshot before enabling ownership." });
 
     // The storage account has no public endpoint, so there is no URL that would let the client
     // write the blob itself. The path is derived here only so that the job document and the worker
@@ -78,6 +113,7 @@ jobs.MapPost("/", async (
             JobId = jobId,
             OwnerTenantId = owner.TenantId,
             OwnerObjectId = owner.ObjectId,
+            UseCollection = request.UseCollection,
             Status = ScanJobStatus.Pending,
             BlobPath = blobPath,
             UploadExpiresAt = uploadExpiresAt,
@@ -293,6 +329,14 @@ jobs.MapGet("/{jobId}/annotated-image", async (
         return Results.NotFound();
     var stream = await images.OpenReadAsync(ScanBlobPaths.BuildAnnotatedBlobPath(job.JobId), ct);
     return Results.File(stream, "image/png", $"scan-{job.JobId}-priced.png");
+});
+
+jobs.MapGet("/{jobId}/cards.csv", async (string jobId, IJobStore store, CancellationToken ct) =>
+{
+    var job = await store.GetAsync(jobId, ct);
+    if (job?.Status != ScanJobStatus.Completed || job.Result is null) return Results.NotFound();
+    return Results.File(System.Text.Encoding.UTF8.GetBytes(MobileWebEndpoints.Csv(job.Result)),
+        "text/csv; charset=utf-8", $"scan-{job.JobId}.csv");
 });
 
 app.Run();

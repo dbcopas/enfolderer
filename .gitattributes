@@ -1,0 +1,2 @@
+# Preserve the verified vendor bytes; line-ending conversion would break browser SRI.
+src/Enfolderer.Ai.Api/wwwroot/lib/msal-browser.min.js -text

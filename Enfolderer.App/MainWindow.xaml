@@ -147,6 +147,7 @@
             </MenuItem>
             <MenuItem Header="_Scan">
                 <MenuItem Header="Scan Single Image..." Click="ScanCardImage_Click" />
+                <MenuItem Header="Export Mobile Collection Snapshot..." Click="ExportMobileSnapshot_Click" />
                 <MenuItem Header="Scan Multiple Images in Folder..." Click="ScanBinderImages_Click"
                           ToolTip="Scan supported images in one folder, excluding subfolders" />
             </MenuItem>

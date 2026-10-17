@@ -15,6 +15,70 @@ string, a storage key, or a client secret: the storage account is created with
 `allowSharedKeyAccess: false` and Cosmos with `disableLocalAuth: true`, so key-based access is not
 merely discouraged, it is impossible.
 
+## Read-only scan diagnostics
+
+Use this when an operator or coding assistant needs the actual uploaded photo, measured crops,
+results and logs without asking the scanning user to paste them into a conversation.
+This is **cross-user pilot access**, not a normal user download feature. Inform pilot users that
+approved support operators can inspect scan evidence. It does not expose collection snapshots.
+
+Enable only the intended operator's **object ID in this tenant**, which must also be in the
+existing scan pilot allowlist:
+
+```powershell
+.\scripts\deploy-images.ps1 -ScanDiagnosticUserObjectIds '<operator-object-id>'
+```
+
+That builds/deploys the API routes and records the operator allowlist for later deployments.
+The API gets container-scoped Blob Data Reader on `crops`; it cannot write crops. Storage/Cosmos
+remain private, no SAS URLs/keys are issued, normal job ownership checks are unchanged, and every
+diagnostics read/denial is logged with the caller object ID. The routes require a valid API token,
+the configured tenant, delegated `Scan.Submit` and the separate operator allowlist. They expose
+only jobs belonging to currently approved pilot users; legacy ownerless jobs are excluded.
+Removing a user from the operator allowlist immediately denies their diagnostics requests even if
+their token remains valid.
+
+On the operator workstation:
+
+```powershell
+# One-time browser sign-in using the existing desktop app registration and delegated permission.
+.\scripts\get-scan-diagnostics.ps1 -SignIn
+
+# Later: latest uploaded attempt across the approved pilot, or a specific job.
+.\scripts\get-scan-diagnostics.ps1
+.\scripts\get-scan-diagnostics.ps1 -JobId '<job-id>'
+```
+
+The command uses the encrypted `Enfolderer.Scan` token cache, with a non-secret account record in
+local application data. It never falls back to unencrypted token storage. To reuse an existing
+desktop account without a new sign-in, supply `-AuthenticationRecord <path-to-aiauth.json>`.
+If Conditional Access requires a fresh sign-in, rerun with `-SignIn`; it is not bypassed.
+Use `-ConfigFile` for another deployment's desktop config. Configuration and the output path must
+be trusted; do not point the tool at an untrusted API hostname.
+
+For logs, also run `az login` with Log Analytics read access to the deployment workspace and
+Reader access to its Container Apps/environment. No Cosmos data-plane access is needed on the
+workstation. The script preserves already-downloaded evidence and writes `logs-status.json` if
+log retrieval fails, then exits with an error instead of claiming a complete bundle.
+
+Evidence is stored under `%LOCALAPPDATA%\Enfolderer\ScanDiagnostics` by default, or in
+`-OutputDirectory`. It contains private photos and user identifiers: do not commit it, publish it,
+or attach it to public issues. Review `manifest.json`, `job.json` and `logs-status.json` before
+drawing conclusions. Missing artifacts may reflect a running/failed scan rather than a download
+failure. `job-logs.json` contains direct job-ID matches; `context-logs.json` includes nearby,
+possibly interleaved messages from other scans. Queries are bounded to 10,000 lines and report an
+error rather than silently truncating. Log Analytics ingestion can lag.
+
+The command does not extend Azure retention: job documents currently expire after seven days;
+an expired job cannot be retrieved through these routes. Locally downloaded evidence persists
+until the operator deletes the specific investigation directory.
+
+To disable operator access while keeping the current images:
+
+```powershell
+.\scripts\deploy-images.ps1 -SkipBuild -ScanDiagnosticUserObjectIds ''
+```
+
 ## One client entry point
 
 The desktop client's only entry point is the **API**. The desktop client calls it over HTTPS
@@ -87,6 +151,157 @@ anyone is not the same as callable by anyone.
 
 The worker has **no ingress at all** — not public, and not internal either. It takes its work from
 the queue, so nothing needs to reach it.
+
+## Mobile website: private pilot
+
+The existing API image now includes the phone-friendly website. Its HTTPS root is the website;
+API routes retain bearer-token protection. This reuses an already-running container rather than
+adding an always-on web service. It adds private snapshot blob storage and modest static-file/API
+traffic, not a separate hosting SKU. Actual cost still depends on scans, model usage and storage.
+
+The browser uses authorization-code/PKCE through Microsoft's MSAL library. It holds no client
+secret, storage credential or Foundry credential. The versioned, integrity-verified MSAL dependency
+and its MIT license are checked in under `src/Enfolderer.Ai.Api/wwwroot/lib`; builds need no Node.js
+or runtime CDN. Restore those assets with `.\scripts\restore-web-assets.ps1` if needed.
+
+### 1. Configure browser sign-in
+
+After the API hostname and API registration exist, configure a dedicated **single-tenant SPA**
+with an exact redirect URI matching the website root, including its trailing slash. The existing
+desktop registration is not repurposed. Run as an application administrator/owner with Graph
+permissions to create applications and manage enterprise-app user assignments:
+
+```powershell
+$apiClientId = '<existing API application client ID>'
+$site = 'https://<prefix>-api.<environment-domain>.azurecontainerapps.io/'
+$users = @('<your tenant user object ID>', '<optional invited guest tenant object ID>')
+$web = .\scripts\configure-mobile-web.ps1 -ApiClientId $apiClientId `
+    -WebsiteUrl $site -AllowedUserObjectIds $users
+```
+
+The script creates/updates the SPA registration, declares the API's delegated `Scan.Submit`
+permission, requires enterprise-app assignment, and assigns the listed pilot users. It creates
+no secret and is safe to rerun. It does not invite people or change tenant-wide consent policy.
+Assignment-required applications cannot use first-sign-in user consent, even when tenant policy
+otherwise permits it. A tenant administrator must grant tenant-wide consent for the mobile
+application's delegated `Scan.Submit` permission. In the Entra admin center, open **Enterprise apps >
+Enfolderer Mobile > Permissions** and select **Grant admin consent**. A **Cloud Application
+Administrator** or **Application Administrator** can approve this custom API permission; Azure
+subscription Owner alone is not sufficient, and Global Administrator is not necessary.
+
+Alternatively, run the same script with `-GrantAdminConsent` using a session with the necessary
+Graph consent privileges. Without that switch, the script verifies any existing grant and warns
+if administrator approval is still pending; creating the registration alone does not enable sign-in.
+Keep assignment required and the API pilot allowlist after consent. Ordinary approved users do not
+need administrator roles. A consent refusal is not solved by disabling authentication, allowing
+arbitrary tenants, or using an application token. See Microsoft's
+[assignment and consent requirements](https://learn.microsoft.com/en-us/entra/identity-platform/howto-restrict-your-app-to-a-set-of-users#update-the-app-to-require-user-assignment).
+
+For an Outlook.com account:
+
+1. Invite the address as an external guest in the existing Entra tenant.
+2. Have the person accept/redeem the invitation using that Microsoft account.
+3. Read the **guest object's ID in your tenant**, not a home-tenant ID or email address.
+4. Add it to `$users`, rerun the configuration script, and redeploy with the full approved list.
+
+The tenant-specific authority ensures jobs retain the existing validated `tid`/`oid` ownership
+model. Assignment restricts sign-in, while the API's explicit object-ID allowlist independently
+restricts scan/collection requests. **That allowlist also applies to desktop callers.** Include
+all existing desktop pilot users when enabling or replacing it. Removing a user from the API
+allowlist revokes data/scan access even if an older sign-in token has not expired. Removing a
+user from the supplied list does not remove historical enterprise-app assignments; manage those
+in Entra too.
+
+### 2. Deploy the website and private collection storage
+
+```powershell
+.\scripts\deploy-images.ps1 -MobileWebClientId $web.MobileWebClientId `
+    -ScanAllowedUserObjectIds $web.ScanAllowedUserObjectIds
+```
+
+Alternatively pass the same two options to `.\scripts\update-demo.ps1 -SkipAgents`. Subsequent
+deployments replay those recorded parameters, so ordinary `update-demo.ps1` continues to deploy
+the website with the other five services. No new Foundry agent or image build is needed for the
+website: HTML/CSS/JavaScript are published with `Enfolderer.Ai.Api`.
+
+For an initial infrastructure deployment, the optional Bicep parameters are `mobileWebClientId`
+and `scanAllowedUserObjectIds` (comma-separated object IDs). Keep the client ID empty until the
+real API hostname is known; then configure the registration and redeploy. A configured website
+without a valid explicit user allowlist refuses API startup.
+
+Infrastructure creates the private `collections` blob container:
+
+| Identity | Collection permission |
+|---|---|
+| API managed identity | Blob Data Contributor, scoped to `collections` |
+| Worker managed identity | Blob Data Reader, scoped to `collections` |
+| Geometry / catalogue identities | None |
+| Browser / desktop | No storage role or blob URLs |
+
+The API derives `<tenant-guid>/<object-guid>/collection.json` from validated token claims. It
+never accepts a caller-supplied owner or storage path. Storage remains private-only with shared
+keys disabled. Upload, replace, status and deletion use authenticated `/collection/` routes.
+Only metadata is returned by the status endpoint. Uploads are limited to 32 MiB / 300,000
+printings, validated before atomic blob replacement, with normalized duplicate keys rejected.
+
+### 3. Set up a collection and scan
+
+1. Rebuild/restart the desktop app.
+2. Choose **Scan > Export Mobile Collection Snapshot...**. It reads the same local database pair
+   as desktop ownership checks and writes a JSON file containing printing identifiers and quantities,
+   including public Gatherer IDs for older rows with legacy set codes or no collector numbers.
+   Re-export existing snapshots to recover entries previously omitted, such as Visions (`VI`).
+3. Open the website and sign in with an assigned, approved account after administrator consent.
+   On either a computer or phone, upload the snapshot under **My collection**.
+4. On a phone, take/select a photo and choose **Identify my cards**. For Magic, enable collection
+   checking; Pokemon scans provide identity/prices without MTG ownership.
+5. Download the overlay PNG and/or CSV. Mobile browsers may present Files/Downloads or a share
+   sheet depending on the OS. No app installation is required.
+
+The PNG has no appended footer or legend. Taller per-card overlays contain prices, card name,
+set/number and ownership where known. A gold trophy marks the highest-value printing still needed:
+zero owned for a single-faced card or fewer than two for a physical double-faced card. Unknown
+ownership and unavailable prices are ineligible, and no trophy is drawn without a known priced
+shortage. Rank uses nonfoil, or foil only when nonfoil is absent; ties retain scan order.
+The mobile CSV is now a descending price-ranked report with both prices, ranking price, original
+position, ownership, resolution, price errors, source and retrieval time, rather than an import CSV.
+The desktop's five-column import export is unchanged.
+
+The browser displays real detection/identification stages, processed-card counts and a polished
+activity animation. It does not invent per-card fractional progress. If polling disconnects,
+reconnect or reload the same signed-in tab to resume the saved job. Browser sign-in tokens and
+the resume job ID are in session storage, not long-lived local storage. Camera/location metadata
+is removed by re-encoding in the browser; the longest photo edge is capped at 4096 pixels.
+JPEG/PNG are supported when a browser cannot decode HEIC/RAW.
+
+Ownership uses the snapshot present at rendering time. Exact printing counts are separate from
+all-printing totals, and distinct physical front/back cards require two copies, as on desktop.
+Missing printings get pink price-panel backgrounds without card frames; unknown ownership gets
+amber panels and `Owned: ?`. Failed ownership lookups do not destroy identity/price results.
+Replacing/deleting a snapshot does not retroactively alter rendered images. Snapshots persist
+until explicitly replaced/deleted; they do not inherit the one-week Cosmos job-document TTL.
+Deleting a snapshot does not delete scan photos/results. Use the existing data-cleanup workflow
+for scan data and communicate retention expectations to pilot users.
+
+### 4. Validate
+
+Run `.\scripts\test-scan-access.ps1`: it checks the website root, anonymous denial for collection,
+CSV and job creation, and the existing exact-agent MCP authentication configuration. The image
+deployment script also smoke-tests the root and public sign-in configuration when enabled.
+
+Local regression commands:
+
+```powershell
+dotnet run --project .\tools\Enfolderer.Ai.CardCatalog.Check
+dotnet build .\Enfolderer.App\Enfolderer.App.csproj -c Release
+az bicep build --file .\infra\main.bicep --stdout > $null
+```
+
+These cover two-user API/snapshot isolation, delegated permission and pilot allowlist checks,
+snapshot validation, CSV safety, server overlay rendering, and desktop/exported ownership parity.
+Browser UI tests with simulated identity/job responses are not a substitute for signing in with
+a real pilot account. Before inviting others, complete one real phone sign-in, snapshot upload,
+photo scan and both downloads; verify a second user cannot access the first user's job IDs.
 
 ## Why user-assigned
 

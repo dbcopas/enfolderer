@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101827">
+  <title>Enfolderer | Pocket scanner</title>
+  <link rel="stylesheet" href="/site.css">
+  <script defer src="/lib/msal-browser.min.js"
+    integrity="sha384-TlDXht2cVvKBRAwDJrpYYtb+vUcYNxMgTELqFTRcnu0SP//KlFc7eE8so0+lJ03E" crossorigin="anonymous"></script>
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">enfolderer<span class="brand-dot"></span></a>
+    <button id="signOut" class="quiet" hidden>Sign out</button>
+  </header>
+  <main>
+    <section class="intro">
+      <p class="eyebrow">YOUR COLLECTION, IN FOCUS</p>
+      <h1>A little camera.<br>A lot of card knowledge.</h1>
+      <p class="muted">Photograph a binder page or loose cards. Get exact printings, both prices, and a picture of what your collection still needs.</p>
+    </section>
+    <div id="message" class="message" role="alert" hidden></div>
+    <section id="welcome" class="panel">
+      <div class="icon-orbit" aria-hidden="true">+</div>
+      <h2>Your pocket scanner</h2>
+      <p>Sign in with your invited Microsoft account. Your photos and collection snapshot are private to your account.</p>
+      <button id="signIn" class="primary" disabled>Preparing sign-in...</button>
+      <p class="small muted">Private pilot. Outlook.com users must accept their tenant guest invitation first.</p>
+    </section>
+    <div id="workspace" hidden>
+      <p id="account" class="small muted"></p>
+      <section class="panel">
+        <div class="section-heading"><span class="step">01</span><h2>Frame your cards</h2></div>
+        <p class="muted">Use even light, keep the whole card in view, and avoid glare over titles and footer text.</p>
+        <div class="capture-actions">
+          <label class="button primary" for="camera">Take a photo</label>
+          <input id="camera" class="file-input" type="file" accept="image/*" capture="environment">
+          <label class="button secondary" for="photo">Choose a photo</label>
+          <input id="photo" class="file-input" type="file" accept="image/*">
+        </div>
+        <div id="previewWrap" class="preview-wrap" hidden>
+          <img id="preview" alt="Selected card photograph">
+          <div id="scanSweep" class="scan-sweep" hidden></div>
+        </div>
+        <p id="photoInfo" class="small muted"></p>
+        <div class="scan-options">
+          <label>Card game <select id="game"><option value="mtg">Magic: The Gathering</option><option value="pokemon">Pokemon</option></select></label>
+          <label class="check"><input id="useCollection" type="checkbox" disabled> Check my collection <span class="small">(Magic)</span></label>
+        </div>
+        <button id="scan" class="primary full" disabled>Identify my cards</button>
+      </section>
+      <section id="progressPanel" class="panel" hidden aria-label="Scan progress">
+        <div class="progress-heading"><span id="spinner" class="spinner" aria-hidden="true"></span>
+          <div><h2 id="stage">Getting ready</h2><p id="progressText" class="muted" aria-live="polite"></p></div>
+        </div>
+        <progress id="progress" max="1" aria-label="Cards processed"></progress>
+        <ol class="stages"><li id="stageUpload">Upload</li><li id="stageDetect">Detect</li><li id="stageIdentify">Identify</li><li id="stageRender">Price &amp; overlay</li></ol>
+        <p id="elapsed" class="small muted"></p>
+        <p class="small muted">Progress reflects completed work. Keep this page open; if it reloads, your latest scan will resume.</p>
+        <button id="retry" class="secondary" hidden>Reconnect to scan</button>
+      </section>
+      <section id="results" class="panel" hidden>
+        <div class="section-heading"><span class="step">02</span><h2>Your cards, revealed</h2></div>
+        <p id="summary" class="muted"></p>
+        <img id="resultImage" class="result-image" alt="Card photo with prices, printing labels and collection overlays" hidden>
+        <div class="capture-actions">
+          <a id="imageDownload" class="button primary" hidden>Save overlay</a>
+          <a id="csvDownload" class="button secondary" hidden>Download price-ranked CSV</a>
+        </div>
+        <p class="small muted">Both prices are shown: nonfoil, then foil. The gold trophy marks the highest-value printing you still need, using nonfoil or foil when nonfoil is unavailable. Pink panels mean a missing exact printing; amber means ownership is unknown. A double-faced card needs two copies. No trophy is shown when no known shortage has a price.</p>
+        <div id="cardList" class="card-list"></div>
+        <p class="small muted">Daily Cardmarket reference prices via Scryfall, not live offers. The CSV is a ranked report, not an import file. Confidence circles: green = placed, yellow = review, red = unidentified or low confidence.</p>
+      </section>
+      <details class="panel collection-panel">
+        <summary>My collection <span id="collectionBadge" class="badge">Not uploaded</span></summary>
+        <p class="muted">In the desktop app, choose <strong>Scan &rarr; Export Mobile Collection Snapshot</strong>. Upload the JSON file here, from your phone or a computer signed into this website.</p>
+        <p class="small muted">Only printing identifiers and quantities are stored, not your original databases, notes or card names. Re-export after your collection changes. Scans use the snapshot available when the overlay is rendered.</p>
+        <label class="button secondary" for="snapshot">Upload / replace snapshot</label>
+        <input id="snapshot" class="file-input" type="file" accept=".json,application/json">
+        <p id="collectionInfo" class="small muted"></p>
+        <button id="deleteCollection" class="quiet danger" hidden>Delete my snapshot</button>
+        <p class="small muted">Deleting a snapshot does not change overlays already generated.</p>
+      </details>
+    </div>
+  </main>
+  <footer>Enfolderer <span aria-hidden="true">&middot;</span> A clearer view of your collection</footer>
+</body>
+</html>

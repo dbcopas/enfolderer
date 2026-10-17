@@ -82,7 +82,7 @@ internal static class ApiOwnershipChecks
             foreach (var (method, suffix) in new[]
             {
                 (HttpMethod.Get, ""), (HttpMethod.Put, "/content"),
-                (HttpMethod.Post, "/submit"), (HttpMethod.Get, "/annotated-image")
+                (HttpMethod.Post, "/submit"), (HttpMethod.Get, "/annotated-image"), (HttpMethod.Get, "/cards.csv")
             })
             {
                 using var request = new HttpRequestMessage(method, $"/jobs/{job.JobId}{suffix}");
@@ -122,6 +122,152 @@ internal static class ApiOwnershipChecks
         await store.CreateAsync(new ScanJobDocument { Id = "legacy", JobId = "legacy" });
         using var legacy = await client.GetAsync("/jobs/legacy");
         check(legacy.StatusCode == HttpStatusCode.NotFound, "actual API denies legacy ownerless jobs");
+
+        using var disabledDiagnostics = await client.GetAsync("/diagnostics/scans/");
+        check(disabledDiagnostics.StatusCode == HttpStatusCode.Forbidden,
+            "diagnostics is disabled when no operator allowlist is configured");
+        await using (var diagnosticsFactory = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("MobileWeb:AllowedUserObjectIds", $"{UserA},{UserB}");
+            builder.UseSetting("Diagnostics:AllowedUserObjectIds", UserA);
+        }))
+        {
+            using var diagnostics = diagnosticsFactory.CreateClient();
+            var foreign = job with
+            {
+                Id = Guid.NewGuid().ToString("N"), JobId = Guid.NewGuid().ToString("N"),
+                OwnerObjectId = UserB, Status = ScanJobStatus.Failed, Error = "Test failure",
+                CreatedAt = DateTimeOffset.UtcNow.AddSeconds(1), CardsDetected = 1
+            };
+            foreign = foreign with { Id = foreign.JobId };
+            await store.CreateAsync(foreign);
+            var excluded = foreign with { JobId = "removed", Id = "removed", OwnerObjectId = UserB.Replace('b', 'c') };
+            await store.CreateAsync(excluded);
+            foreach (var caller in new[] { "", UserB, "other-tenant", "missing-scope", "missing-claims" })
+            {
+                diagnostics.DefaultRequestHeaders.Remove("X-Test-User");
+                if (caller.Length > 0) diagnostics.DefaultRequestHeaders.Add("X-Test-User", caller);
+                foreach (var path in new[] { "/diagnostics/scans/", $"/diagnostics/scans/{foreign.JobId}",
+                    $"/diagnostics/scans/{foreign.JobId}/original", $"/diagnostics/scans/{foreign.JobId}/annotated-image",
+                    $"/diagnostics/scans/{foreign.JobId}/crops/0", $"/diagnostics/scans/{foreign.JobId}/cards.csv" })
+                {
+                    using var denied = await diagnostics.GetAsync(path);
+                    check(denied.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized,
+                        $"diagnostics rejects non-operator/tenant/scope/identity on {path}");
+                }
+            }
+            diagnostics.DefaultRequestHeaders.Remove("X-Test-User");
+            diagnostics.DefaultRequestHeaders.Add("X-Test-User", UserA);
+            using var recent = await diagnostics.GetAsync("/diagnostics/scans/?hours=24&limit=1");
+            var recentJobs = await recent.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+            check(recent.IsSuccessStatusCode && recentJobs.GetArrayLength() == 1
+                && recentJobs[0].GetProperty("jobId").GetString() == foreign.JobId,
+                "operator finds the latest uploaded pilot attempt, including failure, not a newer pending or removed-user scan");
+            foreach (var path in new[] { $"/diagnostics/scans/{foreign.JobId}", $"/diagnostics/scans/{foreign.JobId}/original",
+                $"/diagnostics/scans/{foreign.JobId}/crops/0", $"/diagnostics/scans/{job.JobId}/annotated-image",
+                $"/diagnostics/scans/{job.JobId}/cards.csv" })
+            {
+                using var evidence = await diagnostics.GetAsync(path);
+                check(evidence.IsSuccessStatusCode && evidence.Headers.CacheControl?.NoStore == true,
+                    $"operator can read pilot evidence with no-store: {path}");
+            }
+            foreach (var path in new[] { "/diagnostics/scans/?hours=169", "/diagnostics/scans/?limit=0" })
+            {
+                using var invalid = await diagnostics.GetAsync(path);
+                check(invalid.StatusCode == HttpStatusCode.BadRequest, "diagnostic query bounds are enforced");
+            }
+            foreach (var path in new[] { "/diagnostics/scans/legacy", "/diagnostics/scans/removed",
+                $"/diagnostics/scans/{foreign.JobId}/crops/-1", $"/diagnostics/scans/{foreign.JobId}/crops/1" })
+            {
+                using var absent = await diagnostics.GetAsync(path);
+                check(absent.StatusCode == HttpStatusCode.NotFound, "operator cannot read ownerless/non-pilot jobs or out-of-range crops");
+            }
+            using var normalRoute = await diagnostics.GetAsync($"/jobs/{foreign.JobId}");
+            using var writeDiagnostic = await diagnostics.PostAsync($"/diagnostics/scans/{foreign.JobId}", null);
+            check(normalRoute.StatusCode == HttpStatusCode.NotFound && writeDiagnostic.StatusCode == HttpStatusCode.MethodNotAllowed,
+                "diagnostic privilege neither bypasses normal ownership checks nor grants write operations");
+        }
+
+        var snapshot = new CollectionSnapshot { Printings = [new("aaa", "001", 2, 12), new("aaa", "1a", 0, 12)] };
+        using var savedSnapshot = await client.PutAsJsonAsync("/collection/", snapshot);
+        check(savedSnapshot.StatusCode == HttpStatusCode.OK, "approved user can upload an ownership snapshot");
+        using var metadata = await client.GetAsync("/collection/");
+        var metadataText = await metadata.Content.ReadAsStringAsync();
+        check(metadataText.Contains("\"available\":true") && !metadataText.Contains("quantity"),
+            "collection status returns metadata, not inventory contents");
+        client.DefaultRequestHeaders.Remove("X-Test-User");
+        client.DefaultRequestHeaders.Add("X-Test-User", UserB);
+        using var otherSnapshot = await client.GetAsync("/collection/");
+        using var deleteOther = await client.DeleteAsync("/collection/");
+        check((await otherSnapshot.Content.ReadAsStringAsync()).Contains("\"available\":false")
+            && deleteOther.IsSuccessStatusCode, "another user cannot read or delete the owner's collection snapshot");
+        client.DefaultRequestHeaders.Remove("X-Test-User");
+        client.DefaultRequestHeaders.Add("X-Test-User", UserA);
+        using var retainedSnapshot = await client.GetAsync("/collection/");
+        check((await retainedSnapshot.Content.ReadAsStringAsync()).Contains("\"available\":true"),
+            "deleting a different user's snapshot leaves the owner's data intact");
+        using var invalidSnapshot = await client.PutAsJsonAsync("/collection/", snapshot with
+        {
+            Printings = [new("aaa", "1", 2, 1)]
+        });
+        using var duplicatedSnapshot = await client.PutAsJsonAsync("/collection/", snapshot with
+        {
+            Printings = [new("aaa", "001", 2, 12), new("AAA", "1", 2, 12)]
+        });
+        check(invalidSnapshot.StatusCode == HttpStatusCode.BadRequest
+            && duplicatedSnapshot.StatusCode == HttpStatusCode.BadRequest, "negative/inconsistent quantities and normalized duplicate printing keys are rejected");
+        foreach (var legacyEntries in new IReadOnlyList<CollectionGathererPrinting>[]
+        {
+            [new(3718, 4, 3)], [new(0, 4, 4)], [new(3718, 4, 4), new(3718, 4, 4)]
+        })
+        {
+            using var invalidLegacy = await client.PutAsJsonAsync("/collection/", snapshot with { GathererPrintings = legacyEntries });
+            check(invalidLegacy.StatusCode == HttpStatusCode.BadRequest,
+                "legacy snapshot quantities, public IDs and duplicate IDs are validated before replacing the collection");
+        }
+        using var withCollection = await client.PostAsJsonAsync("/jobs/", new CreateJobRequest { UseCollection = true });
+        withCollection.EnsureSuccessStatusCode();
+        var collectionJob = await withCollection.Content.ReadFromJsonAsync<CreateJobResponse>();
+        check((await store.GetAsync(collectionJob!.JobId))!.UseCollection,
+            "web collection opt-in persists on the job without changing desktop defaults");
+        using var removedSnapshot = await client.DeleteAsync("/collection/");
+        using var absentCollection = await client.PostAsJsonAsync("/jobs/", new CreateJobRequest { UseCollection = true });
+        check(removedSnapshot.StatusCode == HttpStatusCode.NoContent && absentCollection.StatusCode == HttpStatusCode.BadRequest,
+            "snapshot deletion is supported and collection scans require an uploaded snapshot");
+        var csv = MobileWebEndpoints.Csv(new ScanResultDocument
+        {
+            Cards = [new IdentifiedCard { Set = "aaa", Name = "=Formula;\"Title\"", CollectorNumber = "1", Language = "en" }]
+        });
+        check(csv.StartsWith("Rank;Card position;Name;Set;Number;Language;Nonfoil EUR;Foil EUR;Ranking EUR;")
+            && csv.Contains("\r\n1;1;\"'=Formula;\"\"Title\"\"\";AAA;1;en;"),
+            "ranked web CSV has explicit price headers, quotes delimiters and neutralizes spreadsheet formulas");
+        var rankedCsv = MobileWebEndpoints.Csv(new ScanResultDocument
+        {
+            Cards =
+            [
+                new() { Index = 2, Set = "vis", Name = "No price", CollectorNumber = "2" },
+                new() { Index = 1, Set = "vis", Name = "Zero nonfoil", CollectorNumber = "3",
+                    Prices = new CardPrices { Nonfoil = 0, Foil = 100 } },
+                new() { Index = 0, Set = "vis", Name = "Foil only", CollectorNumber = "1",
+                    Prices = new CardPrices { Foil = 10.5m }, Ownership = new(1, 4, 2) }
+            ]
+        }).Split("\r\n");
+        check(rankedCsv[1].StartsWith("1;1;Foil only;VIS;1;;;10.50;10.50;1;4;")
+            && rankedCsv[2].StartsWith("2;2;Zero nonfoil;VIS;3;;0.00;100.00;0.00;")
+            && rankedCsv[3].StartsWith("3;3;No price;VIS;2;"),
+            "ranked report sorts foil fallback above real zero and missing prices, with invariant prices, original positions and exact ownership");
+        await using (var pilotFactory = factory.WithWebHostBuilder(builder =>
+            builder.UseSetting("MobileWeb:AllowedUserObjectIds", UserA)))
+        {
+            using var pilotClient = pilotFactory.CreateClient();
+            pilotClient.DefaultRequestHeaders.Add("X-Test-User", UserB);
+            using var deniedPilot = await pilotClient.GetAsync("/collection/");
+            check(deniedPilot.StatusCode == HttpStatusCode.Forbidden, "private pilot rejects an authenticated but unapproved tenant user");
+        }
+        client.DefaultRequestHeaders.Remove("X-Test-User");
+        client.DefaultRequestHeaders.Add("X-Test-User", "missing-scope");
+        using var noScope = await client.GetAsync("/collection/");
+        check(noScope.StatusCode == HttpStatusCode.Forbidden, "user identity alone is insufficient without delegated Scan.Submit permission");
 
         await using var mcpFactory = new WebApplicationFactory<MtgCatalogueTools>().WithWebHostBuilder(builder =>
         {
@@ -188,7 +334,8 @@ internal static class ApiOwnershipChecks
             if (user.Length == 0) return Task.FromResult(AuthenticateResult.NoResult());
             Claim[] claims = user == "missing-claims" ? [] :
                 [new("tid", user == "other-tenant" ? UserB : Tenant),
-                 new("oid", user == "other-tenant" ? UserA : user)];
+                 new("oid", user is "other-tenant" or "missing-scope" ? UserA : user),
+                 new("scp", user == "missing-scope" ? "Other.Permission" : "Scan.Submit")];
             return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
                 new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme.Name)), Scheme.Name)));
         }

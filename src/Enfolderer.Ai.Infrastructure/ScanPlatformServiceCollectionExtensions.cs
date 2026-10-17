@@ -52,6 +52,15 @@ public static class ScanPlatformServiceCollectionExtensions
             return new BlobScanImageStore(CreateBlobServiceClient(sp, options));
         });
 
+        services.AddSingleton<ICollectionSnapshotStore>(sp =>
+        {
+            if (options.UsesAzureStorage)
+                return new BlobCollectionSnapshotStore(CreateBlobServiceClient(sp, options));
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(ScanPlatformServiceCollectionExtensions))
+                .LogWarning("No StorageAccountUrl configured; collection snapshots are in-memory and will not survive a restart.");
+            return new InMemoryCollectionSnapshotStore();
+        });
+
         services.AddSingleton<IJobStore>(sp =>
         {
             var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(ScanPlatformServiceCollectionExtensions));

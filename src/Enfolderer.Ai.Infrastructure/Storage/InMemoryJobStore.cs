@@ -21,6 +21,13 @@ public sealed class InMemoryJobStore : IJobStore
     public Task<ScanJobDocument?> GetAsync(string jobId, CancellationToken ct = default) =>
         Task.FromResult(_jobs.TryGetValue(jobId, out var job) ? job : null);
 
+    public Task<IReadOnlyList<ScanJobDocument>> FindRecentAsync(string tenantId, IReadOnlyList<string> owners,
+        DateTimeOffset since, int limit, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<ScanJobDocument>>(_jobs.Values
+            .Where(j => j.OwnerTenantId == tenantId && owners.Contains(j.OwnerObjectId)
+                && j.CreatedAt >= since && j.Status != ScanJobStatus.Pending)
+            .OrderByDescending(j => j.CreatedAt).Take(limit).ToArray());
+
     public Task<ScanJobDocument> UpsertAsync(ScanJobDocument job, CancellationToken ct = default)
     {
         var stored = job with { UpdatedAt = DateTimeOffset.UtcNow };

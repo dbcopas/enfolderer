@@ -71,7 +71,9 @@ param(
     [string] $DeploymentName = 'enfolderer-scan',
     [string] $NamePrefix,
     [switch] $SkipImages,
-    [switch] $SkipAgents
+    [switch] $SkipAgents,
+    [string] $MobileWebClientId,
+    [string] $ScanAllowedUserObjectIds
 )
 
 Set-StrictMode -Version Latest
@@ -313,7 +315,10 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
         Write-Step '6. Agents (skipped)'
         Write-Note '-SkipAgents was passed, so the agents keep the prompts they already have'
         if (-not $SkipImages) {
-            & (Join-Path $PSScriptRoot 'deploy-images.ps1') -DeploymentName $DeploymentName -Tag $tag
+            $webPass = @{}
+            if ($MobileWebClientId) { $webPass.MobileWebClientId = $MobileWebClientId }
+            if ($ScanAllowedUserObjectIds) { $webPass.ScanAllowedUserObjectIds = $ScanAllowedUserObjectIds }
+            & (Join-Path $PSScriptRoot 'deploy-images.ps1') -DeploymentName $DeploymentName -Tag $tag @webPass
         }
         Write-Host ''
         Write-Good 'Done.'
@@ -356,6 +361,8 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
     }
     if (-not $SkipImages) { $pass['Tag'] = $tag }
     foreach ($k in $ids.Keys) { if ($ids[$k]) { $pass[$k] = $ids[$k] } }
+    if ($MobileWebClientId) { $pass.MobileWebClientId = $MobileWebClientId }
+    if ($ScanAllowedUserObjectIds) { $pass.ScanAllowedUserObjectIds = $ScanAllowedUserObjectIds }
 
     if ($ids.Values | Where-Object { $_ }) {
         & (Join-Path $PSScriptRoot 'deploy-images.ps1') @pass

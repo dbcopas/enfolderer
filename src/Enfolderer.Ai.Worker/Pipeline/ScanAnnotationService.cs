@@ -10,11 +10,13 @@ namespace Enfolderer.Ai.Worker.Pipeline;
 public sealed class ScanAnnotationService(
     ScryfallPriceClient prices, IScanImageStore images, ILogger<ScanAnnotationService> log)
 {
-    public async Task<ScanResultDocument> CreateAsync(ScanResultDocument result, Stream source, CancellationToken ct)
+    public async Task<ScanResultDocument> CreateAsync(ScanResultDocument result, Stream source, CancellationToken ct,
+        CollectionSnapshot? snapshot = null, string? ownershipError = null)
     {
         var timer = Stopwatch.StartNew();
         var enriched = new List<IdentifiedCard>();
         var cache = new Dictionary<(string Set, string Number, string Language), CardPrices>();
+        var ownershipIndex = snapshot?.BuildIndex();
         foreach (var card in result.Cards)
         {
             var updated = card;
@@ -41,6 +43,20 @@ public sealed class ScanAnnotationService(
                     + "foil {Foil} ({FoilLanguage}); source {Source}; retrieved {RetrievedAt}; error {Error}.",
                     card.Index, result.JobId, value.Nonfoil, value.NonfoilLanguage, value.Foil,
                     value.FoilLanguage, value.Source, value.RetrievedAt, value.Error);
+            }
+            if ((ownershipIndex is not null || ownershipError is not null) && card.Game == CardGames.Magic)
+            {
+                try
+                {
+                    updated = updated with { Ownership = ownershipIndex is null
+                        ? new CardOwnership(0, 0, 1, ownershipError)
+                        : CollectionSnapshot.Resolve(updated, ownershipIndex) };
+                }
+                catch (InvalidOperationException ex)
+                {
+                    log.LogWarning(ex, "Card {Index} of job {JobId}: ownership is unknown.", card.Index, result.JobId);
+                    updated = updated with { Ownership = new CardOwnership(0, 0, 1, ex.Message) };
+                }
             }
             enriched.Add(updated);
         }

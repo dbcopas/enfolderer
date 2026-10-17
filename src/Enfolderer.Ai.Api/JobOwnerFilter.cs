@@ -26,6 +26,21 @@ public sealed class JobOwnerFilter : IEndpointFilter
             log.LogWarning("Rejected job request without an authenticated tenant and object identity.");
             return Results.Unauthorized();
         }
+        var config = http.RequestServices.GetRequiredService<IConfiguration>();
+        var scopes = http.User.FindFirstValue("scp")
+            ?? http.User.FindFirstValue("http://schemas.microsoft.com/identity/claims/scope");
+        if (!(scopes ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("Scan.Submit", StringComparer.Ordinal))
+        {
+            log.LogWarning("Rejected scan request without delegated Scan.Submit permission.");
+            return Results.Forbid();
+        }
+        var allowed = (config["MobileWeb:AllowedUserObjectIds"] ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (allowed.Length > 0 && !allowed.Contains(owner.ObjectId, StringComparer.OrdinalIgnoreCase))
+        {
+            log.LogWarning("Rejected scan request by a user outside the private pilot.");
+            return Results.Forbid();
+        }
 
         if (http.Request.RouteValues["jobId"] is string jobId)
         {

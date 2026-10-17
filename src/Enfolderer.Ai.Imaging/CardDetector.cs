@@ -165,7 +165,7 @@ public static class CardDetector
     public static IReadOnlyList<DetectedCard> Detect(Stream image, CardDetectorOptions? options = null)
         => Detect(image, out _, options);
 
-    /// <summary>Reports when physical-card recovery replaces a sparse arrangement vote.</summary>
+    /// <summary>Reports when physical-card recovery replaces sparse or fragmented arrangement regions.</summary>
     public static IReadOnlyList<DetectedCard> Detect(Stream image, out string? recoveryDiagnostic,
         CardDetectorOptions? options = null)
     {
@@ -195,6 +195,15 @@ public static class CardDetector
                 {
                     recoveryDiagnostic = FormattableString.Invariant(
                         $"Physical-card recovery: sparse arrangement covered {coverage:P1} of the image ({arrangement.Count} regions); contours and frame anchors recovered {recovered.Count} whole-card regions.");
+                    return recovered;
+                }
+            }
+            if (arrangement.Count >= 3)
+            {
+                var recovered = RecoverWholeCards(source, arrangement, opts);
+                if (recovered.Count > 0)
+                {
+                    recoveryDiagnostic = $"Physical-card recovery: consistent contour regions replaced {arrangement.Count} overlapping, partial or merged arrangement regions with {recovered.Count} whole-card regions.";
                     return recovered;
                 }
             }
@@ -292,6 +301,81 @@ public static class CardDetector
     {
         var (_, _, w, h) = quad.BoundingBox();
         return w * h;
+    }
+
+    private static IReadOnlyList<DetectedCard> RecoverWholeCards(
+        Image<Rgba32> source, IReadOnlyList<DetectedCard> arrangement, CardDetectorOptions options)
+    {
+        var overlapping = arrangement.Count(a => arrangement.Any(b =>
+        {
+            if (ReferenceEquals(a, b)) return false;
+            var first = a.Quad.BoundingBox();
+            var second = b.Quad.BoundingBox();
+            var intersection = Math.Max(0, Math.Min(first.X + first.Width, second.X + second.Width) - Math.Max(first.X, second.X))
+                * Math.Max(0, Math.Min(first.Y + first.Height, second.Y + second.Height) - Math.Max(first.Y, second.Y));
+            return intersection > Math.Min(Area(a.Quad), Area(b.Quad)) * 0.35;
+        }));
+        var fragmented = overlapping >= arrangement.Count * 0.25;
+        static double MedianArea(IReadOnlyList<DetectedCard> cards) =>
+            cards.Select(c => Area(c.Quad)).Order().ElementAt(cards.Count / 2);
+        var arrangementArea = MedianArea(arrangement);
+        IReadOnlyList<DetectedCard> best = [];
+        var bestCoverage = 0d;
+        // Title-frame recovery expects upright print. Preserve its point order when mapping back.
+        foreach (var angle in new[] { 0, 90, 180, 270 })
+        {
+            using var oriented = source.Clone(c => c.Rotate(angle));
+            var contours = CardContourDetector.Detect(oriented, options);
+            // JPEG re-encoding can break a dark border. Complete from measured neighbours
+            // while their rows and columns are upright, before mapping back to source axes.
+            if (contours.Count >= 3 && options.Arrangement is not null)
+                contours = CardArrangementDetector.CompleteMeasured(oriented, contours, options.Arrangement);
+            contours = SortMeasuredRows(contours);
+            if (contours.Count < 3 || !fragmented && contours.Count <= arrangement.Count) continue;
+            var candidates = contours.Select(c => c with
+                {
+                    Quad = new CardQuad(c.Quad.Points.Select(p => angle switch
+                    {
+                        90 => new ImagePoint(p.Y, source.Height - 1 - p.X),
+                        180 => new ImagePoint(source.Width - 1 - p.X, source.Height - 1 - p.Y),
+                        270 => new ImagePoint(source.Width - 1 - p.Y, p.X),
+                        _ => p
+                    }).ToArray())
+                }).ToArray();
+            if (MedianArea(candidates) < arrangementArea * 0.4) continue;
+            var coverage = candidates.Sum(c => Area(c.Quad)) / (source.Width * (double)source.Height);
+            if (!fragmented && candidates.Sum(c => Area(c.Quad)) < arrangement.Sum(c => Area(c.Quad)) * 1.8) continue;
+            // Merged regions can have their centres between cards; require area support instead.
+            var supported = arrangement.Count(a =>
+            {
+                var box = a.Quad.BoundingBox();
+                var covered = candidates.Sum(c =>
+                {
+                    var b = c.Quad.BoundingBox();
+                    return Math.Max(0, Math.Min(box.X + box.Width, b.X + b.Width) - Math.Max(box.X, b.X))
+                        * Math.Max(0, Math.Min(box.Y + box.Height, b.Y + b.Height) - Math.Max(box.Y, b.Y));
+                });
+                return covered >= box.Width * box.Height * 0.6;
+            });
+            if (coverage < 0.15 || supported < arrangement.Count * 0.6 || coverage <= bestCoverage) continue;
+            best = candidates;
+            bestCoverage = coverage;
+        }
+        return best;
+    }
+
+    private static IReadOnlyList<DetectedCard> SortMeasuredRows(IReadOnlyList<DetectedCard> cards)
+    {
+        if (cards.Count == 0) return cards;
+        var height = cards.Select(c => c.Quad.BoundingBox().Height).Order().ElementAt(cards.Count / 2);
+        var rows = new List<List<DetectedCard>>();
+        foreach (var card in cards.OrderBy(c => c.Quad.BoundingBox().Y))
+        {
+            if (rows.Count == 0 || card.Quad.BoundingBox().Y - rows[^1][0].Quad.BoundingBox().Y > height * 0.5)
+                rows.Add([]);
+            rows[^1].Add(card);
+        }
+        return rows.SelectMany(row => row.OrderBy(c => c.Quad.BoundingBox().X)).ToArray();
     }
 
     public static string CheckNativeRuntime()

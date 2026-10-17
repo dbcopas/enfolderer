@@ -128,6 +128,54 @@ and API as well as the desktop app.
 The progress bar counts completed images rather than showing 100% when a scan starts. Hover over
 the status text to read the full message if it is truncated.
 
+### Mobile website
+
+The API container also serves a responsive website at its HTTPS root. There is no sixth image,
+extra always-on web container, Node build, public blob URL or client secret. The browser uses
+Microsoft MSAL with authorization-code/PKCE, a dedicated single-tenant SPA registration, and
+the existing delegated `Scan.Submit` API permission. The pinned MSAL library and its MIT license
+are served locally; `scripts/restore-web-assets.ps1` restores the integrity-checked dependency.
+
+The private pilot uses an explicit tenant user/guest object-ID allowlist. It applies to both web
+and desktop API calls. An Outlook.com user first accepts a tenant guest invitation and must be
+assigned to the web enterprise app and included in that allowlist. Assignment-required applications
+need one-time tenant-wide administrator consent; ordinary approved users need no administrator role.
+See [mobile setup](docs/azure-setup.md#mobile-website-private-pilot).
+
+On a phone, take or select a photo, choose the game, and start the scan. The browser normalizes
+orientation, removes metadata and caps the longest edge at 4096 pixels before upload. Use a
+browser-readable JPEG/PNG if HEIC is unsupported. Real stages and processed/identified counts
+drive the progress display; the grayscale preview and animated sweep indicate activity, not a
+fabricated per-card percentage. The current job resumes after a same-tab reload in the same
+signed-in session; a reconnect button handles interrupted polling. PNG overlays and a price-ranked
+CSV report can be downloaded on mobile. The report includes both EUR prices, the ranking price,
+original card position, ownership, resolution, price errors, source and retrieval time. Nonfoil
+is the ranking price, with foil used only when nonfoil is unavailable; zero remains a real price.
+Unpriced cards sort last and ties retain scan order. This mobile report replaces the previous
+five-column download and is not import-compatible. Desktop import CSVs remain unchanged.
+Spreadsheet formula prefixes are escaped.
+
+For ownership, use **Scan > Export Mobile Collection Snapshot...** in the desktop app, then
+upload that JSON under **My collection** on the website (a computer signed into the same account
+can upload it too). The export reads the same local database pair used by desktop scans.
+Only printing keys (set/number and public Gatherer IDs), exact quantities and locally computed all-printing totals leave
+the desktop; original databases, card names and personal notes are not uploaded. Replace it
+after inventory changes or delete it on the website. Snapshots are private, isolated by validated
+tenant/object IDs, and remain until replaced/deleted. The worker reads the snapshot when rendering
+an opted-in scan; removing it mid-scan produces explicit unknown ownership, not invented zeros.
+Missing exact printings get pink overlay backgrounds; owned cards show quantities, and unknown
+ownership is amber. Double-faced cards still require two copies. Existing rendered images are
+unchanged by later snapshot replacement/deletion. Desktop scans keep their local ownership path.
+Older MTG Studio rows can have legacy set codes and no collector number (for example `VI` rather
+than `VIS`). The snapshot now also exports Gatherer printing IDs, which the exact Scryfall pricing
+response supplies for matching without card-name guesses. Set/number remains the preferred key.
+Re-export and upload a fresh snapshot to include these rows; older snapshots remain readable but
+cannot recover quantities they omitted. If neither the exact set/number nor a Gatherer printing
+ID is present in an available snapshot, ownership is assumed to be zero. These cards use the
+normal pink missing-card panel without an ownership question mark and are eligible for the
+highest-value-needed trophy. An unavailable snapshot, conflicting identifiers or unsupported
+layout still produces explicit unknown ownership (amber), not zero.
+
 The worker processes up to **two cards concurrently** within each scan. Each task uses its own
 source-image stream; results retain reading order and progress writes are serialized. Per-card
 failures do not discard the other cards. Set the worker environment variable
@@ -139,6 +187,23 @@ crop/store, identification and art verification, all cards, pricing, rendering, 
 and total worker processing. Foundry logs time background Responses/tool approval/reply retrieval.
 `.\scripts\show-last-scan.ps1` includes job timing events. The worker total
 excludes desktop upload, queue wait, polling lag and the final image download.
+
+For operator investigations, `.\scripts\get-scan-diagnostics.ps1` downloads the latest uploaded
+pilot scan's original photo, overlay, per-card crops, full job/result JSON and ranked CSV, then
+collects Log Analytics evidence. Use `-JobId <id>` for a specific scan or `-Hours 168` to widen the
+default 24-hour search. Failed and running attempts are included; pending uploads are not selected
+as the latest scan. Downloads go outside the repository under local application data by default.
+Run this on an explicit investigation request, not as background collection; use the latest scan
+unless the requester specifies another job.
+The manifest records missing files explicitly and SHA-256 hashes of downloaded evidence.
+Job-correlated logs and time-window context logs are separate because concurrent scans can overlap.
+Log ingestion can lag; rerun after a scan finishes for final evidence.
+
+Diagnostics is disabled by default. An explicitly approved operator signs in once with
+`.\scripts\get-scan-diagnostics.ps1 -SignIn`; subsequent investigations reuse the OS-encrypted
+token cache, without copying secrets into this repository. The ordinary pilot allowlist does not
+grant diagnostics access. See [operator setup](docs/azure-setup.md#read-only-scan-diagnostics) for
+the separate operator allowlist, permissions and privacy/retention considerations.
 
 Deploy the updated worker and rebuild/restart the desktop before comparing the same photos at
 concurrency 1, 2 and 3. Compare identity/printing accuracy as well as elapsed time and
@@ -157,25 +222,26 @@ The legacy classic client remains available for regression checks, not as an aut
 After final printing/art verification, scans also produce a priced PNG of the original photo.
 Half-card-width artwork overlays show euro-symbol prices side by side, nonfoil on the
 left and foil (marked with a star) on the right. Text is measured and sized to fill the available
-box, with the set code and collector number in a smaller line below, without overlapping the confidence circle in the
+box, with the card name followed by set code and collector number on smaller lines below, without overlapping the confidence circle in the
 lower right: green for placed printings, yellow for printings needing verification, and red for
-unidentified cards or unplaced readings below 0.5 confidence. An appended
-legend includes card identity, photographed language, price-source language, printing uncertainty,
-and retrieval time. Prices are **Cardmarket via Scryfall daily reference prices**, not
+unidentified cards or unplaced readings below 0.5 confidence. There is no appended footer or
+legend; output retains the photo dimensions (apart from the existing 2400-pixel render cap).
+A gold trophy marks the highest-value known exact-printing shortage: zero owned for a
+single-faced card or fewer than two for a physical double-faced card. Owned-enough, unknown and
+unpriced cards cannot win; tied values use scan order. Without a known priced shortage, there
+is no trophy. Prices are **Cardmarket via Scryfall daily reference prices**, not
 live offers or a guaranteed valuation. Each missing foreign-language price independently falls
-back to English for the **same set and collector number**, marked `[en fallback]` in the legend.
+back to English for the **same set and collector number**, recorded in result price metadata.
 A foil-only or nonfoil-only record is
 valid; unavailable prices are left blank, never zero, USD, or the other finish's price.
-The legend is ordered by descending nonfoil price, falling back to foil only when nonfoil is
-unavailable. Cards with neither price are last, with
-ties in original card order. Card numbers still refer to the original scan; CSV order is unchanged.
+The mobile CSV carries the descending price ranking instead of an image legend.
 
 The desktop downloads the PNG through the authenticated job API, saves it beside the CSV as
 `<csv-stem>_<job-id>_priced.png`, and opens a preview. Batch scans save one PNG per source image.
 The original upload is unchanged. CSVs remain available if pricing, rendering, or download fails;
 the completion summary reports those warnings separately. Both prices are shown for human
 comparison; no automatic foil detection is performed. Uncertain printings are explicitly marked as indicative.
-The image legend separates the exact price target (`Price for ONS 62`) from identification evidence.
+Result metadata and the web card list separate the exact price target from identification evidence.
 `Printing needs verification` means the photographed printing is not established, not that the
 price lookup failed. A lone artwork match is described as `Artwork matches; set/number not established`.
 A decisive artwork comparison that separates competing printings can verify either the existing
@@ -222,8 +288,13 @@ When the normal arrangement covers less than 15% of the photo, an OpenCV recover
 for larger card contours and title frames, including extended-art cards on dark neutral surfaces.
 Measured anchors and their spacing can complete missing neighbours; no set, card name, or fixed
 grid is assumed. Recovery must exceed both 15% of the photo and twice the original area.
-This path is currently tuned for approximately upright cards in the raw pixel axes, not arbitrary
-physical rotations. EXIF display rotation is handled independently as described above.
+For overlapping fragments or merged arrangement regions, a second recovery checks contour/title-frame
+measurements at all four quarter-turns. Replacement requires consistent whole-card sizes, coverage of
+the original regions and sufficient photo coverage; it does not assume a fixed card count. The
+recovered corners are mapped back to the original image while preserving their crop orientation.
+Contour groups also use the existing edge-supported neighbour completion in that upright frame,
+so a dark card border lost during browser JPEG re-encoding need not leave a hole in the scan.
+EXIF display rotation is handled independently as described above.
 
 The imaging library includes matching Windows and Linux x64 slim OpenCV runtimes. Both the worker
 and imaging MCP service must be rebuilt together. Their container builds execute
@@ -231,6 +302,24 @@ and imaging MCP service must be rebuilt together. Their container builds execute
 rather than the next scan. No additional AI agent or model deployment is required.
 
 For crop diagnosis, run `dotnet run --project tools\Enfolderer.Ai.Imaging.TrainingCheck -- --inspect <image> <crop-directory>`.
+To export the shared detector's measured regions and crops without a live agent, run
+`dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --measure-cards <image> <crop-directory>`.
+Magic printing searches are restricted to paper cards, with digital-only records rejected even
+from exact lookups. Printing searches follow catalogue pagination, and comparison carries up to
+64 physical candidates rather than the first 12. This includes early promos that may have no
+printed set code or collector number. Comparison uses the whole card face (frame, symbol area,
+text and artwork), not just the illustration; it is not a dedicated set-symbol recognizer.
+Incomplete, failed or capped candidate enumeration is explicitly marked and cannot endorse or
+move a printing by image similarity. Shared-image ties still remain inconclusive; thresholds are
+unchanged. No card-name-specific printing override is used.
+For the original HarperPrism Mana Crypt regression against current public catalogue references,
+run `dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --legacy-printing <card-crop.png>`.
+This opt-in network check requires PHPR 5 to reach the worker through the catalogue tool and
+decisively match the supplied crop; the normal suite covers physical-only filtering, later-page
+promos, candidate limits, incomplete evidence and shared-art ambiguity offline.
+The `--photo-boundaries` checks cover the supplied six-card sideways phone photo at all four
+quarter-turns, including whole-card overlap, printed crop orientation and boundary-adapter preservation,
+for both the original camera file and the exact browser-uploaded JPEG.
 The live boundary checker accepts an optional crop-output directory and checks annotated physical
 card regions when a training photo has a `boundaries.json` file. Photo 07's annotations describe
 the ten loose cards on the laptop. The separate `cards.txt` records their names, printings and

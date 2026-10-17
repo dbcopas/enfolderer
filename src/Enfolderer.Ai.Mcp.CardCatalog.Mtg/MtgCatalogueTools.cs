@@ -14,8 +14,13 @@ namespace Enfolderer.Ai.Mcp.CardCatalog.Mtg;
 public sealed class MtgCatalogueTools
 {
     private readonly ScryfallCatalogue _catalogue;
+    private readonly ILogger<MtgCatalogueTools> _log;
 
-    public MtgCatalogueTools(ScryfallCatalogue catalogue) => _catalogue = catalogue;
+    public MtgCatalogueTools(ScryfallCatalogue catalogue, ILogger<MtgCatalogueTools> log)
+    {
+        _catalogue = catalogue;
+        _log = log;
+    }
 
     [McpServerTool(Name = "get_printing_prices")]
     [Description("Exact-printing EUR nonfoil and foil Cardmarket reference prices via Scryfall. "
@@ -74,6 +79,8 @@ public sealed class MtgCatalogueTools
         not being asked to look at the pictures or to choose between them — whoever has the
         photograph will do that — only to carry the list across. It is what lets a reading that
         looks perfect in every field still be caught when it is of the wrong printing.
+        Also copy "alternatesComplete"; false means the list is incomplete and cannot establish
+        the printing by image similarity alone. Digital-only printings are excluded.
         """)]
     public async Task<string> ResolvePrintingAsync(
         [Description("Card name exactly as the title bar prints it, in whatever language it is printed in. Never join a second spell's name to it with '//'.")] string name,
@@ -93,6 +100,7 @@ public sealed class MtgCatalogueTools
                 readSet = set
             });
 
+        var alternates = await AlternatesAsync(resolved.Printing, language, ct);
         return JsonSerializer.Serialize(new
         {
             found = true,
@@ -135,7 +143,8 @@ public sealed class MtgCatalogueTools
             // these and see which printing it actually is; where several share an illustration the
             // comparison will decline, which costs nothing. The cost of leaving them out is that
             // the check cannot be made at all.
-            alternates = (await AlternatesAsync(resolved.Printing, language, ct)).Select(c => new
+            alternatesComplete = alternates.Complete,
+            alternates = alternates.Printings.Select(c => new
             {
                 set = c.Set,
                 collectorNumber = c.CollectorNumber,
@@ -147,30 +156,32 @@ public sealed class MtgCatalogueTools
     /// <summary>
     /// Every printing of a resolved card that has a picture, the resolved one included.
     /// <para>
-    /// Capped, because this is copied into an agent's reply and a long list is both slow and
-    /// likely to be copied badly. Cards with more printings than this are the heavily reprinted
-    /// staples, which are also the ones most likely to share one illustration — the case the
-    /// comparison declines on anyway — so the cap costs the least where it binds.
+    /// Capped to bound model output and image downloads. A truncated or failed search is
+    /// explicitly incomplete: the surviving images must not endorse a printing.
     /// </para>
     /// </summary>
-    private async Task<IReadOnlyList<CataloguePrinting>> AlternatesAsync(
+    private async Task<(IReadOnlyList<CataloguePrinting> Printings, bool Complete)> AlternatesAsync(
         CataloguePrinting printing, string? language, CancellationToken ct)
     {
         try
         {
             var all = await _catalogue.SearchPrintingsAsync(printing.Name, null, language, ct);
-            return all.Where(p => !string.IsNullOrEmpty(p.ImageUrl)).Take(MaxAlternates).ToList();
+            var withImages = all.Where(p => !string.IsNullOrEmpty(p.ImageUrl)).ToList();
+            if (withImages.Count > MaxAlternates)
+                _log.LogWarning("Printing image candidates for {Name} truncated from {Count} to {Limit}; visual comparison cannot establish the printing.",
+                    printing.Name, withImages.Count, MaxAlternates);
+            return (withImages.Take(MaxAlternates).ToList(),
+                withImages.Count == all.Count && withImages.Count <= MaxAlternates);
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidDataException)
         {
-            // A reading that cannot be checked is still a reading. Failing the whole resolution
-            // because the extra search failed would turn a working answer into no answer.
-            return string.IsNullOrEmpty(printing.ImageUrl) ? [] : [printing];
+            _log.LogWarning(ex, "Could not enumerate printing images for {Name}; comparison candidates are incomplete.", printing.Name);
+            return (string.IsNullOrEmpty(printing.ImageUrl) ? [] : [printing], false);
         }
     }
 
     /// <summary>How many printings of one card are offered for comparison.</summary>
-    private const int MaxAlternates = 12;
+    private const int MaxAlternates = 64;
 
     [McpServerTool(Name = "lookup_by_set_and_number")]
     [Description("Look up the exact Magic printing for a set code and collector number, e.g. set 'bro', number '167'.")]

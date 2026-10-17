@@ -36,8 +36,10 @@ public static class MainMenuTests
         Check(top[0].Items.Count == 1 && ((MenuItem)top[0].Items[0]).Header.ToString() == "E_xit",
             "File contains only Exit");
         Check(top[1].Items.OfType<MenuItem>().Count() == 5, "View retains layouts and binder navigation");
-        Check(top[2].Items.Count == 2 && ((MenuItem)top[2].Items[1]).Header.ToString()!.Contains("Multiple Images"),
-            "Scan exposes single-image and folder scans");
+        Check(top[2].Items.Count == 3 && top[2].Items.OfType<MenuItem>().Any(i =>
+            i.Header.ToString()!.Contains("Multiple Images")) && top[2].Items.OfType<MenuItem>().Any(i =>
+            i.Header.ToString()!.Contains("Mobile Collection")),
+            "Scan exposes single-image, folder scans and mobile snapshot export");
         Check(top[4].Items.Count == 1, "Help exposes the project link");
         Check(window.InputBindings.OfType<KeyBinding>().Any(binding =>
             binding.Key == Key.F && binding.Modifiers == ModifierKeys.Control

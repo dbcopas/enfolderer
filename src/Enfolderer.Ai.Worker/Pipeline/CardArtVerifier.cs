@@ -55,10 +55,9 @@ public sealed class CardArtVerifier
 
     /// <summary>
     /// How many printings are compared. Each one is a download and a hash, so the cost is linear
-    /// in this, and a card with more printings than this is a staple whose printings almost
-    /// certainly share an illustration — the case the comparison declines on anyway.
+    /// in this. Reaching the limit is reported as inconclusive, never as a winning match.
     /// </summary>
-    private const int MaxCandidates = 12;
+    private const int MaxCandidates = 64;
 
     private readonly HttpClient _http;
     private readonly ILogger<CardArtVerifier> _log;
@@ -123,6 +122,13 @@ public sealed class CardArtVerifier
             .Where(r => IsFetchable(r.ImageUrl))
             .Take(MaxCandidates)
             .ToList();
+
+        if (!card.ArtCandidatesComplete || references.Count >= MaxCandidates)
+        {
+            _log.LogWarning("Card {Index} of job {JobId}: printing image candidates incomplete or at limit {Limit}; refusing to endorse or move the printing.",
+                card.Index, jobId, MaxCandidates);
+            return card with { ArtVerdict = "inconclusive", ArtReason = "incomplete_candidates" };
+        }
 
         if (references.Count == 0)
         {

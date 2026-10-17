@@ -32,6 +32,23 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--legacy-printing")
+            return LegacyPrintingChecks.RunAsync(args[1]).GetAwaiter().GetResult();
+        if (args.Length == 3 && args[0] == "--measure-cards")
+        {
+            using var input = File.OpenRead(args[1]);
+            var cards = CardDetector.Detect(input, out var diagnostic);
+            Console.WriteLine(diagnostic);
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(cards));
+            Directory.CreateDirectory(args[2]);
+            for (var i = 0; i < cards.Count; i++)
+            {
+                input.Position = 0;
+                using var output = File.Create(Path.Combine(args[2], $"card-{i:D2}.png"));
+                PerspectiveCropper.CropToPng(input, cards[i].Quad, output);
+            }
+            return 0;
+        }
         if (args.Length == 2 && args[0] == "--price-render-check")
         {
             PriceAnnotationChecks.RunAsync(Check, args[1]).GetAwaiter().GetResult();
@@ -45,6 +62,7 @@ internal static class Program
         if (args.Length > 0 && (args[0] is not ("--photo-art" or "--photo-multilingual" or "--photo-boundaries") || args.Length > 2))
         {
             Console.Error.WriteLine("Usage: Enfolderer.Ai.CardCatalog.Check [--photo-art|--photo-multilingual|--photo-boundaries [training-directory]] "
+                + "or --measure-cards <photo-path> <crop-directory> or --legacy-printing <mana-crypt-crop> "
                 + "or --price-render-check <synthetic-preview.png> "
                 + "or --live-reading <project-endpoint> <agent-id> <page-directory> <comma-separated-indices> "
                 + "or --live-boundary <project-endpoint> <agent-id> <page-directory> <blob-path> [crop-directory]");
@@ -62,6 +80,7 @@ internal static class Program
         ArtHashChecks();
         ArtAdjudicationChecks();
         ArtFetchChecks();
+        LegacyPrintingChecks.RunOfflineAsync(Check).GetAwaiter().GetResult();
         RecalledSetChecks().GetAwaiter().GetResult();
         ScanReliabilityChecks.RunOfflineAsync(Check).GetAwaiter().GetResult();
         PriceAnnotationChecks.RunAsync(Check).GetAwaiter().GetResult();
@@ -793,6 +812,14 @@ internal static class Program
 
             Check(card.ArtReferences.Count == 2 && card.ArtReferences[1].Set == "sld",
                 "the printings the agent copied through reach the orchestrator");
+        }
+
+        {
+            var incomplete = FoundryCardIdentificationAgent.ParseIdentification(
+                """{"set":"old","collectorNumber":"1","name":"Legacy card","alternatesComplete":false}""",
+                StubCrop(), CardGames.Magic, "test");
+            Check(!incomplete.ArtCandidatesComplete && incomplete.IsIdentified,
+                "incomplete candidate evidence reaches the worker without dropping a readable card");
         }
 
         {

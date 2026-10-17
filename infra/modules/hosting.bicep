@@ -34,6 +34,9 @@ param tenantId string
 
 @description('Application (client) id of the API app registration.')
 param apiClientId string
+param mobileWebClientId string = ''
+param scanAllowedUserObjectIds string = ''
+param scanDiagnosticUserObjectIds string = ''
 
 @description('Endpoint of Team A\'s geometry project.')
 param geometryProjectEndpoint string
@@ -166,6 +169,18 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AzureAd__ClientId'
               value: apiClientId
+            }
+            {
+              name: 'MobileWeb__ClientId'
+              value: mobileWebClientId
+            }
+            {
+              name: 'MobileWeb__AllowedUserObjectIds'
+              value: scanAllowedUserObjectIds
+            }
+            {
+              name: 'Diagnostics__AllowedUserObjectIds'
+              value: scanDiagnosticUserObjectIds
             }
           ])
         }

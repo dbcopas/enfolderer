@@ -30,8 +30,8 @@ public static class ScanOwnershipTests
                 main.Open();
                 using var command = main.CreateCommand();
                 command.CommandText = """
-                    CREATE TABLE Cards(id INTEGER, name TEXT, edition TEXT, collectorNumberValue TEXT, MtgsId INTEGER, Qty INTEGER);
-                    INSERT INTO Cards VALUES
+                    CREATE TABLE Cards(id INTEGER, name TEXT, edition TEXT, collectorNumberValue TEXT, MtgsId INTEGER, Qty INTEGER, gathererId INTEGER DEFAULT NULL);
+                    INSERT INTO Cards(id,name,edition,collectorNumberValue,MtgsId,Qty) VALUES
                     (1,'Test Card','aaa','001',101,99),
                     (2,'Test Card','bbb','1',102,99),
                     (3,'Test Card','aaa','1a',NULL,3),
@@ -61,6 +61,16 @@ public static class ScanOwnershipTests
                 command.ExecuteNonQuery();
             }
             var index = new ScanOwnershipIndex(folder);
+            var snapshot = index.ExportSnapshot();
+            var snapshotJson = System.Text.Json.JsonSerializer.Serialize(snapshot,
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            var restored = System.Text.Json.JsonSerializer.Deserialize<CollectionSnapshot>(snapshotJson,
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+            restored.Validate();
+            var snapshotIndex = restored.BuildIndex();
+            Check(!snapshotJson.Contains("Galadriel") && !snapshotJson.Contains("Test Card")
+                && !snapshotJson.Contains("CardId") && snapshot.Printings.Count == 13,
+                "mobile snapshot contains quantities and printing keys only, normalizes duplicate printings and omits names and source database IDs");
             var card = new IdentifiedCard
             {
                 Game = CardGames.Magic, Set = "AAA", CollectorNumber = "1", Name = "Test Card",
@@ -68,6 +78,19 @@ public static class ScanOwnershipTests
                 Quad = new CardQuad([new(40, 40), new(760, 40), new(760, 1060), new(40, 1060)])
             };
             var owned = index.Resolve(card);
+            foreach (var sample in new[]
+            {
+                card, card with { CollectorNumber = "1a" }, card with { CollectorNumber = "5" },
+                card with { CollectorNumber = "3", Prices = new CardPrices { Layout = "modal_dfc" } },
+                card with { Set = "ltr", CollectorNumber = "206" }, card with { Set = "clb", CollectorNumber = "26" }
+            })
+            {
+                var local = index.Resolve(sample);
+                var mobile = CollectionSnapshot.Resolve(sample, snapshotIndex);
+                Check(local.PrintingQuantity == mobile.Quantity && local.NameQuantity == mobile.AllQuantity
+                    && local.RequiredQuantity == mobile.RequiredQuantity && local.OverlayText == mobile.OverlayText,
+                    "serialized mobile snapshot preserves desktop exact-printing and all-printing quantities and double-face requirements");
+            }
             Check(owned.PrintingQuantity == 2 && owned.NameQuantity == 121 && !owned.IsMissing,
                 "exact printing is separate from same-name total, repeated mappings are counted once, collection overrides stale main qty");
             Check(index.Resolve(card with { CollectorNumber = "1a" }).PrintingQuantity == 3,
@@ -139,13 +162,13 @@ public static class ScanOwnershipTests
             Check(ScanOwnershipRenderer.Render(path, result, index).Count == 0
                 && ReadPixel(40, 100).SequenceEqual(before)
                 && ReadPixel(60, 360)[2] > panelBefore[2]
-                && ReadPixel(60, 480).SequenceEqual(before)
+                && ReadPixel(60, 600).SequenceEqual(before)
                 && ReadPixel(40, 1200).SequenceEqual(legend),
-                "missing card gets a pink price-overlay tint, no quantity or frame, and an unchanged price legend");
+                "missing card gets a taller pink price-overlay tint, no quantity or frame, and unchanged pixels outside the photo");
             SaveBlank();
             Check(ScanOwnershipRenderer.Render(path, result with { Cards = [card] }, index).Count == 0
                 && ReadPixel(40, 100).SequenceEqual(before)
-                && !ReadPixel(60, 480).SequenceEqual(before),
+                && !ReadPixel(60, 560).SequenceEqual(before),
                 "sufficient card gets a quantity panel and no frame");
             SaveBlank();
             Check(ScanOwnershipRenderer.Render(path, result with { Cards = [dfc] }, index).Count == 0
@@ -155,7 +178,7 @@ public static class ScanOwnershipTests
             SaveBlank();
             Check(ScanOwnershipRenderer.Render(path, result with { Cards = [prepared] }, index).Count == 0
                 && ReadPixel(40, 100).SequenceEqual(before)
-                && !ReadPixel(60, 480).SequenceEqual(before),
+                && !ReadPixel(60, 560).SequenceEqual(before),
                 "owned prepare card gets quantity despite low confidence");
             foreach (var differentlyNamed in new[] { galadriel, horn })
             {
@@ -163,7 +186,7 @@ public static class ScanOwnershipTests
                 Check(ScanOwnershipRenderer.Render(path, result with { Cards = [differentlyNamed] }, index).Count == 0
                     && ReadPixel(40, 100).SequenceEqual(before)
                     && ReadPixel(60, 360).SequenceEqual(panelBefore)
-                    && !ReadPixel(60, 480).SequenceEqual(before),
+                    && !ReadPixel(60, 560).SequenceEqual(before),
                     "diacritic and adventure-name differences keep owned overlays untinted with quantity text");
             }
             foreach (var unresolved in new[] { card with { Prices = null },
@@ -175,7 +198,7 @@ public static class ScanOwnershipTests
                     && ReadPixel(40, 100).SequenceEqual(before)
                     && ReadPixel(60, 360)[2] > panelBefore[2]
                     && ReadPixel(60, 360)[1] > panelBefore[1]
-                    && !ReadPixel(60, 480).SequenceEqual(before)
+                    && !ReadPixel(60, 560).SequenceEqual(before)
                     && ReadPixel(40, 1200).SequenceEqual(legend),
                     "unresolved ownership gets an amber overlay, unknown quantity panel, no frame and explicit warning");
             }
@@ -184,7 +207,7 @@ public static class ScanOwnershipTests
             Check(ReadPixel(40, 100).SequenceEqual(before)
                 && ReadPixel(60, 360)[2] > panelBefore[2]
                 && ReadPixel(60, 360)[1] > panelBefore[1]
-                && !ReadPixel(60, 480).SequenceEqual(before),
+                && !ReadPixel(60, 560).SequenceEqual(before),
                 "unavailable local inventory also marks ownership unknown");
 
             TestProvidedDatabases(Check);
@@ -203,6 +226,24 @@ public static class ScanOwnershipTests
         var paths = new[] { Path.Combine(folder, "mainDb.db"), Path.Combine(folder, "mtgstudio.collection") };
         var before = paths.Select(path => SHA256.HashData(File.ReadAllBytes(path))).ToArray();
         var index = new ScanOwnershipIndex(folder);
+        var snapshot = index.ExportSnapshot();
+        snapshot.Validate();
+        var snapshotIndex = snapshot.BuildIndex();
+        var knight = new IdentifiedCard
+        {
+            Game = CardGames.Magic, Name = "Knight of Valor", Set = "vis", CollectorNumber = "11",
+            Prices = new CardPrices { Layout = "normal", GathererIds = [3718] }
+        };
+        var localKnight = index.Resolve(knight);
+        var mobileKnight = CollectionSnapshot.Resolve(knight, snapshotIndex);
+        check(localKnight.PrintingQuantity == 4 && mobileKnight.Quantity == 4
+            && localKnight.NameQuantity == mobileKnight.AllQuantity && !mobileKnight.IsMissing,
+            "provided Knight of Valor VIS 11 matches VI's unnumbered legacy entry by Gatherer 3718, with exactly four owned");
+        var restored = System.Text.Json.JsonSerializer.Deserialize<CollectionSnapshot>(
+            System.Text.Json.JsonSerializer.Serialize(snapshot))!;
+        restored.Validate();
+        check(CollectionSnapshot.Resolve(knight, restored.BuildIndex()).Quantity == 4,
+            "legacy exact-printing quantities survive snapshot JSON round trip without uploading card names");
         var emeritus = index.Resolve(new IdentifiedCard
         {
             Game = CardGames.Magic, Name = "Emeritus of Woe", Set = "SOS", CollectorNumber = "80",
@@ -222,6 +263,9 @@ public static class ScanOwnershipTests
                 Prices = new CardPrices { Layout = layout, CardName = catalogueName }
             };
             var ownership = index.Resolve(external);
+            var mobileOwnership = CollectionSnapshot.Resolve(external, snapshotIndex);
+            check(ownership.PrintingQuantity == mobileOwnership.Quantity && ownership.NameQuantity == mobileOwnership.AllQuantity,
+                $"provided {set} {number} has identical desktop and exported mobile ownership");
             check(ownership == index.Resolve(external with { Name = null,
                 Prices = new CardPrices { Layout = layout, CardName = "Different external spelling" } })
                 && ownership.NameQuantity >= ownership.PrintingQuantity,

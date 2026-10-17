@@ -21,21 +21,31 @@ public static class ScanOwnershipRenderer
         var photoHeight = result.ImageHeight * scale;
         var size = Math.Max(12, image.PixelWidth / 100d);
         var warnings = new List<string>();
+        var ownedCards = new List<IdentifiedCard>();
+        foreach (var card in result.Cards.Where(c => c.Game == CardGames.Magic))
+        {
+            CardOwnership ownership;
+            try
+            {
+                if (inventory is null) throw new InvalidOperationException("Local collection is unavailable.");
+                var local = inventory.Resolve(card);
+                ownership = new(local.PrintingQuantity, local.NameQuantity, local.RequiredQuantity);
+            }
+            catch (InvalidOperationException ex)
+            {
+                warnings.Add($"Card {card.Index} ({card.Set} {card.CollectorNumber}): {ex.Message}");
+                ownership = new(0, 0, 1, ex.Message);
+            }
+            ownedCards.Add(card with { Ownership = ownership });
+        }
+        var highest = CardValueRanking.HighestNeeded(ownedCards);
         var visual = new DrawingVisual();
         using (var drawing = visual.RenderOpen())
         {
             drawing.DrawImage(image, new Rect(0, 0, image.PixelWidth, image.PixelHeight));
-            foreach (var card in result.Cards.Where(c => c.Game == CardGames.Magic))
+            foreach (var card in ownedCards)
             {
-                ScanOwnership? ownership = null;
-                if (inventory is not null)
-                {
-                    try { ownership = inventory.Resolve(card); }
-                    catch (InvalidOperationException ex)
-                    {
-                        warnings.Add($"Card {card.Index} ({card.Set} {card.CollectorNumber}): {ex.Message}");
-                    }
-                }
+                var ownership = card.Ownership!;
                 if (card.Quad is not { IsValid: true } quad)
                 {
                     warnings.Add($"{card.Set} {card.CollectorNumber}: ownership geometry is unavailable.");
@@ -45,25 +55,44 @@ public static class ScanOwnershipRenderer
                 var x = Math.Clamp(box.X * scale, 0, Math.Max(0, image.PixelWidth - size * 4));
                 var y = Math.Clamp(box.Y * scale, 0, Math.Max(0, photoHeight - size * 2));
                 var width = Math.Min(box.Width * scale / 2, image.PixelWidth - x);
-                var top = Math.Clamp(y + box.Height * scale * 0.28, 0, Math.Max(0, photoHeight - width * 0.36));
-                if (ownership is null || ownership.IsMissing)
+                var top = Math.Clamp(y + box.Height * scale * 0.28, 0, Math.Max(0, photoHeight - width * 0.58));
+                if (ownership.Error is not null || ownership.IsMissing)
                 {
-                    var tint = ownership is null ? Color.FromArgb(96, 255, 165, 0) : Color.FromArgb(96, 255, 20, 147);
-                    drawing.DrawRectangle(new SolidColorBrush(tint), null, new Rect(x, top, width, width * 0.36));
+                    var tint = ownership.Error is not null ? Color.FromArgb(96, 255, 165, 0) : Color.FromArgb(96, 255, 20, 147);
+                    drawing.DrawRectangle(new SolidColorBrush(tint), null, new Rect(x, top, width, width * 0.58));
                 }
-                if (ownership is null || !ownership.IsMissing)
+                if (ownership.Error is not null || !ownership.IsMissing)
                 {
                     var padding = width * 0.04;
                     var height = width * 0.14;
-                    var text = new FormattedText(ownership?.OverlayText ?? "Owned: ?", CultureInfo.InvariantCulture,
+                    var text = new FormattedText(ownership.OverlayText, CultureInfo.InvariantCulture,
                         FlowDirection.LeftToRight, new Typeface("Segoe UI"), 100, Brushes.White, 1);
                     text.SetFontSize(100 * Math.Min((width - padding * 2) / text.Width,
                         (height - padding) / text.Height));
-                    var panelY = Math.Min(top + width * 0.36, photoHeight - height);
-                    var background = ownership is null ? Color.FromArgb(230, 120, 70, 0) : Color.FromArgb(204, 0, 0, 0);
+                    var panelY = Math.Min(top + width * 0.58, photoHeight - height);
+                    var background = ownership.Error is not null ? Color.FromArgb(230, 120, 70, 0) : Color.FromArgb(204, 0, 0, 0);
                     drawing.DrawRectangle(new SolidColorBrush(background), null,
                         new Rect(x, panelY, width, height));
                     drawing.DrawText(text, new Point(x + padding, panelY + (height - text.Height) / 2));
+                }
+                if (card == highest)
+                {
+                    var unit = width * 0.07;
+                    var left = x + width - width * 0.04 - unit;
+                    var trophyTop = top + width * 0.04;
+                    var cup = new StreamGeometry();
+                    using (var geometry = cup.Open())
+                    {
+                        geometry.BeginFigure(new Point(left, trophyTop), true, true);
+                        geometry.LineTo(new Point(left + unit, trophyTop), true, false);
+                        geometry.LineTo(new Point(left + unit * 0.75, trophyTop + unit * 0.7), true, false);
+                        geometry.LineTo(new Point(left + unit * 0.25, trophyTop + unit * 0.7), true, false);
+                    }
+                    drawing.DrawGeometry(Brushes.Gold, null, cup);
+                    drawing.DrawRectangle(Brushes.Gold, null,
+                        new Rect(left + unit * 0.4, trophyTop + unit * 0.6, unit * 0.2, unit * 0.5));
+                    drawing.DrawRectangle(Brushes.Gold, null,
+                        new Rect(left + unit * 0.15, trophyTop + unit, unit * 0.7, unit * 0.2));
                 }
             }
         }

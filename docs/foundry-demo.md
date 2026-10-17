@@ -102,8 +102,9 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
   client id and scope. Sign-in is interactive (`InteractiveBrowserCredential`) or device code.
   If an old file still contains `client_secret`, the app refuses to start the scan and tells you
   to revoke the secret.
-* **Least-privilege identities.** The API can write `scans`, read final `outputs`, and touch Cosmos,
-  and has no access to intermediate `crops`. Only the worker can write `outputs`; Team A can read
+* **Least-privilege identities.** The API can write `scans`, read final `outputs` and intermediate
+  `crops` for explicitly authorized operator diagnostics, and touch Cosmos.
+  Only the worker can write `crops` and `outputs`; Team A can read
   `scans` and nothing else.
   Neither project has any Cosmos role assignment, so neither can read job state.
 * **Distinct agent identities.** Each named agent has its own Entra Agent ID and blueprint.

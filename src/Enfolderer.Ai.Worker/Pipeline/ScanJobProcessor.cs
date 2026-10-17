@@ -29,6 +29,7 @@ public sealed class ScanJobProcessor
     private readonly ScanPlatformOptions _platform;
     private readonly CardArtVerifier? _artVerifier;
     private readonly ScanAnnotationService? _annotation;
+    private readonly ICollectionSnapshotStore? _collections;
     private readonly ILogger<ScanJobProcessor> _log;
 
     public ScanJobProcessor(
@@ -41,7 +42,8 @@ public sealed class ScanJobProcessor
         ScanPlatformOptions platform,
         ILogger<ScanJobProcessor> log,
         CardArtVerifier? artVerifier = null,
-        ScanAnnotationService? annotation = null)
+        ScanAnnotationService? annotation = null,
+        ICollectionSnapshotStore? collections = null)
     {
         _jobs = jobs;
         _images = images;
@@ -54,6 +56,7 @@ public sealed class ScanJobProcessor
         // every card simply goes unchecked, which is what an unreachable catalogue would do too.
         _artVerifier = artVerifier;
         _annotation = annotation;
+        _collections = collections;
         _log = log;
     }
 
@@ -115,7 +118,25 @@ public sealed class ScanJobProcessor
                     CardsProcessed = cards.Count, CardsIdentified = identified,
                     ProgressMessage = "Fetching EUR prices and rendering the annotated image..."
                 }, ct);
-                result = await _annotation.CreateAsync(result, source, ct);
+                CollectionSnapshot? snapshot = null;
+                string? ownershipError = null;
+                if (job.UseCollection)
+                {
+                    try
+                    {
+                        if (_collections is null || job.OwnerTenantId is null || job.OwnerObjectId is null)
+                            throw new InvalidOperationException("Collection storage or job ownership is unavailable.");
+                        snapshot = await _collections.ReadAsync(job.OwnerTenantId, job.OwnerObjectId, ct);
+                        if (snapshot is null)
+                            throw new InvalidOperationException("Collection snapshot was removed before this scan completed.");
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _log.LogWarning(ex, "Job {JobId}: ownership unavailable; preserving scan results.", job.JobId);
+                        ownershipError = "Collection could not be loaded. Ownership is unknown; replace the snapshot and scan again.";
+                    }
+                }
+                result = await _annotation.CreateAsync(result, source, ct, snapshot, ownershipError);
             }
 
             await _jobs.UpsertAsync(

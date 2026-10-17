@@ -324,6 +324,30 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ExportMobileSnapshot_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Export ownership quantities for the mobile website",
+            FileName = "enfolderer-collection.json",
+            Filter = "Collection snapshot (*.json)|*.json",
+            AddExtension = true
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        try
+        {
+            var snapshot = await Task.Run(() => new Collection.ScanOwnershipIndex(AppContext.BaseDirectory).ExportSnapshot());
+            await File.WriteAllTextAsync(dialog.FileName, System.Text.Json.JsonSerializer.Serialize(snapshot,
+                new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+            MessageBox.Show(this, $"Exported {snapshot.Printings.Count:N0} set/number entries and {snapshot.GathererPrintings.Count:N0} Gatherer printing entries (including older unnumbered cards). Upload this file on the mobile website. Original databases and card names are not uploaded.",
+                "Mobile Collection Snapshot", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "Snapshot Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private async void ScanCardImage_Click(object sender, RoutedEventArgs e)
     {
         try

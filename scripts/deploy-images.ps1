@@ -42,6 +42,16 @@
     Image tag to build and deploy. Defaults to a UTC timestamp, e.g. v20260930-1412, which is
     always new.
 
+.PARAMETER MobileWebClientId
+    SPA app registration configured by configure-mobile-web.ps1. Reuses the recorded value when omitted.
+
+.PARAMETER ScanAllowedUserObjectIds
+    Comma-separated tenant user/guest object IDs approved for the private pilot (both desktop and web).
+
+.PARAMETER ScanDiagnosticUserObjectIds
+    Comma-separated approved pilot operators allowed read-only diagnostics across pilot users.
+    Omit to preserve the deployed value; pass an empty string to disable diagnostics.
+
 .PARAMETER UseParametersFile
     Deploy from infra/main.parameters.json instead of the previous deployment's parameters. Only
     correct if that file holds your real values.
@@ -121,6 +131,9 @@ param(
     [string] $MtgAgentPrincipalId,
     [string] $PokemonAgentPrincipalId,
     [string] $McpAudience,
+    [string] $MobileWebClientId,
+    [string] $ScanAllowedUserObjectIds,
+    [string] $ScanDiagnosticUserObjectIds,
     [bool] $GrantGeometryAccess
 )
 
@@ -381,11 +394,40 @@ List what the registry holds with:
         BoundaryAgentId = 'boundaryAgentId'; MtgAgentId = 'mtgAgentId'; PokemonAgentId = 'pokemonAgentId'
         BoundaryAgentPrincipalId = 'boundaryAgentPrincipalId'; MtgAgentPrincipalId = 'mtgAgentPrincipalId'
         PokemonAgentPrincipalId = 'pokemonAgentPrincipalId'; McpAudience = 'mcpAudience'
+        MobileWebClientId = 'mobileWebClientId'; ScanAllowedUserObjectIds = 'scanAllowedUserObjectIds'
     }.GetEnumerator()) {
         $value = Get-Variable -Name $mapping.Key -ValueOnly
         if ($value) { $overrides[$mapping.Value] = $value }
     }
+    if ($PSBoundParameters.ContainsKey('ScanDiagnosticUserObjectIds')) {
+        $overrides['scanDiagnosticUserObjectIds'] = $ScanDiagnosticUserObjectIds
+    }
     $effective = if ($UseParametersFile) { $onFile } else { $parameters }
+    $webId = if ($MobileWebClientId) { $MobileWebClientId }
+        elseif ($effective.PSObject.Properties['mobileWebClientId']) { $effective.mobileWebClientId.value } else { '' }
+    $pilot = if ($ScanAllowedUserObjectIds) { $ScanAllowedUserObjectIds }
+        elseif ($effective.PSObject.Properties['scanAllowedUserObjectIds']) { $effective.scanAllowedUserObjectIds.value } else { '' }
+    $operators = if ($overrides.Contains('scanDiagnosticUserObjectIds')) { $overrides['scanDiagnosticUserObjectIds'] }
+        elseif ($effective.PSObject.Properties['scanDiagnosticUserObjectIds']) { $effective.scanDiagnosticUserObjectIds.value } else { '' }
+    foreach ($operator in $operators.Split(',', [StringSplitOptions]::RemoveEmptyEntries)) {
+        $parsedOperator = [guid]::Empty
+        if (-not [guid]::TryParse($operator.Trim(), [ref]$parsedOperator) -or $parsedOperator -eq [guid]::Empty `
+            -or $operator.Trim() -notin @($pilot.Split(',') | ForEach-Object { $_.Trim() })) {
+            throw "Diagnostics operator must be a valid approved pilot user: $operator"
+        }
+    }
+    if ($webId) {
+        $parsedWebId = [guid]::Empty
+        if (-not [guid]::TryParse($webId, [ref]$parsedWebId) -or $parsedWebId -eq [guid]::Empty -or -not $pilot) {
+            throw 'Mobile website requires a valid SPA client ID and an explicit scan user allowlist.'
+        }
+        foreach ($userId in $pilot.Split(',')) {
+            $parsedUserId = [guid]::Empty
+            if (-not [guid]::TryParse($userId.Trim(), [ref]$parsedUserId) -or $parsedUserId -eq [guid]::Empty) {
+                throw "Invalid pilot user object ID: $userId"
+            }
+        }
+    }
     foreach ($key in 'boundaryAgentPrincipalId', 'mtgAgentPrincipalId', 'pokemonAgentPrincipalId', 'mcpAudience') {
         $value = if ($overrides.Contains($key)) { $overrides[$key] }
             elseif ($effective.PSObject.Properties[$key]) { $effective.$key.value } else { '' }
@@ -597,6 +639,14 @@ List what the registry holds with:
         try {
             $health = Invoke-RestMethod -Uri "https://$($info.fqdn)/healthz" -TimeoutSec 30
             Write-Good "$($app.name): $shortImage — healthz $($health.status)"
+            if ($app.name -eq "$prefix-api" -and $webId) {
+                $website = Invoke-WebRequest -Uri "https://$($info.fqdn)/" -TimeoutSec 30
+                $webConfig = Invoke-RestMethod -Uri "https://$($info.fqdn)/web-config" -TimeoutSec 30
+                if ($website.Content -notmatch 'Pocket scanner' -or -not $webConfig.enabled -or $webConfig.clientId -ne $webId) {
+                    throw 'Mobile website or its sign-in configuration does not match this deployment.'
+                }
+                Write-Good "Mobile website: https://$($info.fqdn)/ (private Microsoft sign-in configured)"
+            }
         }
         catch {
             Write-Bad "$($app.name): $shortImage — healthz failed: $($_.Exception.Message)"
@@ -626,6 +676,9 @@ List what the registry holds with:
     else {
         Write-Good "All five apps are running tag '$Tag' and answering /healthz."
         Write-Note "Deploy a later code change with: ./scripts/deploy-images.ps1"
+    }
+    if ($stillPlaceholder -gt 0 -or $missing -gt 0 -or $unhealthy -gt 0) {
+        throw 'Deployment verification failed. Review the service/website checks above before retrying.'
     }
 }
 finally {

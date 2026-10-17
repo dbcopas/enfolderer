@@ -13,8 +13,9 @@ public sealed record ScanOwnership(int PrintingQuantity, int NameQuantity, int R
 /// <summary>A read-only inventory snapshot; mapped collection rows take precedence over mainDb Qty.</summary>
 public sealed class ScanOwnershipIndex
 {
-    private sealed record Printing(string Set, string Number, string Name, string Source, int Quantity);
+    private sealed record Printing(string Set, string Number, string Name, string Source, int Quantity, int GathererId);
     private readonly List<Printing> _printings = [];
+    private IReadOnlyDictionary<string, CollectionPrinting>? _snapshotIndex;
 
     public ScanOwnershipIndex(string directory)
     {
@@ -29,7 +30,7 @@ public sealed class ScanOwnershipIndex
         }
         using var main = Open(Path.Combine(directory, "mainDb.db"));
         using var cards = main.CreateCommand();
-        cards.CommandText = "SELECT id, name, edition, collectorNumberValue, MtgsId, Qty FROM Cards";
+        cards.CommandText = "SELECT id, name, edition, collectorNumberValue, MtgsId, Qty, gathererId FROM Cards";
         using var rows = cards.ExecuteReader();
         while (rows.Read())
         {
@@ -44,7 +45,8 @@ public sealed class ScanOwnershipIndex
                 : rows.IsDBNull(5) ? 0 : Math.Max(0, rows.GetInt32(5));
             _printings.Add(new Printing(
                 set, number.Length == 0 ? "" : NormalizeNumber(number), NormalizeName(name),
-                hasCollectionQuantity ? $"collection:{mapped}" : $"main:{id}", quantity));
+                hasCollectionQuantity ? $"collection:{mapped}" : $"main:{id}", quantity,
+                rows.IsDBNull(6) ? 0 : rows.GetInt32(6)));
         }
     }
 
@@ -56,6 +58,11 @@ public sealed class ScanOwnershipIndex
         var required = RequiredQuantity(card.Prices?.Layout);
         var matches = _printings.Where(p => string.Equals(p.Set, card.Set, StringComparison.OrdinalIgnoreCase)
             && string.Equals(p.Number, NormalizeNumber(card.CollectorNumber!), StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (matches.Length == 0 && card.Prices?.GathererIds is { Count: > 0 })
+        {
+            var legacy = CollectionSnapshot.Resolve(card, _snapshotIndex ??= ExportSnapshot().BuildIndex());
+            return new ScanOwnership(legacy.Quantity, legacy.AllQuantity, legacy.RequiredQuantity);
+        }
         if (matches.Length == 0)
             throw new InvalidOperationException($"Printing {card.Set} {card.CollectorNumber} is absent from the local card database.");
         var names = matches.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -64,15 +71,37 @@ public sealed class ScanOwnershipIndex
         return new ScanOwnership(exact, all, required);
     }
 
-    public static int RequiredQuantity(string? layout) => layout?.ToLowerInvariant() switch
+    public CollectionSnapshot ExportSnapshot()
     {
-        "transform" or "modal_dfc" or "battle" or "double_faced_token" or "double_faced_card" or "reversible_card" => 2,
-        "normal" or "split" or "aftermath" or "adventure" or "meld" or "flip" or "leveler"
-            or "saga" or "class" or "plane" or "planar" or "scheme" or "vanguard" or "token"
-            or "emblem" or "art_series" or "prototype" or "augment" or "host" or "mutate" or "prepare" => 1,
-        _ => throw new InvalidOperationException(
-            $"Card layout '{layout ?? "(missing)"}' is unavailable or unsupported; ownership requirement cannot be established.")
-    };
+        var byName = _printings.GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
+        var nameTotals = byName.ToDictionary(g => g.Key, g => SumSources(g.Value), StringComparer.OrdinalIgnoreCase);
+        var snapshot = new CollectionSnapshot
+        {
+            Printings = _printings.Where(p => p.Set.Length > 0 && p.Number.Length > 0)
+                .GroupBy(p => CollectionSnapshot.Key(p.Set, p.Number), StringComparer.OrdinalIgnoreCase)
+                .Select(group =>
+                {
+                    var names = group.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                    var total = names.Length == 1 ? nameTotals[names[0]]
+                        : SumSources(names.SelectMany(name => byName[name]));
+                    return new CollectionPrinting(group.First().Set, group.First().Number, SumSources(group), total);
+                })
+                .ToArray(),
+            GathererPrintings = _printings.Where(p => p.GathererId > 0)
+                .GroupBy(p => p.GathererId)
+                .Select(group =>
+                {
+                    var names = group.Select(p => p.Name).Distinct(StringComparer.OrdinalIgnoreCase);
+                    return new CollectionGathererPrinting(group.Key, SumSources(group),
+                        SumSources(names.SelectMany(name => byName[name])));
+                }).ToArray()
+        };
+        snapshot.Validate();
+        return snapshot;
+    }
+
+    public static int RequiredQuantity(string? layout) => CollectionSnapshot.RequiredQuantity(layout);
 
     private static int SumSources(IEnumerable<Printing> rows) =>
         rows.GroupBy(p => p.Source).Sum(group => group.First().Quantity);

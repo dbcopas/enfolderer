@@ -12,6 +12,9 @@ public interface IJobStore
 
     Task<ScanJobDocument?> GetAsync(string jobId, CancellationToken ct = default);
 
+    Task<IReadOnlyList<ScanJobDocument>> FindRecentAsync(string tenantId, IReadOnlyList<string> owners,
+        DateTimeOffset since, int limit, CancellationToken ct = default);
+
     /// <summary>Creates or replaces the job document. Returns the stored document.</summary>
     Task<ScanJobDocument> UpsertAsync(ScanJobDocument job, CancellationToken ct = default);
 }

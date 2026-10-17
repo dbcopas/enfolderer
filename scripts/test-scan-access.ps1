@@ -70,6 +70,23 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not read API hostname.' }
 $response = Invoke-WebRequest "https://$api/jobs/" -Method Post -ContentType application/json `
     -Body '{"fileName":"access-check.jpg"}' -SkipHttpErrorCheck -TimeoutSec 30
 if ($response.StatusCode -ne 401) { throw "Anonymous API create: expected 401, received $($response.StatusCode)." }
+foreach ($path in '/diagnostics/scans/', '/diagnostics/scans/anonymous-check/original') {
+    foreach ($headers in @(@{}, @{ Authorization = "Bearer $token" })) {
+        $denied = Invoke-WebRequest "https://$api$path" -Headers $headers -SkipHttpErrorCheck -TimeoutSec 30
+        if ($denied.StatusCode -ne 401) { throw "Anonymous/wrong-audience $path must return 401." }
+    }
+}
+Write-Host 'Scan diagnostics: anonymous and wrong-audience reads return 401.'
+$webConfig = Invoke-RestMethod "https://$api/web-config" -TimeoutSec 30
+if ($webConfig.enabled) {
+    $website = Invoke-WebRequest "https://$api/" -TimeoutSec 30
+    if ($website.Content -notmatch 'Pocket scanner') { throw 'Mobile website was not served by the API.' }
+    foreach ($path in '/collection/', '/jobs/anonymous-check/cards.csv') {
+        $denied = Invoke-WebRequest "https://$api$path" -SkipHttpErrorCheck -TimeoutSec 30
+        if ($denied.StatusCode -ne 401) { throw "Anonymous $path must return 401." }
+    }
+    Write-Host "Mobile website: HTTPS landing page available; collection and CSV endpoints reject anonymous requests."
+}
 $worker = az identity show -g "$NamePrefix-platform" -n "$NamePrefix-worker-id" --query principalId -o tsv
 if ($LASTEXITCODE -ne 0) { throw 'Could not read worker identity.' }
 $roles = @(az role assignment list --assignee $worker --all -o json | ConvertFrom-Json)

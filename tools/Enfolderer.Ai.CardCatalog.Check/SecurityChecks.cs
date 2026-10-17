@@ -6,6 +6,7 @@ using Enfolderer.Ai.Mcp;
 using Enfolderer.Ai.Imaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.PixelFormats;
@@ -22,7 +23,8 @@ internal static class SecurityChecks
         const string userB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
         static ClaimsPrincipal User(string tenantId, string objectId, bool mapped = false) => new(new ClaimsIdentity(
             [new(mapped ? "http://schemas.microsoft.com/identity/claims/tenantid" : "tid", tenantId),
-             new(mapped ? "http://schemas.microsoft.com/identity/claims/objectidentifier" : "oid", objectId)], "test"));
+             new(mapped ? "http://schemas.microsoft.com/identity/claims/objectidentifier" : "oid", objectId),
+             new("scp", "Scan.Submit")], "test"));
         var owner = User(tenant, userA);
         check(JobOwnerFilter.ReadOwner(User(tenant, userA, true)) == JobOwnerFilter.ReadOwner(owner),
             "mapped and unmapped Entra claims identify the same owner");
@@ -30,6 +32,7 @@ internal static class SecurityChecks
         await store.CreateAsync(new ScanJobDocument { Id = "owned", JobId = "owned", OwnerTenantId = tenant, OwnerObjectId = userA });
         await store.CreateAsync(new ScanJobDocument { Id = "legacy", JobId = "legacy" });
         using var services = new ServiceCollection().AddLogging()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
             .AddSingleton<Enfolderer.Ai.Infrastructure.Storage.IJobStore>(store).BuildServiceProvider();
         foreach (var route in new[] { "/jobs/owned", "/jobs/owned/content", "/jobs/owned/submit", "/jobs/owned/annotated-image" })
             foreach (var caller in new[] { owner, User(tenant, userB), User(userB, userA), new ClaimsPrincipal() })

@@ -22,7 +22,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
             var value => value
         };
         var local = await ReadAsync(set, number, language, ct);
-        (decimal? Nonfoil, decimal? Foil, string? Layout, string? Name) english = (null, null, null, null);
+        (decimal? Nonfoil, decimal? Foil, string? Layout, string? Name, IReadOnlyList<int> GathererIds) english = (null, null, null, null, []);
         string? error = null;
         if (language != "en" && (local.Nonfoil is null || local.Foil is null))
         {
@@ -37,6 +37,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
         {
             Layout = local.Layout ?? english.Layout,
             CardName = local.Name ?? english.Name,
+            GathererIds = local.GathererIds.Concat(english.GathererIds).Distinct().ToArray(),
             Nonfoil = local.Nonfoil ?? english.Nonfoil,
             Foil = local.Foil ?? english.Foil,
             NonfoilLanguage = local.Nonfoil.HasValue ? language : english.Nonfoil.HasValue ? "en" : null,
@@ -46,7 +47,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
         };
     }
 
-    private async Task<(decimal? Nonfoil, decimal? Foil, string? Layout, string? Name)> ReadAsync(
+    private async Task<(decimal? Nonfoil, decimal? Foil, string? Layout, string? Name, IReadOnlyList<int> GathererIds)> ReadAsync(
         string set, string number, string language, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
@@ -62,7 +63,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
             request.Headers.UserAgent.ParseAdd("Enfolderer-ScanPricing/1.0");
             request.Headers.Accept.ParseAdd("application/json");
             using var response = await http.SendAsync(request, ct);
-            if (response.StatusCode == HttpStatusCode.NotFound) return (null, null, null, null);
+            if (response.StatusCode == HttpStatusCode.NotFound) return (null, null, null, null, []);
             response.EnsureSuccessStatusCode();
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
             var root = doc.RootElement;
@@ -77,7 +78,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
             if (!root.TryGetProperty("prices", out var prices) || prices.ValueKind != JsonValueKind.Object)
                 throw new InvalidDataException("Scryfall price response has no prices object.");
             return (ReadPrice(prices, "eur"), ReadPrice(prices, "eur_foil"),
-                ReadOptionalText(root, "layout"), ReadOptionalText(root, "name"));
+                ReadOptionalText(root, "layout"), ReadOptionalText(root, "name"), ReadGathererIds(root));
         }
         finally { _gate.Release(); }
     }
@@ -89,6 +90,21 @@ public sealed class ScryfallPriceClient(HttpClient http)
             && decimal.TryParse(value.GetString(), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var price)
             && price >= 0) return price;
         throw new InvalidDataException($"Scryfall returned an invalid {key} price.");
+    }
+
+    private static IReadOnlyList<int> ReadGathererIds(JsonElement root)
+    {
+        if (!root.TryGetProperty("multiverse_ids", out var ids)) return [];
+        if (ids.ValueKind != JsonValueKind.Array)
+            throw new InvalidDataException("Scryfall returned invalid multiverse_ids.");
+        var result = new List<int>();
+        foreach (var id in ids.EnumerateArray())
+        {
+            if (id.ValueKind != JsonValueKind.Number || !id.TryGetInt32(out var value) || value <= 0)
+                throw new InvalidDataException("Scryfall returned an invalid Gatherer identifier.");
+            result.Add(value);
+        }
+        return result;
     }
 
     private static string? ReadOptionalText(JsonElement root, string key)

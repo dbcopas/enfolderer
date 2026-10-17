@@ -64,6 +64,31 @@ resource apiOutputs 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+resource collections 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' existing = {
+  parent: blobService
+  name: 'collections'
+}
+
+resource apiCollections 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: collections
+  name: guid(collections.id, apiPrincipalId, storageBlobDataContributor)
+  properties: {
+    principalId: apiPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributor)
+  }
+}
+
+resource workerCollections 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: collections
+  name: guid(collections.id, workerPrincipalId, storageBlobDataReader)
+  properties: {
+    principalId: workerPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReader)
+  }
+}
+
 resource workerOutputs 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: outputs
   name: guid(outputs.id, workerPrincipalId, storageBlobDataContributor)
@@ -77,8 +102,18 @@ resource workerOutputs 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 // --- API -------------------------------------------------------------------------------------
 // The API relays the client's upload into the scans container, because the storage account is
 // private and the client cannot reach it. Contributor on that one container is the narrowest role
-// that allows the write; the API has no access to intermediate crops. Its separate read-only
-// outputs grant allows it to return completed annotated images without widening crop access.
+// that allows the write. Separate container-scoped Reader grants let the API relay evidence
+// through authenticated operator diagnostics without granting crop writes.
+resource apiCrops 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: crops
+  name: guid(crops.id, apiPrincipalId, storageBlobDataReader)
+  properties: {
+    principalId: apiPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataReader)
+  }
+}
+
 resource apiScans 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: scans
   name: guid(scans.id, apiPrincipalId, storageBlobDataContributor)

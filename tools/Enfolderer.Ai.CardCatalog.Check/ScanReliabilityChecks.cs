@@ -295,6 +295,22 @@ internal static class ScanReliabilityChecks
         check(shared.Set == "old" && shared.ArtReason == "separation_too_small" && shared.ArtVerdict == "inconclusive",
             "identical illustrations never move the printing");
 
+        foreach (var incomplete in new[]
+        {
+            card with { ArtCandidatesComplete = false },
+            card with { ArtReferences = Enumerable.Range(0, 64).Select(i =>
+                new CardArtReference("candidate", i.ToString(), "https://cards.scryfall.io/new.png")).ToArray() }
+        })
+        {
+            var (declined, evidence) = await VerifyAsync(incomplete, cropBytes, new Dictionary<string, byte[]>
+            {
+                ["/old.png"] = otherBytes, ["/new.png"] = referenceBytes
+            });
+            check(declined.Set == "old" && declined.ArtVerdict == "inconclusive"
+                && declined.ArtReason == "incomplete_candidates" && evidence.Any(l => l.Contains("refusing")),
+                "incomplete/capped candidates never endorse or move a printing, even if a surviving image matches");
+        }
+
         var reviewable = card with
         {
             Language = "ja",
@@ -421,11 +437,12 @@ internal static class ScanReliabilityChecks
         check(ReferenceEquals(plain, FoundryCardBoundaryAgent.WithoutDisplayRotation(plain)),
             "images without display rotation retain their original encoded content");
     }
-
     public static async Task RunBoundaryPhotosAsync(Action<bool, string> check, string? trainingDirectory)
     {
         Console.WriteLine("\nReal photographs 01-07: measured regions survive empty agent responses");
         var root = trainingDirectory ?? FindTrainingDirectory();
+        await CheckSidewaysMobilePhotoAsync(check, root, "45bc9d36-afe9-4b21-823e-38fc4f1082de.jpeg");
+        await CheckSidewaysMobilePhotoAsync(check, root, "mobile-upload.jpg");
         var total = 0;
         for (var page = 1; page <= 7; page++)
         {
@@ -485,6 +502,7 @@ internal static class ScanReliabilityChecks
                         check(cross.All(c => c >= 0) || cross.All(c => c <= 0),
                             $"page 07 card {index}: {(position.Y < 0.5 ? "title" : "collector/language footer")} stays inside the actual crop quad");
                     }
+
                 }
             }
             total += boundaries.Count;
@@ -497,6 +515,72 @@ internal static class ScanReliabilityChecks
             blank.SaveAsPng(encoded);
             encoded.Position = 0;
             check(CardDetector.Detect(encoded).Count == 0, $"blank {color} surface does not invent a card grid");
+        }
+    }
+
+    private static async Task CheckSidewaysMobilePhotoAsync(Action<bool, string> check, string root, string fileName)
+    {
+        var path = Path.Combine(root, "01", fileName);
+        Console.WriteLine($"\nSideways mobile fixture: {fileName}");
+        using var original = SixLabors.ImageSharp.Image.Load<Rgba32>(await File.ReadAllBytesAsync(path));
+        var regions = new[]
+        {
+            (X: .125, Y: .299, W: .426, H: .142), (X: .590, Y: .301, W: .400, H: .138),
+            (X: .115, Y: .453, W: .420, H: .141), (X: .570, Y: .457, W: .397, H: .132),
+            (X: .105, Y: .602, W: .435, H: .142), (X: .570, Y: .604, W: .405, H: .137)
+        };
+        foreach (var angle in new[] { 0, 90, 180, 270 })
+        {
+            using var photo = original.Clone(c => c.Rotate(angle));
+            using var encoded = new MemoryStream(Png(photo));
+            var measured = CardDetector.Detect(encoded, out var diagnostic);
+            check(measured.Count == 6, $"mobile sideways photo rotated {angle}: exactly six physical cards, not fragmented artwork (actual {measured.Count}; {diagnostic})");
+            ImagePoint OriginalPoint(ImagePoint p) => angle switch
+            {
+                90 => new ImagePoint(p.Y, original.Height - 1 - p.X),
+                180 => new ImagePoint(original.Width - 1 - p.X, original.Height - 1 - p.Y),
+                270 => new ImagePoint(original.Width - 1 - p.Y, p.X),
+                _ => p
+            };
+            check(measured.All(c => OriginalPoint(c.Quad.Points[1]).Y > OriginalPoint(c.Quad.Points[0]).Y
+                && OriginalPoint(c.Quad.Points[3]).X < OriginalPoint(c.Quad.Points[0]).X),
+                $"mobile sideways photo rotated {angle}: crop points preserve printed upright orientation");
+            using var handler = new RunHandler(["completed"], replies: ["{\"cards\":[]}"]);
+            using var http = new HttpClient(handler);
+            var agent = new FoundryCardBoundaryAgent(Client(http, new ListLogger<FoundryAgentClient>()),
+                "agent", new ListLogger<FoundryCardBoundaryAgent>());
+            var boundaries = await agent.DetectAsync(new AgentImage(encoded.ToArray(), "image.png", "image/png"),
+                "scans/test/image.png", photo.Width, photo.Height);
+            check(boundaries.Count == measured.Count && boundaries.Zip(measured).All(pair =>
+                pair.First.Quad.Points.SequenceEqual(pair.Second.Quad.Points)),
+                $"mobile sideways photo rotated {angle}: adapter retains all six oriented whole-card quads when agent omits them");
+            foreach (var region in regions)
+            {
+                var corners = new[]
+                {
+                    new ImagePoint(region.X * original.Width, region.Y * original.Height),
+                    new ImagePoint((region.X + region.W) * original.Width, region.Y * original.Height),
+                    new ImagePoint((region.X + region.W) * original.Width, (region.Y + region.H) * original.Height),
+                    new ImagePoint(region.X * original.Width, (region.Y + region.H) * original.Height)
+                }.Select(p => angle switch
+                {
+                    90 => new ImagePoint(original.Height - 1 - p.Y, p.X),
+                    180 => new ImagePoint(original.Width - 1 - p.X, original.Height - 1 - p.Y),
+                    270 => new ImagePoint(p.Y, original.Width - 1 - p.X),
+                    _ => p
+                });
+                var expected = new CardQuad(corners.ToArray()).BoundingBox();
+                var matches = measured.Count(card =>
+                {
+                    var actual = card.Quad.BoundingBox();
+                    var intersection = Math.Max(0, Math.Min(actual.X + actual.Width, expected.X + expected.Width) - Math.Max(actual.X, expected.X))
+                        * Math.Max(0, Math.Min(actual.Y + actual.Height, expected.Y + expected.Height) - Math.Max(actual.Y, expected.Y));
+                    return intersection / (actual.Width * actual.Height + expected.Width * expected.Height - intersection) > .75;
+                });
+                check(matches == 1, $"mobile sideways photo rotated {angle}: whole-card region has one unique match");
+            }
+            if (angle == 0)
+                check(diagnostic?.Contains("whole-card regions") == true, "mobile fragmented-region recovery is explicitly logged");
         }
     }
 

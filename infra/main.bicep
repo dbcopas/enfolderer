@@ -36,6 +36,15 @@ param tenantId string = subscription().tenantId
 @description('Application (client) id of the API app registration.')
 param apiClientId string
 
+@description('Single-tenant Microsoft SPA registration for the mobile website. Empty disables browser sign-in.')
+param mobileWebClientId string = ''
+
+@description('Comma-separated tenant user/guest object IDs approved for the private scan pilot. Applies to desktop and web API access.')
+param scanAllowedUserObjectIds string = ''
+
+@description('Comma-separated operator object IDs allowed read-only diagnostics across approved pilot scans. Empty disables diagnostics.')
+param scanDiagnosticUserObjectIds string = ''
+
 @description('Set to false to run the "revoke Team B\'s access to Team A\'s agent" demo scenario.')
 param grantIdentificationAccessToGeometry bool = true
 
@@ -291,6 +300,9 @@ module hosting 'modules/hosting.bicep' = {
     cosmosEndpoint: data.outputs.cosmosEndpoint
     tenantId: tenantId
     apiClientId: apiClientId
+    mobileWebClientId: mobileWebClientId
+    scanAllowedUserObjectIds: scanAllowedUserObjectIds
+    scanDiagnosticUserObjectIds: scanDiagnosticUserObjectIds
     apiIdentityId: apiIdentity.outputs.id
     apiIdentityClientId: apiIdentity.outputs.clientId
     workerIdentityId: workerIdentity.outputs.id

@@ -235,8 +235,11 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
 
             Return ONLY a JSON object, with no prose and no markdown fences:
             {"set":"","collectorNumber":"","name":"","language":null,"readName":null,"readLanguage":null,
-             "confidence":0.0,"resolution":"","readCollectorNumber":"","readSet":"","alternates":[]}
+             "confidence":0.0,"resolution":"","readCollectorNumber":"","readSet":"","alternates":[],
+             "alternatesComplete":true}
 
+            Copy "alternatesComplete" from the catalogue unchanged; false means image candidates
+            are incomplete, not that the card is unreadable.
             "alternates" is the list of that name under the same key in the tool's reply. Copy it
             across unchanged — every entry, every field, the URLs character for character — and
             leave it empty only if the tool gave you none. Do not look at the pictures, do not
@@ -306,7 +309,9 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
             ReadSet = Read("readSet"),
             Confidence = confidence,
             Agent = agentId,
-            ArtReferences = ReadArtReferences(root)
+            ArtReferences = ReadArtReferences(root),
+            ArtCandidatesComplete = !root.TryGetProperty("alternatesComplete", out var complete)
+                || complete.ValueKind == JsonValueKind.True
         };
 
         // The reply goes into the error because this is the case that looks like success from the

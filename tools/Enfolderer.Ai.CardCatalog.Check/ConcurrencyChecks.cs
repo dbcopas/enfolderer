@@ -65,6 +65,8 @@ internal static class ConcurrencyChecks
             return Task.FromResult(job);
         }
         public Task<ScanJobDocument?> GetAsync(string id, CancellationToken ct = default) => Task.FromResult(_job);
+        public Task<IReadOnlyList<ScanJobDocument>> FindRecentAsync(string tenantId, IReadOnlyList<string> owners,
+            DateTimeOffset since, int limit, CancellationToken ct = default) => throw new NotSupportedException();
         public async Task<ScanJobDocument> UpsertAsync(ScanJobDocument job, CancellationToken ct = default)
         {
             await Task.Delay(1, ct);

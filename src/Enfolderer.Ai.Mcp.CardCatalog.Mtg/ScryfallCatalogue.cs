@@ -361,7 +361,7 @@ public sealed class ScryfallCatalogue
         if (term.Length == 0) return [];
 
         if (exact) query.Append('!');
-        query.Append('"').Append(term).Append('"');
+        query.Append('"').Append(term).Append("\" game:paper");
         if (!string.IsNullOrWhiteSpace(setCode)) query.Append(" set:").Append(setCode.Trim());
 
         var localised = !string.IsNullOrWhiteSpace(language)
@@ -373,16 +373,30 @@ public sealed class ScryfallCatalogue
         // nothing at all rather than matching the printings in that language.
         if (localised) url += "&include_multilingual=true";
 
-        using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
-        // A search that matches nothing is a 404 here, not an empty list, so this is the ordinary
-        // "no such card in that set" path and not an error.
-        if (!response.IsSuccessStatusCode) return [];
-
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
-        if (!document.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array) return [];
-
-        var printings = data.EnumerateArray().Select(Parse).OfType<CataloguePrinting>().ToList();
+        var printings = new List<CataloguePrinting>();
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        while (true)
+        {
+            if (!visited.Add(url) || visited.Count > 20)
+                throw new InvalidDataException("Printing search pagination exceeded its safe limit or repeated a page.");
+            using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound && visited.Count == 1) return [];
+            response.EnsureSuccessStatusCode();
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException("Printing search returned no data array.");
+            printings.AddRange(data.EnumerateArray().Select(Parse).OfType<CataloguePrinting>());
+            if (!root.TryGetProperty("has_more", out var more) || more.ValueKind != JsonValueKind.True) break;
+            if (!root.TryGetProperty("next_page", out var next) || next.ValueKind != JsonValueKind.String
+                || !Uri.TryCreate(next.GetString(), UriKind.Absolute, out var nextPage)
+                || nextPage.Scheme != Uri.UriSchemeHttps || nextPage.Host != "api.scryfall.com"
+                || nextPage.AbsolutePath != "/cards/search" || !string.IsNullOrEmpty(nextPage.UserInfo)
+                || !nextPage.IsDefaultPort)
+                throw new InvalidDataException("Printing search returned an invalid next page.");
+            url = nextPage.AbsoluteUri;
+        }
 
         // The free-text form matches a name that *contains* the term, so "Delta" would bring back
         // every card in the set whose name has that word in it. Exact matching is Scryfall's job
@@ -769,6 +783,8 @@ public sealed class ScryfallCatalogue
     /// <summary>Projects a Scryfall card object onto the catalogue shape. Internal for testing.</summary>
     internal static CataloguePrinting? Parse(JsonElement root)
     {
+        if (root.TryGetProperty("digital", out var digital) && digital.ValueKind == JsonValueKind.True)
+            return null;
         string Read(string property) =>
             root.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
                 ? value.GetString() ?? string.Empty
