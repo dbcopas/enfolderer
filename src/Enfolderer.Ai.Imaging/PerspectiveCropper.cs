@@ -41,7 +41,8 @@ public static class PerspectiveCropper
     /// Warps the quadrilateral <paramref name="quad"/> out of <paramref name="source"/> into an
     /// upright rectangle and writes it to <paramref name="destination"/> as PNG.
     /// </summary>
-    public static ImageDimensions CropToPng(Stream source, CardQuad quad, Stream destination, int outputHeight = DefaultOutputHeight)
+    public static ImageDimensions CropToPng(Stream source, CardQuad quad, Stream destination,
+        int outputHeight = DefaultOutputHeight, double marginFraction = 0)
     {
         ArgumentNullException.ThrowIfNull(quad);
         if (!quad.IsValid)
@@ -50,10 +51,20 @@ public static class PerspectiveCropper
             throw new ArgumentOutOfRangeException(
                 nameof(outputHeight),
                 $"Output height must be between 16 and {MaxOutputHeight} pixels.");
+        if (!double.IsFinite(marginFraction) || marginFraction < 0 || marginFraction > 0.05)
+            throw new ArgumentOutOfRangeException(nameof(marginFraction), "Crop margin must be between 0 and 0.05.");
 
         using var image = Image.Load<Rgba32>(source);
 
         var (width, height) = ChooseOutputSize(quad, outputHeight);
+        if (marginFraction > 0)
+        {
+            var centerX = quad.Points.Average(p => p.X);
+            var centerY = quad.Points.Average(p => p.Y);
+            quad = new CardQuad(quad.Points.Select(p => new ImagePoint(
+                Math.Clamp(centerX + (p.X - centerX) * (1 + marginFraction * 2), 0, image.Width - 1),
+                Math.Clamp(centerY + (p.Y - centerY) * (1 + marginFraction * 2), 0, image.Height - 1))).ToArray());
+        }
         using var output = new Image<Rgba32>(width, height);
 
         var homography = Homography.FromUnitSquare(quad);

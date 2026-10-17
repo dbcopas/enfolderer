@@ -380,7 +380,11 @@ public sealed class ScanJobProcessor
                 if (_artVerifier is not null)
                 {
                     timer.Restart();
-                    card = await _artVerifier.VerifyAsync(card, cropBytes, job.JobId, ct);
+                    using var artSource = new MemoryStream(sourceBytes, writable: false);
+                    using var artCrop = new MemoryStream();
+                    PerspectiveCropper.CropToPng(artSource, boundary.Quad, artCrop, _options.CropHeight);
+                    var artBytes = artCrop.ToArray();
+                    card = await _artVerifier.VerifyAndReviewAsync(card, artBytes, job.JobId, crop, agent, ct);
                     LogTiming(job.JobId, "art_verification", timer, index);
                 }
 
@@ -453,7 +457,7 @@ public sealed class ScanJobProcessor
         source.Position = 0;
 
         using var crop = new MemoryStream();
-        PerspectiveCropper.CropToPng(source, quad, crop, _options.CropHeight);
+        PerspectiveCropper.CropToPng(source, quad, crop, _options.CropHeight, marginFraction: 0.02);
         crop.Position = 0;
 
         await _images.WriteAsync(cropBlobPath, crop, "image/png", ct);

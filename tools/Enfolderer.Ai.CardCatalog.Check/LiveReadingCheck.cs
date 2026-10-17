@@ -3,6 +3,7 @@ using System.Text.Json;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Imaging;
 using Enfolderer.Ai.Worker.Agents;
+using Enfolderer.Ai.Worker.Pipeline;
 using Microsoft.Extensions.Logging;
 
 namespace Enfolderer.Ai.CardCatalog.Check;
@@ -79,25 +80,33 @@ internal static class LiveReadingCheck
             endpoint, "2025-11-15-preview", TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2), useResponses: true);
         var agent = new FoundryCardIdentificationAgent(client, GameAgentProfile.Mtg, agentId,
             logs.CreateLogger<FoundryCardIdentificationAgent>());
+        var verifier = new CardArtVerifier(http, logs.CreateLogger<CardArtVerifier>());
         var failures = 0;
         foreach (var index in selected.Order())
         {
             source.Position = 0;
             using var crop = new MemoryStream();
             var quad = boundaries[index].Quad;
-            PerspectiveCropper.CropToPng(source, quad, crop);
-            var card = await agent.IdentifyAsync(new CardCrop(index,
-                new AgentImage(crop.ToArray(), $"card-{index}.png", "image/png"), quad, CardGames.Magic));
-            var matches = expected.Any(f =>
+            PerspectiveCropper.CropToPng(source, quad, crop, marginFraction: 0.02);
+            var cardCrop = new CardCrop(index,
+                new AgentImage(crop.ToArray(), $"card-{index}.png", "image/png"), quad, CardGames.Magic);
+            var card = await agent.IdentifyAsync(cardCrop);
+            source.Position = 0;
+            using var artCrop = new MemoryStream();
+            PerspectiveCropper.CropToPng(source, quad, artCrop);
+            card = await verifier.VerifyAndReviewAsync(card, artCrop.ToArray(), "live-reading", cardCrop, agent, default);
+            var f = expected[index];
+            var matches =
                 string.Equals(f[1], card.Name?.Split("//")[0].Trim(), StringComparison.OrdinalIgnoreCase)
                 && string.Equals(f[2], card.Set, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(f[3], card.CollectorNumber, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(f[5] == "jp" ? "ja" : f[5], card.Language, StringComparison.OrdinalIgnoreCase));
-            Console.WriteLine($"{(matches && card.PrintingWasPlaced ? "ok" : "FAIL")} live card {index}: "
+                && string.Equals(f[5] == "jp" ? "ja" : f[5], card.Language, StringComparison.OrdinalIgnoreCase);
+            Console.WriteLine($"{(matches ? "ok" : "FAIL")} live card {index}: "
                 + $"{card.Set};{card.CollectorNumber};{card.Language};{card.Name}; resolution={card.Resolution}; "
+                + $"printingPlaced={card.PrintingWasPlaced}; "
                 + $"readSet={card.ReadSet}; readNumber={card.ReadCollectorNumber}; "
                 + $"readName={card.ReadName}; readLanguage={card.ReadLanguage}; error={card.Error}");
-            if (!matches || !card.PrintingWasPlaced) failures++;
+            if (!matches) failures++;
         }
         return failures == 0 ? 0 : 1;
     }

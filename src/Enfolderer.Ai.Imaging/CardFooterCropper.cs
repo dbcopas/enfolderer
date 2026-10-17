@@ -7,7 +7,7 @@ namespace Enfolderer.Ai.Imaging;
 public static class CardFooterCropper
 {
     /// <summary>
-    /// Magnifies the full-width footer, including retro-frame copyright/collector lines.
+    /// Magnifies the full-width footer and closer views of both halves of its printing details.
     /// For a sideways crop, both quarter-turn footers are supplied rather than guessing its top.
     /// </summary>
     public static byte[] CropToPng(ReadOnlyMemory<byte> cardImage)
@@ -32,8 +32,21 @@ public static class CardFooterCropper
     {
         var top = (int)Math.Floor(image.Height * 0.75);
         var height = image.Height - top;
-        return image.Clone(c => c.Crop(new Rectangle(0, top, image.Width, height))
+        using var full = image.Clone(c => c.Crop(new Rectangle(0, top, image.Width, height))
             .Resize(1200, Math.Max(1, (int)Math.Round(1200d * height / image.Width)), KnownResamplers.NearestNeighbor));
+        var detailTop = (int)Math.Floor(image.Height * 0.85);
+        var detailWidth = Math.Max(1, (int)Math.Ceiling(image.Width * 0.5));
+        using var detail = image.Clone(c => c.Crop(new Rectangle(0, detailTop, detailWidth, image.Height - detailTop))
+            .Resize(1200, Math.Max(1, (int)Math.Round(1200d * (image.Height - detailTop) / detailWidth)),
+                KnownResamplers.NearestNeighbor));
+        using var rightDetail = image.Clone(c => c.Crop(new Rectangle(image.Width - detailWidth, detailTop,
+                detailWidth, image.Height - detailTop))
+            .Resize(1200, detail.Height, KnownResamplers.NearestNeighbor));
+        var combined = new Image<Rgba32>(1200, full.Height + detail.Height + rightDetail.Height);
+        combined.Mutate(c => c.DrawImage(full, new Point(0, 0), 1f)
+            .DrawImage(detail, new Point(0, full.Height), 1f)
+            .DrawImage(rightDetail, new Point(0, full.Height + detail.Height), 1f));
+        return combined;
     }
 
     private static byte[] Encode(Image<Rgba32> image)

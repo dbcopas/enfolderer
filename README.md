@@ -188,14 +188,24 @@ public blob URL is needed. Team B's catalogue also exposes `get_printing_prices`
 the worker calls the same deterministic pricing implementation after art verification rather
 than asking a model to copy monetary amounts.
 
-For MTG cards, the identifier receives the full crop and an enlarged full-width footer. Sideways
-crops supply both possible quarter-turn footers rather than guessing which end is the printed top.
+Recognition crops include a bounded 2% margin to recover small footer details clipped by detection.
+Measured card geometry and the tight crops used for artwork comparison are unchanged.
+For MTG cards, the identifier receives the full crop, an enlarged full-width footer, and closer
+left/right footer views. Sideways crops supply both possible quarter-turn footer views rather than
+guessing which end is the printed top.
 Retro-frame collector numbers may sit beside the copyright line, not in the modern lower-left.
 MTG language is read from the photographed footer/title/rules, independently of an English
 catalogue name or fallback printing. Results retain the original `readName` and footer
 `readLanguage` (`JP`/`JPN` becomes `ja`). Missing language/title evidence or contradictory language
 triggers one logged re-reading attempt; persistent contradictions fail rather than defaulting
-to English. Deploy the worker and identification prompt together with `.\scripts\update-demo.ps1`.
+to English. Unresolved or number-only (`assumed`) catalogue answers also trigger one bounded
+re-reading attempt, even when the initial answer contains a plausible name and number. Persistent
+uncertainty retains the readable card and its review status rather than discarding the row.
+An inconclusive artwork comparison with a different best candidate can request one targeted footer
+review. This never lowers artwork acceptance thresholds or automatically chooses the nearest image.
+Only an established printing of the same card and photographed language can replace the original;
+failed optional reviews are logged and preserve the original reading. Cancellation and access errors
+are not hidden. Deploy the worker and identification prompt together with `.\scripts\update-demo.ps1`.
 Unplaced, ambiguous, assumed and missing-resolution printings are listed for review; a CSV's
 set and number are not automatically confirmed just because the card's name was identified.
 

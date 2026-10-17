@@ -87,7 +87,7 @@ public sealed record GameAgentProfile(
 /// Team B identification agent, reached through the <c>cardid</c> project endpoint. One instance is
 /// created per game; the underlying Foundry agent owns the catalogue MCP server for that game.
 /// </summary>
-public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
+public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, ICardPrintingReviewAgent
 {
 
     /// <summary>The <c>server_label</c> each game's catalogue MCP server is attached under.</summary>
@@ -114,9 +114,27 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
 
     public string AgentId => $"cardid/{_profile.AgentName}";
 
-    public async Task<IdentifiedCard> IdentifyAsync(CardCrop crop, CancellationToken ct = default)
+    public Task<IdentifiedCard> IdentifyAsync(CardCrop crop, CancellationToken ct = default) =>
+        IdentifyAsync(crop, null, ct);
+
+    public Task<IdentifiedCard> ReviewPrintingAsync(CardCrop crop, IdentifiedCard previous, CancellationToken ct = default) =>
+        IdentifyAsync(crop, $"""
+            Printing verification requested: the previous answer was {previous.Set} {previous.CollectorNumber}.
+            Artwork comparison was inconclusive and cannot establish a printing. Re-examine the original
+            footer and both close-ups (full width, then left half, then right half), transcribe the
+            printed set and collector number, and verify them with
+            lookup_by_set_and_number before resolving the printing. Do not choose by artwork or memory.
+            If a retro-frame footer has no readable set code, inspect the collector/copyright line and
+            the printed expansion symbol; leave unreadable letters empty. Preserve photographed language.
+            Catalogue candidates, not answers: {string.Join(", ", previous.ArtReferences.Select(r => $"{r.Set} {r.CollectorNumber}"))}.
+            """, ct);
+
+    private async Task<IdentifiedCard> IdentifyAsync(CardCrop crop, string? review, CancellationToken ct)
     {
         var prompt = BuildPrompt(_profile);
+        if (review is not null) prompt += "\n\n" + review;
+        var uncertainReadings = 0;
+        IdentifiedCard? readableBeforeRetry = null;
         // Each identification agent attaches its own game's catalogue server under this label.
         // The label is the same for every game; the server behind it is not, and an agent can only
         // ever be handed its own, so approving by label does not widen anything.
@@ -137,16 +155,33 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent
             {
                 var parsed = ParseIdentification(text, crop, Game, AgentId);
                 ValidateLanguage(parsed);
-                if (!parsed.IsIdentified && parsed.Resolution == "unresolved")
+                if ((parsed.Resolution == "unresolved" || parsed.Resolution == "assumed")
+                    && uncertainReadings++ == 0)
+                {
+                    if (parsed.IsIdentified) readableBeforeRetry = parsed;
                     throw new InvalidOperationException(
-                        "Catalogue resolution was unresolved and no usable name/set were returned. "
+                        "Catalogue resolution was unresolved or assumed; plausible name/set/number readings are not a confirmed printing. "
                         + "Read the title again in the printed language, and inspect the enlarged footer "
-                        + "for the set and number. Try lookup_by_set_and_number if both are legible.");
+                        + "and its left/right close-ups for the set and number. Transcribe those letters and digits "
+                        + "before lookup_by_set_and_number. If that lookup finds nothing, recheck visually ambiguous "
+                        + "letters against the image and try at most two image-supported alternatives; do not repeat "
+                        + "the same failed reading or guess from artwork. If the number lookup finds a card, compare its "
+                        + "printedName with the photographed title to correct your transcription, then resolve again "
+                        + "with that image-supported title. Do not treat the number lookup alone as corroboration. "
+                        + "Preserve photographed language.");
+                }
             });
 
         try
         {
-            return ParseIdentification(reply, crop, Game, AgentId);
+            var result = ParseIdentification(reply, crop, Game, AgentId);
+            if (!result.IsIdentified && readableBeforeRetry is not null)
+            {
+                _log.LogWarning("Card {Index}: catalogue re-read declined a previously readable card ({Error}); preserving the initial uncertain reading.",
+                    crop.Index, result.Error);
+                return readableBeforeRetry;
+            }
+            return result;
         }
         catch (Exception ex)
         {

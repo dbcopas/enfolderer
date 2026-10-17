@@ -42,6 +42,51 @@ internal static class ScanReliabilityChecks
 
         await LanguageChecksAsync(check);
         await FooterDetailChecksAsync(check);
+        var reviewCard = new IdentifiedCard { Set = "old", CollectorNumber = "1", Resolution = "relocated" };
+        var uncertain = ArtAdjudicator.Adjudicate(("old", "1"),
+            [new("new", "2", 0.242), new("old", "1", 0.289)]);
+        check(CardArtVerifier.NeedsPrintingReview(reviewCard, uncertain, "separation_too_small"),
+            "an inconclusive different best printing requests a re-read even for a relocated answer");
+        check(!CardArtVerifier.NeedsPrintingReview(reviewCard with { Set = "new", CollectorNumber = "2" },
+                uncertain, "separation_too_small")
+            && !CardArtVerifier.NeedsPrintingReview(reviewCard, uncertain, "missing_candidates")
+            && !CardArtVerifier.NeedsPrintingReview(reviewCard, uncertain, "distance_too_large"),
+            "same-printing, missing-candidate and unrelated artwork do not trigger printing review");
+        using (var marginImage = new Image<Rgba32>(200, 280, new Rgba32(255, 0, 0)))
+        {
+            for (var y = 230; y < 260; y++)
+            for (var x = 18; x < 21; x++) marginImage[x, y] = new Rgba32(0, 255, 0);
+            var quad = new CardQuad([new(22, 20), new(178, 20), new(178, 260), new(22, 260)]);
+            using var source = new MemoryStream(Png(marginImage));
+            using var marginCrop = new MemoryStream();
+            PerspectiveCropper.CropToPng(source, quad, marginCrop, marginFraction: 0.02);
+            using var recovered = SixLabors.ImageSharp.Image.Load<Rgba32>(marginCrop.ToArray());
+            check(recovered[1, (int)(recovered.Height * 0.92)].G > 0 && quad.Points[0].X == 22,
+                "bounded recognition margin recovers clipped footer-edge pixels without changing measured geometry");
+            try
+            {
+                source.Position = 0;
+                PerspectiveCropper.CropToPng(source, quad, marginCrop, marginFraction: 0.1);
+                check(false, "recognition margin must be bounded");
+            }
+            catch (ArgumentOutOfRangeException) { check(true, "oversized recognition margins are rejected"); }
+        }
+        foreach (var resolution in new[] { "unresolved", "assumed" })
+        foreach (var outcome in new[] { "confirmed", resolution, "declined" })
+        {
+            var unresolved = $$"""{"set":"wrong","collectorNumber":"269","name":"Read title","readName":"Read title","language":"en","resolution":"{{resolution}}"}""";
+            var resolved = """{"set":"right","collectorNumber":"269","name":"Catalogue title","readName":"Read title","language":"en","resolution":"confirmed"}""";
+            var retryReply = outcome == "confirmed" ? resolved
+                : outcome == "declined" ? """{"error":"Catalogue could not resolve this reading"}""" : unresolved;
+            using var handler = new RunHandler(["completed"], replies: [unresolved, retryReply]);
+            using var http = new HttpClient(handler);
+            var agent = new FoundryCardIdentificationAgent(Client(http, new ListLogger<FoundryAgentClient>()),
+                GameAgentProfile.Mtg, "agent", new ListLogger<FoundryCardIdentificationAgent>());
+            var result = await agent.IdentifyAsync(new CardCrop(0, Image(), first, CardGames.Magic));
+            check(handler.Runs == 2 && handler.Corrections == 1
+                && result.Resolution == (outcome == "confirmed" ? "confirmed" : resolution) && result.Name is not null,
+                $"{resolution} named readings retry once; {outcome} outcome preserves a readable row");
+        }
         await ConcurrencyChecks.RunAsync(check);
         foreach (var status in new[] { HttpStatusCode.InternalServerError, HttpStatusCode.ServiceUnavailable,
             HttpStatusCode.BadRequest, HttpStatusCode.Forbidden })
@@ -179,12 +224,16 @@ internal static class ScanReliabilityChecks
             for (var x = 0; x < 65; x++) image[x, y] = new Rgba32(0, 255, 0);
             var footerBytes = CardFooterCropper.CropToPng(Png(image));
             using var footer = SixLabors.ImageSharp.Image.Load<Rgba32>(footerBytes);
-            check(footer.Width == 1200 && footer.Height == 600 && footer[0, 0].G == 255
+            check(footer.Width == 1200 && footer.Height == 2040 && footer[0, 0].G == 255
                 && footer[1199, 599].R == 255, "full-width footer preserves the retro-frame collector-number area");
+            check(footer[1199, 1319].G == 255,
+                "lower-left printing details receive a separate close-up below the full-width footer");
+            check(footer[1199, 2039].R == 255,
+                "lower-right retro-frame printing details also receive a separate close-up");
             image.Mutate(c => c.Rotate(RotateMode.Rotate90));
             using var sidewaysFooter = SixLabors.ImageSharp.Image.Load<Rgba32>(CardFooterCropper.CropToPng(Png(image)));
-            check(sidewaysFooter.Width == 1200 && sidewaysFooter.Height == 1200
-                && (sidewaysFooter[0, 600].G == 255 || sidewaysFooter[1199, 599].G == 255),
+            check(sidewaysFooter.Width == 1200 && sidewaysFooter.Height == 4080
+                && (sidewaysFooter[0, 2040].G == 255 || sidewaysFooter[1199, 599].G == 255),
                 "sideways cards supply both quarter-turn footer views without guessing printed orientation");
 
             using var handler = new RunHandler(["server_error", "completed"]);
@@ -245,6 +294,65 @@ internal static class ScanReliabilityChecks
         });
         check(shared.Set == "old" && shared.ArtReason == "separation_too_small" && shared.ArtVerdict == "inconclusive",
             "identical illustrations never move the printing");
+
+        var reviewable = card with
+        {
+            Language = "ja",
+            ArtReferences = card.ArtReferences.Reverse().ToArray()
+        };
+        using (var reviewHttp = new HttpClient(new ImageHandler(new Dictionary<string, byte[]>
+        {
+            ["/old.png"] = referenceBytes, ["/new.png"] = referenceBytes
+        })))
+        {
+            var reviewLog = new ListLogger<CardArtVerifier>();
+            var verifier = new CardArtVerifier(reviewHttp, reviewLog);
+            var reviewCrop = new CardCrop(1, Image(), first, CardGames.Magic);
+            foreach (var answer in new[]
+            {
+                reviewable with { Set = "new", CollectorNumber = "2", Resolution = "confirmed" },
+                reviewable with { Resolution = "confirmed" },
+                reviewable with { Set = "new", Resolution = "unresolved" },
+                reviewable with { Set = "new", Resolution = "assumed" },
+                reviewable with { Set = "new", Resolution = "confirmed", Name = "Another card" },
+                reviewable with { Set = "new", Resolution = "confirmed", Language = "en" }
+            })
+            {
+                var reviewer = new PrintingReviewer(() => Task.FromResult(answer));
+                var result = await verifier.VerifyAndReviewAsync(reviewable, cropBytes, "review-check",
+                    reviewCrop, reviewer, default);
+                var accepted = answer.Resolution == "confirmed" && answer.Language == "ja"
+                    && answer.Name == reviewable.Name;
+                check(reviewer.Reviews == 1 && result.Set == (accepted ? answer.Set : reviewable.Set)
+                    && result.Language == "ja" && result.ArtVerdict == "inconclusive",
+                    "one footer review can correct a printing without lowering art thresholds or accepting unresolved/wrong-language answers");
+            }
+            var failedReviewer = new PrintingReviewer(() => throw new InvalidOperationException("Test review failure"));
+            var preserved = await verifier.VerifyAndReviewAsync(reviewable, cropBytes, "review-check",
+                reviewCrop, failedReviewer, default);
+            check(preserved.Name == reviewable.Name && preserved.Set == reviewable.Set
+                && reviewLog.Lines.Any(l => l.Contains("optional printing re-read failed")),
+                "optional footer review failure preserves the usable card and logs the failure");
+            foreach (var failure in new Exception[]
+            {
+                new OperationCanceledException(), new FoundryAccessException("Forbidden", 403)
+            })
+            {
+                var reviewer = new PrintingReviewer(() => Task.FromException<IdentifiedCard>(failure));
+                try
+                {
+                    await verifier.VerifyAndReviewAsync(reviewable, cropBytes, "review-check", reviewCrop, reviewer, default);
+                    check(false, "review cancellation and access errors must propagate");
+                }
+                catch (Exception ex) when (ReferenceEquals(ex, failure))
+                {
+                    check(true, "review cancellation and access errors propagate rather than looking successful");
+                }
+            }
+            var unused = new PrintingReviewer(() => throw new InvalidOperationException("Unexpected review"));
+            await verifier.VerifyAndReviewAsync(card, cropBytes, "review-check", reviewCrop, unused, default);
+            check(unused.Reviews == 0, "same-printing best artwork does not invoke footer review");
+        }
 
         var (missing, missingLogs) = await VerifyAsync(card, cropBytes, new Dictionary<string, byte[]>
         {
@@ -667,6 +775,20 @@ internal static class ScanReliabilityChecks
                     && handler.Corrections == 1 && handler.Deletes == 2,
                     "persistent language contradictions fail after one retry, never returning false English success");
             }
+        }
+    }
+
+    private sealed class PrintingReviewer(Func<Task<IdentifiedCard>> review) : ICardIdentificationAgent, ICardPrintingReviewAgent
+    {
+        public string Game => CardGames.Magic;
+        public string AgentId => "test-printing-review";
+        public int Reviews { get; private set; }
+        public Task<IdentifiedCard> IdentifyAsync(CardCrop crop, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+        public Task<IdentifiedCard> ReviewPrintingAsync(CardCrop crop, IdentifiedCard previous, CancellationToken ct = default)
+        {
+            Reviews++;
+            return review();
         }
     }
 

@@ -1,5 +1,6 @@
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Imaging;
+using Enfolderer.Ai.Worker.Agents;
 using Microsoft.Extensions.Logging;
 
 namespace Enfolderer.Ai.Worker.Pipeline;
@@ -62,10 +63,45 @@ public sealed class CardArtVerifier
     private readonly HttpClient _http;
     private readonly ILogger<CardArtVerifier> _log;
 
+    internal static bool NeedsPrintingReview(IdentifiedCard card, ArtComparison comparison, string reason) =>
+        reason == "separation_too_small" && comparison.Best is { } best
+        && best.Distance <= ArtAdjudicator.MaxAgreeingDistance
+        && (!string.Equals(best.Set, card.Set, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(best.CollectorNumber, card.CollectorNumber, StringComparison.OrdinalIgnoreCase));
+
     public CardArtVerifier(HttpClient http, ILogger<CardArtVerifier> log)
     {
         _http = http;
         _log = log;
+    }
+
+    public async Task<IdentifiedCard> VerifyAndReviewAsync(
+        IdentifiedCard card, byte[] artCrop, string jobId, CardCrop crop,
+        ICardIdentificationAgent agent, CancellationToken ct)
+    {
+        var needsReview = false;
+        card = await VerifyAsync(card, artCrop, jobId, ct, () => needsReview = true);
+        if (!needsReview || agent is not ICardPrintingReviewAgent reviewer) return card;
+
+        _log.LogInformation("Card {Index} of job {JobId}: requesting one footer re-read after inconclusive artwork.",
+            card.Index, jobId);
+        try
+        {
+            var reviewed = await reviewer.ReviewPrintingAsync(crop, card, ct);
+            if (reviewed.IsIdentified && reviewed.PrintingWasPlaced
+                && string.Equals(reviewed.Name, card.Name, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(reviewed.Language, card.Language, StringComparison.OrdinalIgnoreCase))
+                return await VerifyAsync(reviewed, artCrop, jobId, ct);
+
+            _log.LogWarning("Card {Index} of job {JobId}: printing re-read did not establish a printing of the same card in the photographed language; preserving original reading.",
+                card.Index, jobId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not FoundryAccessException)
+        {
+            _log.LogWarning(ex, "Card {Index} of job {JobId}: optional printing re-read failed; preserving original reading.",
+                card.Index, jobId);
+        }
+        return card;
     }
 
     /// <summary>
@@ -73,7 +109,7 @@ public sealed class CardArtVerifier
     /// the card, possibly moved to the printing the photograph actually shows.
     /// </summary>
     public async Task<IdentifiedCard> VerifyAsync(
-        IdentifiedCard card, byte[] cropBytes, string jobId, CancellationToken ct)
+        IdentifiedCard card, byte[] cropBytes, string jobId, CancellationToken ct, Action? requestPrintingReview = null)
     {
         if (!card.IsIdentified) return card;
         if (card.ArtReferences.Count == 0)
@@ -153,6 +189,7 @@ public sealed class CardArtVerifier
             ArtAdjudicator.MaxAgreeingDistance, comparison.Separation, ArtAdjudicator.MinSeparation, reason);
 
         card = card with { ArtReason = reason, ArtDistance = comparison.Best?.Distance };
+        if (NeedsPrintingReview(card, comparison, reason)) requestPrintingReview?.Invoke();
         if (reason == "missing_candidates")
             return card with { ArtVerdict = "inconclusive", ArtMargin = comparison.Separation };
 

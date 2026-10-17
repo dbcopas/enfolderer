@@ -40,6 +40,11 @@ public interface ICardBoundaryAgent
     Task<IReadOnlyList<DetectedBoundary>> DetectAsync(AgentImage image, string scanBlobPath, int width, int height, CancellationToken ct = default);
 }
 
+public interface ICardPrintingReviewAgent
+{
+    Task<IdentifiedCard> ReviewPrintingAsync(CardCrop crop, IdentifiedCard previous, CancellationToken ct = default);
+}
+
 /// <summary>A crop handed to an identification agent.</summary>
 public sealed record CardCrop(int Index, AgentImage Image, CardQuad Quad, string? GameHint);
 
