@@ -37,6 +37,8 @@ param apiClientId string
 param mobileWebClientId string = ''
 param scanAllowedUserObjectIds string = ''
 param scanDiagnosticUserObjectIds string = ''
+param scanAllowanceAdminUserObjectIds string = ''
+param apiCustomDomains array = []
 
 @description('Endpoint of Team A\'s geometry project.')
 param geometryProjectEndpoint string
@@ -142,6 +144,7 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: targetPort
         transport: 'auto'
         allowInsecure: false
+        customDomains: apiCustomDomains
       }
       registries: apiRegistries
     }
@@ -181,6 +184,10 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'Diagnostics__AllowedUserObjectIds'
               value: scanDiagnosticUserObjectIds
+            }
+            {
+              name: 'ScanAllowances__AdminUserObjectIds'
+              value: scanAllowanceAdminUserObjectIds
             }
           ])
         }

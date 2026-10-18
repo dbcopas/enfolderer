@@ -122,6 +122,20 @@ resource jobsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/conta
   }
 }
 
+resource allowancesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDb
+  name: 'scan-allowances'
+  properties: {
+    resource: {
+      id: 'scan-allowances'
+      partitionKey: {
+        paths: [ '/ownerKey' ]
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
 output storageAccountId string = storage.id
 output storageAccountName string = storage.name
 output blobEndpoint string = storage.properties.primaryEndpoints.blob

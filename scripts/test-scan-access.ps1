@@ -70,13 +70,14 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not read API hostname.' }
 $response = Invoke-WebRequest "https://$api/jobs/" -Method Post -ContentType application/json `
     -Body '{"fileName":"access-check.jpg"}' -SkipHttpErrorCheck -TimeoutSec 30
 if ($response.StatusCode -ne 401) { throw "Anonymous API create: expected 401, received $($response.StatusCode)." }
-foreach ($path in '/diagnostics/scans/', '/diagnostics/scans/anonymous-check/original') {
+foreach ($path in '/diagnostics/scans/', '/diagnostics/scans/anonymous-check/original',
+    '/allowance/', '/admin/allowances/00000000-0000-0000-0000-000000000001') {
     foreach ($headers in @(@{}, @{ Authorization = "Bearer $token" })) {
         $denied = Invoke-WebRequest "https://$api$path" -Headers $headers -SkipHttpErrorCheck -TimeoutSec 30
         if ($denied.StatusCode -ne 401) { throw "Anonymous/wrong-audience $path must return 401." }
     }
 }
-Write-Host 'Scan diagnostics: anonymous and wrong-audience reads return 401.'
+Write-Host 'Scan diagnostics and allowances: anonymous and wrong-audience reads return 401.'
 $webConfig = Invoke-RestMethod "https://$api/web-config" -TimeoutSec 30
 if ($webConfig.enabled) {
     $website = Invoke-WebRequest "https://$api/" -TimeoutSec 30

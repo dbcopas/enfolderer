@@ -163,8 +163,9 @@ the desktop; original databases, card names and personal notes are not uploaded.
 after inventory changes or delete it on the website. Snapshots are private, isolated by validated
 tenant/object IDs, and remain until replaced/deleted. The worker reads the snapshot when rendering
 an opted-in scan; removing it mid-scan produces explicit unknown ownership, not invented zeros.
-Missing exact printings get pink overlay backgrounds; owned cards show quantities, and unknown
-ownership is amber. Double-faced cards still require two copies. Existing rendered images are
+Missing exact printings get red overlay backgrounds; all cards show exact-printing and all-sets
+quantities, including zero. Genuine lookup failures show `unavailable`, not amber or a question mark.
+Double-faced cards still require two copies. Existing rendered images are
 unchanged by later snapshot replacement/deletion. Desktop scans keep their local ownership path.
 Older MTG Studio rows can have legacy set codes and no collector number (for example `VI` rather
 than `VIS`). The snapshot now also exports Gatherer printing IDs, which the exact Scryfall pricing
@@ -172,9 +173,15 @@ response supplies for matching without card-name guesses. Set/number remains the
 Re-export and upload a fresh snapshot to include these rows; older snapshots remain readable but
 cannot recover quantities they omitted. If neither the exact set/number nor a Gatherer printing
 ID is present in an available snapshot, ownership is assumed to be zero. These cards use the
-normal pink missing-card panel without an ownership question mark and are eligible for the
-highest-value-needed trophy. An unavailable snapshot, conflicting identifiers or unsupported
-layout still produces explicit unknown ownership (amber), not zero.
+normal red missing-card panel with `Owned: 0` and an independently resolved all-sets total.
+An unavailable snapshot, conflicting identifiers or unsupported
+layout still produces an explicit warning and `unavailable` quantities, not invented zeros.
+Missing entries count as zero in the scan lookup; scans do not modify the uploaded snapshot or source databases.
+When a printing has no all-sets total, the worker uses Scryfall's canonical Oracle ID to find
+other printings and match their set/number or Gatherer IDs in the existing snapshot. Their
+precomputed all-sets total is reused (not added repeatedly); their exact quantities are never
+assigned to the scanned printing. This supports newer reprints absent from older exports,
+without matching scanned names or requiring a fresh upload. Catalogue failures remain explicit warnings.
 
 The worker processes up to **two cards concurrently** within each scan. Each task uses its own
 source-image stream; results retain reading order and progress writes are serialized. Per-card
@@ -222,14 +229,18 @@ The legacy classic client remains available for regression checks, not as an aut
 After final printing/art verification, scans also produce a priced PNG of the original photo.
 Half-card-width artwork overlays show euro-symbol prices side by side, nonfoil on the
 left and foil (marked with a star) on the right. Text is measured and sized to fill the available
-box, with the card name followed by set code and collector number on smaller lines below, without overlapping the confidence circle in the
+box, with the card name shown only for non-English or unknown-language cards and set code and collector number below.
+Name, set/number and price fonts are measured independently, so a long translated name or price
+does not shrink the printing label. These lines do not overlap the confidence circle in the
 lower right: green for placed printings, yellow for printings needing verification, and red for
 unidentified cards or unplaced readings below 0.5 confidence. There is no appended footer or
 legend; output retains the photo dimensions (apart from the existing 2400-pixel render cap).
-A gold trophy marks the highest-value known exact-printing shortage: zero owned for a
-single-faced card or fewer than two for a physical double-faced card. Owned-enough, unknown and
-unpriced cards cannot win; tied values use scan order. Without a known priced shortage, there
-is no trophy. Prices are **Cardmarket via Scryfall daily reference prices**, not
+Exactly one gold trophy replaces the rank number on the highest-priced identified card,
+irrespective of ownership or shortage. All other identified cards show their one-based rank in
+the full downloadable CSV in that same upper-right badge position, with no trophy. Tied values
+use scan order; unpriced cards sort last and cannot win. If every price is unavailable, all
+identified cards show rank numbers and there is no trophy. Shortage background colours remain
+independent of these price badges. Prices are **Cardmarket via Scryfall daily reference prices**, not
 live offers or a guaranteed valuation. Each missing foreign-language price independently falls
 back to English for the **same set and collector number**, recorded in result price metadata.
 A foil-only or nonfoil-only record is
@@ -292,6 +303,16 @@ For overlapping fragments or merged arrangement regions, a second recovery check
 measurements at all four quarter-turns. Replacement requires consistent whole-card sizes, coverage of
 the original regions and sufficient photo coverage; it does not assume a fixed card count. The
 recovered corners are mapped back to the original image while preserving their crop orientation.
+Bottom-positioned title bars can otherwise project a card-sized rectangle above the actual card.
+When opposite-turn contours disagree on that placement, two measured row neighbours and a column
+neighbour must support an alternative before it can replace the shifted frame; the row's measured
+extent keeps both the title and collector footer. The exact failed bottom-title Swamp upload is
+tested at all four quarter-turns, including the leftmost set-code character in the footer.
+When a mostly detected binder page omits a card, contour evidence can also fill a single gap
+without replacing existing quads. A candidate must match card size, have two measured neighbours
+in both its row and column, and pass border and interior-detail checks. Empty slots are not
+filled merely because they lie on the page grid. The exact glared Ball Lightning upload is a
+regression fixture, alongside the existing sideways and loose-card photographs.
 Contour groups also use the existing edge-supported neighbour completion in that upright frame,
 so a dark card border lost during browser JPEG re-encoding need not leave a hole in the scan.
 EXIF display rotation is handled independently as described above.
@@ -338,6 +359,29 @@ The services, agent definitions, and infrastructure are in `src/Enfolderer.Ai.*`
 [docs/foundry-demo.md](docs/foundry-demo.md) for the architecture and the security boundary
 walkthrough.
 
+### Guest scan allowances
+
+Approved users also need an explicit scan-credit grant. An invitation or pilot assignment does
+not grant credits. The API charges one credit per submitted photo (not per card), after checking
+that its upload exists. Submitted scans count even if identification fails. Credits do not
+reset or expire; repeated submission of the same job does not charge again. Exhausted users
+can still poll and download existing results and manage their collection. The website displays
+remaining scans and disables new scanning when exhausted; the API enforces the same rule for
+desktop and direct callers.
+
+Allowances, idempotent adjustment audit records and dispatch receipts live in a separate
+non-expiring Cosmos container. A recovery loop dispatches reserved work after interruptions.
+Queue duplicates are serialized by a renewable execution lease; terminal jobs are not rerun.
+Owners must be explicitly granted unlimited access, just like guests must be granted finite
+credits. No user is automatically unlimited based on account type.
+
+See [allowance administration and tenant migration](docs/azure-setup.md#scan-credit-allowances)
+for setup, grants, top-ups, refunds and balance migration.
+Run `dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check` for API allowance, concurrent
+submission, dispatch recovery and worker duplicate-delivery regressions. Run
+`dotnet run --project tools\Enfolderer.Ai.Allowance.Check` for Cosmos batch-failure, ETag,
+serialization and non-expiring receipt/audit checks.
+
 ## Local collection annotations on scan images
 
 After downloading a priced scan image, the desktop reads `mainDb.db` and `mtgstudio.collection`
@@ -346,10 +390,10 @@ Collection rows are matched through `Cards.MtgsId = CollectionCards.CardId` and 
 collection entries. If a mapped collection entry exists, its quantity (including zero) wins;
 otherwise the desktop uses `Cards.Qty` in the main database.
 
-A pink-tinted price-overlay background marks an exact printing with fewer than one copy, or fewer than two for a card
+A red-tinted price-overlay background marks an exact printing with fewer than one copy, or fewer than two for a card
 with distinct front/back faces. Split/adventure/prepare cards with a normal card back require only one.
-Missing cards do not show a quantity, including double-faced printings with only one copy.
-Otherwise, `Owned: N | All: M` below the prices identifies the exact set/collector-number
+Every card shows `Owned: N` and `All sets: M` below the prices, including missing
+printings with zero copies and double-faced printings with only one copy. These identify the exact set/collector-number
 quantity and a separate total across printings with that card name. The all-printings total
 never determines whether a card is missing. Collector-number suffixes remain distinct.
 All inventory variants within the same set/number count toward that printing.
@@ -362,9 +406,9 @@ Full local names are retained to avoid combining different cards that share a fr
 
 The price lookup also returns the catalogue name and layout; no extra catalogue request is
 needed. A worker built before this metadata was added cannot supply the front/back requirement:
-the desktop reports an ownership warning rather than guessing. Missing databases, missing local
-catalogue entries and unsupported layouts likewise produce warnings. Where card
-geometry is available, unknown ownership is shown with an amber overlay and `Owned: ?`, never a blank
+the desktop reports an ownership warning rather than guessing. Missing databases and unsupported
+layouts likewise produce warnings; missing catalogue entries count as zero without writing to the databases. Where card
+geometry is available, unavailable ownership is shown with `Owned: unavailable` and `All sets: unavailable`, never an amber or blank
 ownership panel that could be mistaken for confirmed ownership. Cards are not outlined. CSVs and the priced image remain
 available. Identification confidence does not suppress ownership counts.
 Ownership is evaluated when downloading, not when reopening a saved image.

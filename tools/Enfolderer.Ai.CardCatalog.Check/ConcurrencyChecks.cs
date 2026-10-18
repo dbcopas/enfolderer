@@ -35,7 +35,20 @@ internal static class ConcurrencyChecks
                 "results remain in reading order even when later cards finish first");
             check(store.Progress.SequenceEqual([0, 1, 2, 3, 4, 4]),
                 "persisted progress is monotonic and no concurrent update loses a completed card");
+            await processor.ProcessAsync(new ScanJobMessage("parallel", "scan.png", null), default);
+            check(agent.Completed.Count == 3 && store.Progress.Count == 6,
+                "duplicate queue delivery never reruns a completed scan");
         }
+        var duplicateStore = new RecordingStore();
+        await duplicateStore.CreateAsync(new ScanJobDocument { Id = "duplicate", JobId = "duplicate", BlobPath = "scan.png" });
+        var duplicateAgent = new IdentificationAgent();
+        var duplicateProcessor = new ScanJobProcessor(duplicateStore, new Images(), new Boundaries(), [duplicateAgent],
+            new ScanPipelineOptions { CropHeight = 140 }, new Credential(), new ScanPlatformOptions(),
+            NullLogger<ScanJobProcessor>.Instance);
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
+            duplicateProcessor.ProcessAsync(new ScanJobMessage("duplicate", "scan.png", null), default)));
+        check(duplicateAgent.Completed.Count == 3,
+            "simultaneous duplicate deliveries run the pipeline only once");
         using var cancellation = new CancellationTokenSource();
         var cancelledStore = new RecordingStore();
         await cancelledStore.CreateAsync(new ScanJobDocument { Id = "parallel", JobId = "parallel", BlobPath = "scan.png" });
@@ -57,6 +70,7 @@ internal static class ConcurrencyChecks
 
     private sealed class RecordingStore : IJobStore
     {
+        public Task MarkUploadedAsync(string jobId, CancellationToken ct = default) => throw new NotSupportedException();
         private ScanJobDocument? _job;
         public List<int> Progress { get; } = [];
         public Task<ScanJobDocument> CreateAsync(ScanJobDocument job, CancellationToken ct = default)

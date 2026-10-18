@@ -443,6 +443,8 @@ internal static class ScanReliabilityChecks
         var root = trainingDirectory ?? FindTrainingDirectory();
         await CheckSidewaysMobilePhotoAsync(check, root, "45bc9d36-afe9-4b21-823e-38fc4f1082de.jpeg");
         await CheckSidewaysMobilePhotoAsync(check, root, "mobile-upload.jpg");
+        await CheckOmittedBinderCardAsync(check, root);
+        await CheckBottomTitleCardAsync(check, root);
         var total = 0;
         for (var page = 1; page <= 7; page++)
         {
@@ -516,6 +518,129 @@ internal static class ScanReliabilityChecks
             encoded.Position = 0;
             check(CardDetector.Detect(encoded).Count == 0, $"blank {color} surface does not invent a card grid");
         }
+    }
+
+    private static async Task CheckBottomTitleCardAsync(Action<bool, string> check, string root)
+    {
+        var bytes = await File.ReadAllBytesAsync(Path.Combine(root, "01", "bottom-title-upload.jpg"));
+        foreach (var angle in new[] { 0, 90, 180, 270 })
+        {
+            using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(bytes);
+            var width = image.Width;
+            var height = image.Height;
+            image.Mutate(c => c.Rotate(angle));
+            using var input = new MemoryStream(Png(image));
+            var measured = CardDetector.Detect(input);
+            check(measured.Count == 6, $"bottom-title layout at {angle} degrees: six physical cards, not seven art fragments");
+            ImagePoint Rotate(ImagePoint p) => angle switch
+            {
+                90 => new(height - 1 - p.Y, p.X),
+                180 => new(width - 1 - p.X, height - 1 - p.Y),
+                270 => new(p.Y, width - 1 - p.X),
+                _ => p
+            };
+            var title = Rotate(new(475, 1340));
+            var footer = Rotate(new(295, 1407));
+            bool Contains(CardQuad quad, ImagePoint target)
+            {
+                var cross = Enumerable.Range(0, 4).Select(i =>
+                {
+                    var a = quad.Points[i];
+                    var b = quad.Points[(i + 1) % 4];
+                    return (b.X - a.X) * (target.Y - a.Y) - (b.Y - a.Y) * (target.X - a.X);
+                }).ToArray();
+                return cross.All(c => c >= 0) || cross.All(c => c <= 0);
+            }
+            var swamp = measured.Where(c => Contains(c.Quad, title) && Contains(c.Quad, footer)).ToArray();
+            check(swamp.Length == 1,
+                $"bottom-title layout at {angle} degrees: Swamp title and clear EOE 369 footer both reach one crop");
+            using var handler = new RunHandler(["completed"], replies: ["{\"cards\":[]}"]);
+            using var http = new HttpClient(handler);
+            var agent = new FoundryCardBoundaryAgent(Client(http, new ListLogger<FoundryAgentClient>()),
+                "agent", new ListLogger<FoundryCardBoundaryAgent>());
+            var retained = await agent.DetectAsync(new AgentImage(Png(image), "bottom-title.png", "image/png"),
+                "scans/test/bottom-title.png", image.Width, image.Height);
+            check(retained.Count == 6 && retained.Count(c => Contains(c.Quad, footer) && Contains(c.Quad, title)) == 1,
+                $"bottom-title layout at {angle} degrees: empty agent metadata cannot discard the complete Swamp crop");
+        }
+    }
+
+    private static async Task CheckOmittedBinderCardAsync(Action<bool, string> check, string root)
+    {
+        var bytes = await File.ReadAllBytesAsync(Path.Combine(root, "01", "ball-lightning-upload.jpg"));
+        foreach (var angle in new[] { 0, 180 })
+        {
+            using var image = SixLabors.ImageSharp.Image.Load<Rgba32>(bytes);
+            var width = image.Width;
+            var height = image.Height;
+            image.Mutate(c => c.Rotate(angle));
+            using var source = new MemoryStream(Png(image));
+            var detected = CardDetector.Detect(source, out var diagnostic);
+            check(detected.Count == 9, $"glared binder at {angle} degrees: all nine physical cards detected");
+            var target = new[] { new ImagePoint(178, 250), new ImagePoint(548, 250),
+                new ImagePoint(548, 763), new ImagePoint(178, 763) };
+            var rotated = target.Select(p => angle switch
+            {
+                90 => new ImagePoint(height - 1 - p.Y, p.X),
+                180 => new ImagePoint(width - 1 - p.X, height - 1 - p.Y),
+                270 => new ImagePoint(p.Y, width - 1 - p.X),
+                _ => p
+            }).ToArray();
+            var reference = new CardQuad(rotated).BoundingBox();
+            var matches = detected.Select(c =>
+            {
+                var b = c.Quad.BoundingBox();
+                var intersection = Math.Max(0, Math.Min(b.X + b.Width, reference.X + reference.Width) - Math.Max(b.X, reference.X))
+                    * Math.Max(0, Math.Min(b.Y + b.Height, reference.Y + reference.Height) - Math.Max(b.Y, reference.Y));
+                return (Card: c, Iou: intersection / (b.Width * b.Height + reference.Width * reference.Height - intersection));
+            }).OrderByDescending(c => c.Iou).ToArray();
+            check(matches.Length > 0 && matches[0].Iou > 0.8,
+                $"glared binder at {angle} degrees: recovered Ball Lightning covers the full card (IoU {matches.FirstOrDefault().Iou:F3})");
+            if (matches.Length > 0)
+            {
+                var p = matches[0].Card.Quad.Points;
+                var expectedDx = rotated[1].X - rotated[0].X;
+                var expectedDy = rotated[1].Y - rotated[0].Y;
+                if (angle == 0)
+                    check((p[1].X - p[0].X) * expectedDx + (p[1].Y - p[0].Y) * expectedDy > 0,
+                        "glared binder: recovered card follows measured neighbour orientation");
+            }
+            using var handler = new RunHandler(["completed"], replies: ["{\"cards\":[]}"]);
+            using var http = new HttpClient(handler);
+            var agent = new FoundryCardBoundaryAgent(Client(http, new ListLogger<FoundryAgentClient>()),
+                "agent", new ListLogger<FoundryCardBoundaryAgent>());
+            var boundaries = await agent.DetectAsync(new AgentImage(Png(image), "binder.png", "image/png"),
+                "scans/test/binder.png", image.Width, image.Height);
+            check(boundaries.Count == 9, $"glared binder at {angle} degrees: empty model metadata cannot drop recovered region");
+            if (angle == 0)
+            {
+                check(diagnostic?.Contains("9 whole-card regions from 8", StringComparison.Ordinal) == true,
+                    "single omitted binder card recovery is explicitly diagnosed");
+                var originalRegions = CardArrangementDetector.Detect(image);
+                check(originalRegions.Count == 8 && originalRegions.All(original => detected.Any(c =>
+                        c.Quad.Points.SequenceEqual(original.Quad.Points))),
+                    "recovering the omitted card preserves all eight original measured quads exactly");
+                if (matches.Length > 0)
+                {
+                    foreach (var point in new[] { new ImagePoint(240, 298), new ImagePoint(300, 735) })
+                    {
+                        var p = matches[0].Card.Quad.Points;
+                        var crosses = Enumerable.Range(0, 4).Select(i =>
+                            (p[(i + 1) % 4].X - p[i].X) * (point.Y - p[i].Y)
+                            - (p[(i + 1) % 4].Y - p[i].Y) * (point.X - p[i].X)).ToArray();
+                        check(crosses.All(v => v >= 0) || crosses.All(v => v <= 0),
+                            "recovered old-frame card retains its printed title and footer");
+                    }
+                }
+            }
+        }
+        using var emptyPocket = SixLabors.ImageSharp.Image.Load<Rgba32>(bytes);
+        for (var y = 240; y < 790; y++)
+        for (var x = 150; x < 565; x++)
+            emptyPocket[x, y] = new Rgba32(180, 185, 185);
+        using var emptySource = new MemoryStream(Png(emptyPocket));
+        check(CardDetector.Detect(emptySource).Count == 8,
+            "an empty binder slot is not filled merely because its row and column have neighbours");
     }
 
     private static async Task CheckSidewaysMobilePhotoAsync(Action<bool, string> check, string root, string fileName)

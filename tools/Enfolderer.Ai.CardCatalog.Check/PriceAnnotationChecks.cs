@@ -113,16 +113,62 @@ internal static class PriceAnnotationChecks
             card with { Index = 4, Prices = new CardPrices { Nonfoil = 30 }, Ownership = new(2, 6, 2) },
             card with { Index = 5, Prices = new CardPrices(), Ownership = new(0, 0, 1) }
         };
-        check(CardValueRanking.HighestNeeded(trophyCards)?.Index == 3
-            && CardValueRanking.HighestNeeded(trophyCards.Take(3))?.Index == 2
-            && CardValueRanking.HighestNeeded(trophyCards.Take(2)) is null
-            && CardValueRanking.HighestNeeded([trophyCards[5]]) is null
-            && CardValueRanking.HighestNeeded([card]) is null,
-            "trophy selects highest-priced known shortage: zero single-faced or one double-faced, excluding owned, unknown and unpriced cards");
+        check(CardValueRanking.HighestPriced(trophyCards)?.Index == 0
+            && CardValueRanking.HighestPriced(trophyCards.Skip(1))?.Index == 1
+            && CardValueRanking.HighestPriced([trophyCards[5]]) is null
+            && CardValueRanking.HighestPriced([card]) is null
+            && CardValueRanking.HighestPriced([card with { Index = 1, Prices = new CardPrices { Nonfoil = 0 } },
+                card with { Index = 0, Prices = new CardPrices { Nonfoil = 0 } }])?.Index == 0,
+            "one trophy selects highest-priced identified card irrespective of ownership, with scan-order ties and real zero prices");
+        var ranks = CardValueRanking.Ranks(trophyCards);
+        check(ranks.Count == 6 && ranks[0] == 1 && ranks[1] == 2 && ranks[2] == 5 && ranks[3] == 4 && ranks[5] == 6
+            && CardValueRanking.Ranks(unsorted).Count == 8,
+            "every identified card has its one-based full CSV price rank, regardless of ownership or missing price");
+        check(CardValueRanking.Ranks(trophyCards.Append(card with { Index = 9, Name = null,
+                Prices = new CardPrices { Nonfoil = 999 } }))[2] == 5,
+            "unidentified cards excluded from CSV cannot shift overlay price ranks");
+        check(PricedScanRenderer.OverlayBackgroundColor(trophyCards[2]) == Color.FromRgb(160, 25, 25)
+            && PricedScanRenderer.OverlayBackgroundColor(trophyCards[3]) == Color.FromRgb(160, 25, 25)
+            && PricedScanRenderer.OverlayBackgroundColor(trophyCards[0]) == Color.Black
+            && PricedScanRenderer.OverlayBackgroundColor(trophyCards[1]) == Color.Black,
+            "only exact-printing shortages turn panels red; unknown ownership is never amber or treated as a known shortage");
         check(PricedScanRenderer.DescribeOverlayPrinting(card) == "CLB 240"
             && PricedScanRenderer.DescribeOverlayPrinting(card with { Set = null, CollectorNumber = null }) == ""
             && PricedScanRenderer.DescribeOverlayPrinting(card with { CollectorNumber = "240a" }) == "CLB 240a",
             "overlay includes uppercase set and exact collector number without inventing missing identifiers");
+        check(PricedScanRenderer.DescribeOverlayName(card with { Language = "en" }) == ""
+            && PricedScanRenderer.DescribeOverlayName(card with { Language = " EN " }) == ""
+            && PricedScanRenderer.DescribeOverlayName(card with { Language = "de" }) == card.Name
+            && PricedScanRenderer.DescribeOverlayName(card with { Language = null }) == card.Name,
+            "only confirmed English cards omit the name; foreign and unknown-language cards retain it");
+        var lettering = new List<byte[]>();
+        foreach (var sample in new[]
+        {
+            card with { Language = "en" },
+            card with { Language = "de", Name = string.Join(" ", Enumerable.Repeat("Very long translated name", 8)) },
+            card with { Language = "de", Name = "Short", Prices = new CardPrices { Nonfoil = 123456789.99m, Foil = 999999999.99m } }
+        })
+        {
+            source.Position = 0;
+            using var rendered = new MemoryStream();
+            PricedScanRenderer.Render(source, [sample], rendered);
+            using var renderedImage = Image.Load<Rgba32>(rendered.ToArray());
+            var pixels = new List<byte>();
+            for (var y = 466; y < 505; y++)
+                for (var x = 55; x < 340; x++)
+                {
+                    var pixel = renderedImage[x, y];
+                    pixels.AddRange([pixel.R, pixel.G, pixel.B]);
+                }
+            lettering.Add(pixels.ToArray());
+            if (sample.Language == "en")
+                check(!Enumerable.Range(412, 35).Any(y => Enumerable.Range(55, 285)
+                    .Any(x => renderedImage[x, y].R > 220 && renderedImage[x, y].G > 220 && renderedImage[x, y].B > 220)),
+                    "English card name is absent from the actual rendered title band");
+        }
+        check(lettering.Skip(1).All(p => p.SequenceEqual(lettering[0])),
+            "actual set/number pixels are independent of English name omission, long foreign names and long price text");
+        await CheckRelatedOwnershipAsync(check, card, source);
         check(PricedScanRenderer.OverlayConfidenceColor(card with { Resolution = "confirmed" }) == Color.LimeGreen
             && PricedScanRenderer.OverlayConfidenceColor(card) == Color.Gold
             && PricedScanRenderer.OverlayConfidenceColor(card with { Confidence = 0.2 }) == Color.Red
@@ -160,9 +206,9 @@ internal static class PriceAnnotationChecks
             check(png.Width == 800 && png.Height == image.Height && png[0, 0] == image[0, 0]
                 && png[60, 370] != image[60, 370],
                 "output preserves original photo dimensions and pixels outside labels, with no footer or appended legend");
-            check(png[373, 507] == Color.Gold.ToPixel<Rgba32>() && png[45, 45] == image[45, 45]
+            check(png[373, 623] == Color.Gold.ToPixel<Rgba32>() && png[45, 45] == image[45, 45]
                 && png[399, 340] != image[399, 340] && png[401, 340] == image[401, 340],
-                "price box occupies exactly half the card width, with lower-right circle and no number badge");
+                "price box occupies exactly half the card width, with lower-right circle");
             check(new[] { 413, 467 }.All(top => Enumerable.Range(top, 20).Any(y => Enumerable.Range(55, 150)
                 .Any(x => png[x, y].R > 180 && png[x, y].G > 180 && png[x, y].B > 180))),
                 "taller overlay includes card name and exact set/number on separate lines under the prices");
@@ -177,7 +223,7 @@ internal static class PriceAnnotationChecks
                 PricedScanRenderer.Render(source, [candidate with { Prices = result.Cards[0].Prices }], rendered);
                 rendered.Position = 0;
                 using var confidenceImage = Image.Load<Rgba32>(rendered);
-                check(confidenceImage[373, 507] == PricedScanRenderer.OverlayConfidenceColor(candidate).ToPixel<Rgba32>(),
+                check(confidenceImage[373, 623] == PricedScanRenderer.OverlayConfidenceColor(candidate).ToPixel<Rgba32>(),
                     "rendered circle uses the actual green/red match confidence color");
             }
             foreach (var needed in new[] { true, false })
@@ -189,8 +235,32 @@ internal static class PriceAnnotationChecks
                 PricedScanRenderer.Render(source, [candidate], rendered);
                 rendered.Position = 0;
                 using var trophyImage = Image.Load<Rgba32>(rendered);
-                check((trophyImage[375, 345] == Color.Gold.ToPixel<Rgba32>()) == needed,
-                    "rendered gold trophy is present only on the highest-value needed printing");
+                check(trophyImage[375, 345] == Color.Gold.ToPixel<Rgba32>(),
+                    "rendered gold trophy marks the highest-value card even when already owned");
+                var rankVisible = Enumerable.Range(340, 27).Any(y => Enumerable.Range(360, 26)
+                    .Any(x => trophyImage[x, y].R > 220 && trophyImage[x, y].G > 220 && trophyImage[x, y].B > 220));
+                check(!rankVisible, "the trophy winner does not also receive a numeric rank badge");
+            }
+            var positions = new[] { 40d, 300d, 560d };
+            var badgeCards = positions.Select((x, i) => card with { Index = i,
+                Quad = new CardQuad([new(x, 40), new(x + 220, 40), new(x + 220, 348), new(x, 348)]),
+                Prices = new CardPrices { Nonfoil = 30 - i * 10 },
+                Ownership = i == 0 ? new(4, 4, 1) : i == 1 ? new(0, 0, 1) : null }).ToArray();
+            source.Position = 0;
+            using (var rendered = new MemoryStream())
+            {
+                PricedScanRenderer.Render(source, badgeCards, rendered);
+                using var badges = Image.Load<Rgba32>(rendered.ToArray());
+                for (var i = 0; i < positions.Length; i++)
+                {
+                    var left = (int)positions[i] + 97;
+                    var gold = Enumerable.Range(130, 11).Any(y => Enumerable.Range(left, 10)
+                        .Any(x => badges[x, y] == Color.Gold.ToPixel<Rgba32>()));
+                    var white = Enumerable.Range(130, 8).Any(y => Enumerable.Range(left, 10)
+                        .Any(x => badges[x, y].R > 220 && badges[x, y].G > 220 && badges[x, y].B > 220));
+                    check(gold == (i == 0) && white == (i != 0),
+                        $"rendered price rank {i + 1}: only the winner has a trophy; every other card has a number");
+                }
             }
             using (var legacyHandler = new PriceHandler(null, null, null, null, rawJson:
                 """{"set":"vis","collector_number":"11","lang":"en","layout":"normal","name":"Knight of Valor","multiverse_ids":[3718],"prices":{"eur":"0.11","eur_foil":null}}"""))
@@ -239,12 +309,14 @@ internal static class PriceAnnotationChecks
             var owned = result.Cards[0].Ownership;
             check(owned is not null && owned.Quantity == quantity && owned.AllQuantity == 15
                 && owned.IsMissing == (quantity == 0)
-                && (quantity == 0 ? owned.OverlayText == "" : owned.OverlayText == "Owned: 2 | All: 15"),
-                "worker applies snapshot quantities to the exact printing and suppresses missing-card quantity text");
+                && owned.OverlayText == $"Owned: {quantity}\nAll sets: 15",
+                "worker always displays exact-printing quantities, including zero, and the all-sets total");
             using var rendered = Image.Load<Rgba32>(output.Content!);
             check(rendered[41, 100] == image[41, 100]
                 && (quantity == 0 ? rendered[60, 340].R > rendered[60, 340].G
-                    : rendered[60, 340].R == 0),
+                    : rendered[60, 340].R == 0)
+                && Enumerable.Range(540, 90).Any(y => Enumerable.Range(55, 240)
+                    .Any(x => rendered[x, y].R > 220 && rendered[x, y].G > 220 && rendered[x, y].B > 220)),
                 "server collection overlays use a missing-card panel tint or normal owned panel, never a card frame");
         }
         using (var handler = new PriceHandler("1", "2", null, null))
@@ -256,13 +328,13 @@ internal static class PriceAnnotationChecks
             var result = await service.CreateAsync(new ScanResultDocument { JobId = "unknown", Cards = [card] },
                 source, default, new CollectionSnapshot { Printings = [new("aaa", "1", 0, 0)] });
             check(result.Cards[0].Ownership is { Quantity: 0, AllQuantity: 0, RequiredQuantity: 1,
-                    Error: null, IsMissing: true, OverlayText: "" }
+                    Error: null, IsMissing: true, OverlayText: "Owned: 0\nAll sets: 0" }
                 && result.AnnotatedImagePath is not null
-                && CardValueRanking.HighestNeeded(result.Cards)?.Index == card.Index,
-                "absent snapshot printings assume zero, suppress question marks and qualify for the needed-card trophy");
+                && CardValueRanking.HighestPriced(result.Cards)?.Index == card.Index,
+                "absent snapshot printings assume zero, suppress question marks and remain eligible for the overall price trophy");
             using var rendered = Image.Load<Rgba32>(output.Content!);
             check(rendered[60, 340].R > rendered[60, 340].G,
-                "absent snapshot printings render with the missing-card pink panel instead of amber");
+                "absent snapshot printings render with the missing-card red panel instead of amber");
             var doubleFaced = card with { Prices = new CardPrices { Layout = "modal_dfc" } };
             check(CollectionSnapshot.Resolve(doubleFaced,
                     new CollectionSnapshot { Printings = [new("aaa", "1", 0, 0)] }.BuildIndex())
@@ -270,8 +342,9 @@ internal static class PriceAnnotationChecks
                 "absent double-faced printings assume zero while retaining the two-copy requirement");
             var unavailable = await service.CreateAsync(new ScanResultDocument { JobId = "unavailable", Cards = [card] },
                 source, default, ownershipError: "Collection snapshot unavailable.");
-            check(unavailable.Cards[0].Ownership is { Error: not null, OverlayText: "Owned: ?" },
-                "an unavailable collection remains explicitly unknown rather than assuming zero");
+            check(unavailable.Cards[0].Ownership is { Error: not null, OverlayText: "Owned: unavailable\nAll sets: unavailable" }
+                && CardValueRanking.Ranks(unavailable.Cards).Count == 1,
+                "a genuine collection failure remains explicit without a question mark or amber panel and does not suppress price rank");
             var conflicting = new CollectionSnapshot { GathererPrintings = [new(1, 1, 1), new(2, 2, 2)] };
             try
             {
@@ -330,6 +403,75 @@ internal static class PriceAnnotationChecks
                 check(false, "pricing cancellation must propagate");
             }
             catch (OperationCanceledException) { check(true, "pricing cancellation propagates"); }
+        }
+    }
+
+    private static async Task CheckRelatedOwnershipAsync(Action<bool, string> check, IdentifiedCard card, Stream source)
+    {
+        var oracle = Guid.Parse("9f8f29ba-7e64-455d-be05-ec7973f2bd0a");
+        var old = new CollectionSnapshot { Printings = [new("ltr", "224", 4, 6)],
+            GathererPrintings = [new(197881, 2, 2)] };
+        var lookup = old.BuildIndex();
+        var related = new[] { new CardPrintingReference("ltr", "224", []),
+            new CardPrintingReference("ltr", "329", []), new CardPrintingReference("ltr", "224", []) };
+        var modern = card with { Set = "hoc", CollectorNumber = "36", Prices = new CardPrices {
+            Layout = "normal", OracleId = oracle, RelatedPrintings = related } };
+        check(CollectionSnapshot.Resolve(modern, lookup) is { Quantity: 0, AllQuantity: 6, IsMissing: true },
+            "new printing uses canonical siblings for the all-sets total without borrowing their exact quantity or double-counting totals");
+        check(CollectionSnapshot.Resolve(modern with { Prices = modern.Prices with {
+                RelatedPrintings = [new("wwk", "136", [197881])] } }, lookup)
+            is { Quantity: 0, AllQuantity: 2, IsMissing: true },
+            "canonical sibling Gatherer IDs recover all-sets totals from legacy-only snapshots");
+        var exact = old with { Printings = [new("ltr", "224", 4, 6), new("hoc", "36", 0, 0)] };
+        check(CollectionSnapshot.Resolve(modern, exact.BuildIndex()) is { Quantity: 0, AllQuantity: 6 },
+            "an explicit zero printing still recovers its all-sets total without changing exact ownership");
+
+        string Printing(string set, string number, Guid id) => JsonSerializer.Serialize(new {
+            set, collector_number = number, oracle_id = id, digital = false, multiverse_ids = Array.Empty<int>() });
+        string Page(string data, bool more = false, string? next = null) =>
+            $"{{\"data\":[{data}],\"has_more\":{more.ToString().ToLowerInvariant()},\"next_page\":{JsonSerializer.Serialize(next)}}}";
+        var nextPage = $"https://api.scryfall.com/cards/search?unique=prints&q=oracleid%3A{oracle:D}&page=2";
+        foreach (var failure in new[] { "", "http", "wrong-card", "unsafe-page", "repeated-page", "malformed" })
+        {
+            var searches = 0;
+            using var handler = new RelatedHandler(request =>
+            {
+                if (request.RequestUri!.AbsolutePath != "/cards/search")
+                    return JsonSerializer.Serialize(new { set = "hoc", collector_number = "36", lang = "en",
+                        oracle_id = oracle, layout = "normal", name = "Sauron, the Dark Lord",
+                        prices = new { eur = "3.00", eur_foil = "4.00" } });
+                searches++;
+                if (failure == "http") throw new HttpRequestException("Test catalogue unavailable");
+                if (failure == "malformed") return "{\"data\":{},\"has_more\":false}";
+                if (failure == "wrong-card") return Page(Printing("ltr", "224", Guid.NewGuid()));
+                if (failure == "unsafe-page") return Page("", true, "https://example.invalid/cards/search");
+                if (failure == "repeated-page") return Page("", true, request.RequestUri.AbsoluteUri);
+                return searches == 1 ? Page(Printing("hoc", "36", oracle), true, nextPage)
+                    : Page(Printing("ltr", "224", oracle));
+            });
+            using var http = new HttpClient(handler);
+            var service = new ScanAnnotationService(new ScryfallPriceClient(http), new OutputStore(),
+                NullLogger<ScanAnnotationService>.Instance);
+            var result = await service.CreateAsync(new ScanResultDocument { JobId = "canonical-ownership",
+                Cards = [modern with { Language = "en" }, modern with { Index = 1, Language = "en" }] },
+                source, default, old);
+            if (failure.Length == 0)
+                check(searches == 2 && result.Cards.All(c => c.Ownership is { Quantity: 0, AllQuantity: 6, Error: null }
+                    && c.Prices is { Nonfoil: 3m, Foil: 4m, RelatedPrintings.Count: 2 }),
+                    "worker follows canonical pagination once per card identity, preserves exact prices and recovers totals without re-uploading the snapshot");
+            else
+                check(result.Cards.All(c => c.Ownership?.Error is not null) && result.AnnotatedImagePath is not null,
+                    $"canonical ownership {failure} failure remains explicit and cannot endorse an invented zero total");
+        }
+    }
+
+    private sealed class RelatedHandler(Func<HttpRequestMessage, string> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) {
+                Content = new StringContent(respond(request), Encoding.UTF8, "application/json") });
         }
     }
 

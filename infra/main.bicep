@@ -44,6 +44,10 @@ param scanAllowedUserObjectIds string = ''
 
 @description('Comma-separated operator object IDs allowed read-only diagnostics across approved pilot scans. Empty disables diagnostics.')
 param scanDiagnosticUserObjectIds string = ''
+@description('Explicit tenant user IDs allowed to grant and inspect scan credits. Empty disables allowance administration.')
+param scanAllowanceAdminUserObjectIds string = ''
+@description('API custom-domain bindings. deploy-images.ps1 preserves current bindings; use destination certificate IDs when moving environments.')
+param apiCustomDomains array = []
 
 @description('Set to false to run the "revoke Team B\'s access to Team A\'s agent" demo scenario.')
 param grantIdentificationAccessToGeometry bool = true
@@ -303,6 +307,8 @@ module hosting 'modules/hosting.bicep' = {
     mobileWebClientId: mobileWebClientId
     scanAllowedUserObjectIds: scanAllowedUserObjectIds
     scanDiagnosticUserObjectIds: scanDiagnosticUserObjectIds
+    scanAllowanceAdminUserObjectIds: scanAllowanceAdminUserObjectIds
+    apiCustomDomains: apiCustomDomains
     apiIdentityId: apiIdentity.outputs.id
     apiIdentityClientId: apiIdentity.outputs.clientId
     workerIdentityId: workerIdentity.outputs.id

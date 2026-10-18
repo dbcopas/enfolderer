@@ -154,6 +154,30 @@ public static class CardArrangementDetector
             .ToList();
     }
 
+    internal static IReadOnlyList<DetectedCard> SupportedMeasured(
+        Image<Rgba32> source, IReadOnlyList<DetectedCard> anchors,
+        IReadOnlyList<DetectedCard> candidates, CardArrangementOptions opts)
+    {
+        if (opts.WorkingSize <= 0 || anchors.Count == 0) return [];
+        var scale = Math.Min(1d, opts.WorkingSize / (double)Math.Max(source.Width, source.Height));
+        using var working = source.Clone(c => c.Resize(
+            Math.Max(32, (int)Math.Round(source.Width * scale)), Math.Max(32, (int)Math.Round(source.Height * scale))));
+        var frame = new Frame(working, working.Width, working.Height);
+        Box Measurement(DetectedCard card)
+        {
+            var b = card.Quad.BoundingBox();
+            return Measure(frame, (int)Math.Round(b.X * scale), (int)Math.Round(b.Y * scale),
+                (int)Math.Round(b.Width * scale), (int)Math.Round(b.Height * scale));
+        }
+        var typical = Median(anchors.Select(c => Measurement(c).Detail).ToArray());
+        return candidates.Where(c =>
+        {
+            var box = Measurement(c);
+            return box.Edge >= opts.MinEdge * opts.CompletionRelief
+                && box.Detail >= Math.Max(opts.MinDetail, typical * opts.MinRelativeDetail * opts.CompletionRelief);
+        }).ToArray();
+    }
+
     internal static IReadOnlyList<DetectedCard> CompleteMeasured(
         Image<Rgba32> source, IReadOnlyList<DetectedCard> anchors, CardArrangementOptions opts)
     {

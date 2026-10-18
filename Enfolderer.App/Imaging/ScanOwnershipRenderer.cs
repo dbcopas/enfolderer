@@ -38,7 +38,8 @@ public static class ScanOwnershipRenderer
             }
             ownedCards.Add(card with { Ownership = ownership });
         }
-        var highest = CardValueRanking.HighestNeeded(ownedCards);
+        var highest = CardValueRanking.HighestPriced(result.Cards);
+        var ranks = CardValueRanking.Ranks(result.Cards);
         var visual = new DrawingVisual();
         using (var drawing = visual.RenderOpen())
         {
@@ -56,26 +57,33 @@ public static class ScanOwnershipRenderer
                 var y = Math.Clamp(box.Y * scale, 0, Math.Max(0, photoHeight - size * 2));
                 var width = Math.Min(box.Width * scale / 2, image.PixelWidth - x);
                 var top = Math.Clamp(y + box.Height * scale * 0.28, 0, Math.Max(0, photoHeight - width * 0.58));
-                if (ownership.Error is not null || ownership.IsMissing)
+                if (ownership.IsMissing)
                 {
-                    var tint = ownership.Error is not null ? Color.FromArgb(96, 255, 165, 0) : Color.FromArgb(96, 255, 20, 147);
+                    var tint = Color.FromArgb(96, 255, 25, 25);
                     drawing.DrawRectangle(new SolidColorBrush(tint), null, new Rect(x, top, width, width * 0.58));
                 }
-                if (ownership.Error is not null || !ownership.IsMissing)
                 {
                     var padding = width * 0.04;
-                    var height = width * 0.14;
+                    var height = width * 0.28;
                     var text = new FormattedText(ownership.OverlayText, CultureInfo.InvariantCulture,
                         FlowDirection.LeftToRight, new Typeface("Segoe UI"), 100, Brushes.White, 1);
                     text.SetFontSize(100 * Math.Min((width - padding * 2) / text.Width,
                         (height - padding) / text.Height));
                     var panelY = Math.Min(top + width * 0.58, photoHeight - height);
-                    var background = ownership.Error is not null ? Color.FromArgb(230, 120, 70, 0) : Color.FromArgb(204, 0, 0, 0);
+                    var background = Color.FromArgb(204, 0, 0, 0);
                     drawing.DrawRectangle(new SolidColorBrush(background), null,
                         new Rect(x, panelY, width, height));
                     drawing.DrawText(text, new Point(x + padding, panelY + (height - text.Height) / 2));
                 }
-                if (card == highest)
+                if (card.Index != highest?.Index && ranks.TryGetValue(card.Index, out var rank))
+                {
+                    var unit = width * 0.07;
+                    var text = new FormattedText(rank.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture,
+                        FlowDirection.LeftToRight, new Typeface("Segoe UI"), 100, Brushes.White, 1);
+                    text.SetFontSize(100 * Math.Min(unit / text.Width, unit / text.Height));
+                    drawing.DrawText(text, new Point(x + width - width * 0.04 - unit, top + width * 0.04));
+                }
+                if (card.Index == highest?.Index)
                 {
                     var unit = width * 0.07;
                     var left = x + width - width * 0.04 - unit;

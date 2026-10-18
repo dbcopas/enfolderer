@@ -26,7 +26,8 @@ public static class PricedScanRenderer
         var size = Math.Max(12, photo.Width / 100f);
         using var canvas = new Image<Rgba32>(photo.Width, photo.Height);
         canvas.Mutate(c => c.DrawImage(photo, new Point(0, 0), 1));
-        var highest = CardValueRanking.HighestNeeded(cards);
+        var highest = CardValueRanking.HighestPriced(cards);
+        var ranks = CardValueRanking.Ranks(cards);
         foreach (var card in cards)
         {
             if (card.Quad is { IsValid: true } quad)
@@ -39,39 +40,47 @@ public static class PricedScanRenderer
                 var padding = panelWidth * 0.04f;
                 var radius = panelWidth * 0.035f;
                 var priceHeight = panelWidth * 0.24f;
-                var panelHeight = panelWidth * (card.Ownership?.OverlayText.Length > 0 ? 0.73f : 0.58f);
+                var panelHeight = panelWidth * 0.90f;
                 var textWidth = panelWidth - padding * 3 - radius * 2;
                 var textHeight = priceHeight - padding * 2;
                 var priceFont = FitOverlayFont(family, panel, textWidth, textHeight);
                 var textBounds = panel.Length == 0 ? default : TextMeasurer.MeasureBounds(panel, new TextOptions(priceFont));
                 var panelY = Math.Clamp(y + (float)box.Height * sy * 0.28f, 0, Math.Max(0, photo.Height - panelHeight));
-                var panelColor = card.Ownership?.Error is not null ? Color.DarkGoldenrod
-                    : card.Ownership?.IsMissing == true ? Color.FromRgb(160, 38, 95) : Color.Black;
+                var panelColor = OverlayBackgroundColor(card);
                 canvas.Mutate(c => c.Fill(panelColor.WithAlpha(0.8f),
                         new RectangleF(x, panelY, panelWidth, panelHeight)));
                 if (panel.Length > 0)
                     canvas.Mutate(c => c.DrawText(panel, priceFont, Color.White, new PointF(
                         x + padding - textBounds.X, panelY + (priceHeight - textBounds.Height) / 2 - textBounds.Y)));
-                var title = card.Name ?? "Unidentified";
-                var titleFont = FitOverlayFont(family, title, textWidth, panelWidth * 0.14f - padding);
-                titleFont = family.CreateFont(Math.Min(titleFont.Size, priceFont.Size * 0.65f));
-                var titleBounds = TextMeasurer.MeasureBounds(title, new TextOptions(titleFont));
-                canvas.Mutate(c => c.DrawText(title, titleFont, Color.White,
-                    new PointF(x + padding - titleBounds.X, panelY + priceHeight - titleBounds.Y)));
+                var title = DescribeOverlayName(card);
+                if (title.Length > 0)
+                {
+                    var titleFont = FitOverlayFont(family, title, textWidth, panelWidth * 0.14f - padding);
+                    var titleBounds = TextMeasurer.MeasureBounds(title, new TextOptions(titleFont));
+                    canvas.Mutate(c => c.DrawText(title, titleFont, Color.White,
+                        new PointF(x + padding - titleBounds.X, panelY + priceHeight - titleBounds.Y)));
+                }
                 var printing = DescribeOverlayPrinting(card);
                 if (printing.Length > 0)
                 {
                     var printingFont = FitOverlayFont(family, printing, textWidth, panelWidth * 0.12f - padding);
-                    printingFont = family.CreateFont(Math.Min(printingFont.Size, priceFont.Size * 0.55f));
                     var printingBounds = TextMeasurer.MeasureBounds(printing, new TextOptions(printingFont));
                     canvas.Mutate(c => c.DrawText(printing, printingFont, Color.White,
                         new PointF(x + padding - printingBounds.X, panelY + panelWidth * 0.39f - printingBounds.Y)));
                 }
-                if (card.Ownership?.OverlayText is { Length: > 0 } ownershipText)
+                var ownershipText = card.Ownership?.OverlayText ?? "Owned: unavailable\nAll sets: unavailable";
+                var ownershipFont = FitOverlayFont(family, ownershipText, textWidth, panelWidth * 0.24f);
+                var ownershipBounds = TextMeasurer.MeasureBounds(ownershipText, new TextOptions(ownershipFont));
+                canvas.Mutate(c => c.DrawText(ownershipText, ownershipFont, Color.White,
+                    new PointF(x + padding - ownershipBounds.X, panelY + panelWidth * 0.58f - ownershipBounds.Y)));
+                if (card != highest && ranks.TryGetValue(card.Index, out var rank))
                 {
-                    var ownershipFont = FitOverlayFont(family, ownershipText, textWidth, panelWidth * 0.12f);
-                    canvas.Mutate(c => c.DrawText(ownershipText, ownershipFont, Color.White,
-                        new PointF(x + padding, panelY + panelWidth * 0.59f)));
+                    var rankText = rank.ToString(CultureInfo.InvariantCulture);
+                    var rankFont = FitOverlayFont(family, rankText, radius * 2, radius * 2);
+                    var rankBounds = TextMeasurer.MeasureBounds(rankText, new TextOptions(rankFont));
+                    canvas.Mutate(c => c.DrawText(rankText, rankFont, Color.White,
+                        new PointF(x + panelWidth - padding - radius * 2 - rankBounds.X,
+                            panelY + padding - rankBounds.Y)));
                 }
                 if (card == highest)
                 {
@@ -113,6 +122,13 @@ public static class PricedScanRenderer
     public static string DescribeOverlayPrinting(IdentifiedCard card) =>
         string.Join(" ", new[] { card.Set?.ToUpperInvariant(), card.CollectorNumber }
             .Where(value => !string.IsNullOrWhiteSpace(value)));
+
+    public static string DescribeOverlayName(IdentifiedCard card) =>
+        string.Equals(card.Language?.Trim(), "en", StringComparison.OrdinalIgnoreCase)
+            ? "" : card.Name ?? "Unidentified";
+
+    public static Color OverlayBackgroundColor(IdentifiedCard card) =>
+        card.Ownership?.IsMissing == true ? Color.FromRgb(160, 25, 25) : Color.Black;
 
     public static Color OverlayConfidenceColor(IdentifiedCard card) =>
         !card.IsIdentified ? Color.Red

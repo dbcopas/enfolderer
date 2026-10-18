@@ -5,6 +5,7 @@ using Enfolderer.Ai.Api;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Infrastructure;
 using Enfolderer.Ai.Infrastructure.Queueing;
+using Enfolderer.Ai.Infrastructure.Allowances;
 using Enfolderer.Ai.Infrastructure.Storage;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Http.Features;
@@ -28,6 +29,8 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 });
 
 builder.Services.AddScanPlatform(builder.Configuration);
+builder.Services.AddSingleton<ScanDispatchService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ScanDispatchService>());
 
 // Entra ID protection. The desktop client signs in interactively and presents a user token; it
 // never holds a client secret or a storage key.
@@ -53,6 +56,12 @@ if (diagnosticUsers.Any(value => !Guid.TryParse(value, out var id) || id == Guid
         || !pilotUsers.Contains(value, StringComparer.OrdinalIgnoreCase)))
     throw new InvalidOperationException("Diagnostics operators must be valid users in the explicit scan pilot allowlist.");
 
+var allowanceAdmins = (builder.Configuration["ScanAllowances:AdminUserObjectIds"] ?? "")
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+if (allowanceAdmins.Any(value => !Guid.TryParse(value, out var id) || id == Guid.Empty
+        || !pilotUsers.Contains(value, StringComparer.OrdinalIgnoreCase)))
+    throw new InvalidOperationException("Allowance administrators must be valid users in the explicit scan pilot allowlist.");
+
 var app = builder.Build();
 
 app.UseExceptionHandler();
@@ -65,7 +74,8 @@ app.Use(async (context, next) =>
         "img-src 'self' blob:; connect-src 'self' https://login.microsoftonline.com; " +
         "frame-src 'self' https://login.microsoftonline.com https://login.live.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self'";
     if (context.Request.Path.StartsWithSegments("/jobs") || context.Request.Path.StartsWithSegments("/collection")
-        || context.Request.Path.StartsWithSegments("/diagnostics"))
+        || context.Request.Path.StartsWithSegments("/diagnostics")
+        || context.Request.Path.StartsWithSegments("/allowance") || context.Request.Path.StartsWithSegments("/admin"))
         context.Response.Headers.CacheControl = "no-store";
     await next(context);
 });
@@ -75,6 +85,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapMobileWeb();
 app.MapScanDiagnostics();
+app.MapScanAllowances();
 
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
@@ -295,21 +306,27 @@ jobs.MapPut("/{jobId}/content", async (
 jobs.MapPost("/{jobId}/submit", async (
     string jobId,
     IJobStore store,
-    IJobQueue queue,
+    IScanAllowanceStore allowances,
+    ScanDispatchService dispatcher,
     IScanImageStore images,
+    HttpContext http,
     CancellationToken ct) =>
 {
     var job = await store.GetAsync(jobId, ct);
     if (job is null) return Results.NotFound();
 
-    if (job.Status is not ScanJobStatus.Pending)
-        return Results.Conflict(new { error = $"Job is already {job.Status}." });
+    if (job.Status != ScanJobStatus.Pending)
+        return Results.Accepted($"/jobs/{jobId}", JobMapping.ToStatusResponse(job));
 
     if (!await images.ExistsAsync(job.BlobPath, ct))
         return Results.BadRequest(new { error = "Image has not been uploaded yet." });
 
-    var submitted = await store.UpsertAsync(job with { Status = ScanJobStatus.Uploaded }, ct);
-    await queue.EnqueueAsync(new ScanJobMessage(submitted.JobId, submitted.BlobPath, submitted.GameHint), ct);
+    var reserved = await allowances.ReserveAsync(ScanAllowanceEndpoints.OwnerKey(http),
+        new ScanJobMessage(job.JobId, job.BlobPath, job.GameHint), ct);
+    if (!reserved.Allowed) return ScanAllowanceEndpoints.Exhausted();
+    await dispatcher.DispatchAsync(reserved.Receipt!, ct);
+    var submitted = await store.GetAsync(jobId, ct)
+        ?? throw new InvalidOperationException("Reserved job disappeared after dispatch.");
 
     return Results.Accepted($"/jobs/{jobId}", JobMapping.ToStatusResponse(submitted));
 });

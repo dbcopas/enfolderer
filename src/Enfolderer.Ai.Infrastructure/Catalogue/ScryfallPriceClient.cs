@@ -22,7 +22,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
             var value => value
         };
         var local = await ReadAsync(set, number, language, ct);
-        (decimal? Nonfoil, decimal? Foil, string? Layout, string? Name, IReadOnlyList<int> GathererIds) english = (null, null, null, null, []);
+        (decimal? Nonfoil, decimal? Foil, string? Layout, string? Name, IReadOnlyList<int> GathererIds, Guid? OracleId) english = (null, null, null, null, [], null);
         string? error = null;
         if (language != "en" && (local.Nonfoil is null || local.Foil is null))
         {
@@ -36,6 +36,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
         return new CardPrices
         {
             Layout = local.Layout ?? english.Layout,
+            OracleId = local.OracleId ?? english.OracleId,
             CardName = local.Name ?? english.Name,
             GathererIds = local.GathererIds.Concat(english.GathererIds).Distinct().ToArray(),
             Nonfoil = local.Nonfoil ?? english.Nonfoil,
@@ -47,7 +48,60 @@ public sealed class ScryfallPriceClient(HttpClient http)
         };
     }
 
-    private async Task<(decimal? Nonfoil, decimal? Foil, string? Layout, string? Name, IReadOnlyList<int> GathererIds)> ReadAsync(
+    public async Task<IReadOnlyList<CardPrintingReference>> GetRelatedPrintingsAsync(Guid oracleId, CancellationToken ct)
+    {
+        if (oracleId == Guid.Empty) throw new ArgumentException("A canonical card ID is required.", nameof(oracleId));
+        var url = $"https://api.scryfall.com/cards/search?unique=prints&q={Uri.EscapeDataString($"oracleid:{oracleId:D} game:paper")}";
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<CardPrintingReference>();
+        while (true)
+        {
+            if (!visited.Add(url) || visited.Count > 20)
+                throw new InvalidDataException("Ownership printing search exceeded its page limit or repeated a page.");
+            await _gate.WaitAsync(ct);
+            try
+            {
+                var wait = _nextRequest - DateTimeOffset.UtcNow;
+                if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
+                _nextRequest = DateTimeOffset.UtcNow.AddMilliseconds(120);
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.UserAgent.ParseAdd("Enfolderer-ScanPricing/1.0");
+                request.Headers.Accept.ParseAdd("application/json");
+                using var response = await http.SendAsync(request, ct);
+                response.EnsureSuccessStatusCode();
+                using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object
+                    || !root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array
+                    || !root.TryGetProperty("has_more", out var more)
+                    || more.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new InvalidDataException("Ownership printing search returned an invalid list.");
+                foreach (var item in data.EnumerateArray())
+                {
+                    var id = ReadOptionalText(item, "oracle_id");
+                    if (!Guid.TryParse(id, out var foundId) || foundId != oracleId)
+                        throw new InvalidDataException("Ownership printing search returned a different canonical card.");
+                    if (item.TryGetProperty("digital", out var digital) && digital.ValueKind == JsonValueKind.True) continue;
+                    var set = ReadOptionalText(item, "set");
+                    var number = ReadOptionalText(item, "collector_number");
+                    if (string.IsNullOrWhiteSpace(set) || string.IsNullOrWhiteSpace(number))
+                        throw new InvalidDataException("Ownership printing search returned no printing key.");
+                    result.Add(new(set, number, ReadGathererIds(item)));
+                }
+                if (!more.GetBoolean()) return result;
+                if (!root.TryGetProperty("next_page", out var next) || next.ValueKind != JsonValueKind.String
+                    || !Uri.TryCreate(next.GetString(), UriKind.Absolute, out var page)
+                    || page.Scheme != Uri.UriSchemeHttps || page.Host != "api.scryfall.com"
+                    || page.AbsolutePath != "/cards/search" || !page.IsDefaultPort
+                    || !string.IsNullOrEmpty(page.UserInfo))
+                    throw new InvalidDataException("Ownership printing search returned an invalid next page.");
+                url = page.AbsoluteUri;
+            }
+            finally { _gate.Release(); }
+        }
+    }
+
+    private async Task<(decimal? Nonfoil, decimal? Foil, string? Layout, string? Name, IReadOnlyList<int> GathererIds, Guid? OracleId)> ReadAsync(
         string set, string number, string language, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
@@ -63,7 +117,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
             request.Headers.UserAgent.ParseAdd("Enfolderer-ScanPricing/1.0");
             request.Headers.Accept.ParseAdd("application/json");
             using var response = await http.SendAsync(request, ct);
-            if (response.StatusCode == HttpStatusCode.NotFound) return (null, null, null, null, []);
+            if (response.StatusCode == HttpStatusCode.NotFound) return (null, null, null, null, [], null);
             response.EnsureSuccessStatusCode();
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
             var root = doc.RootElement;
@@ -77,8 +131,13 @@ public sealed class ScryfallPriceClient(HttpClient http)
                 throw new InvalidDataException("Scryfall price response does not match the requested printing/language.");
             if (!root.TryGetProperty("prices", out var prices) || prices.ValueKind != JsonValueKind.Object)
                 throw new InvalidDataException("Scryfall price response has no prices object.");
+            var oracle = ReadOptionalText(root, "oracle_id");
+            Guid? oracleId = null;
+            if (oracle is not null)
+                oracleId = Guid.TryParse(oracle, out var parsed) && parsed != Guid.Empty ? parsed
+                    : throw new InvalidDataException("Scryfall returned an invalid canonical card ID.");
             return (ReadPrice(prices, "eur"), ReadPrice(prices, "eur_foil"),
-                ReadOptionalText(root, "layout"), ReadOptionalText(root, "name"), ReadGathererIds(root));
+                ReadOptionalText(root, "layout"), ReadOptionalText(root, "name"), ReadGathererIds(root), oracleId);
         }
         finally { _gate.Release(); }
     }

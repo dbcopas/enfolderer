@@ -4,6 +4,7 @@ using Azure.Storage.Blobs;
 using Azure.Storage.Queues;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Infrastructure.Queueing;
+using Enfolderer.Ai.Infrastructure.Allowances;
 using Enfolderer.Ai.Infrastructure.Storage;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Configuration;
@@ -61,6 +62,21 @@ public static class ScanPlatformServiceCollectionExtensions
             return new InMemoryCollectionSnapshotStore();
         });
 
+        services.AddSingleton<IScanAllowanceStore>(sp =>
+        {
+            if (!options.UsesCosmos)
+            {
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(ScanPlatformServiceCollectionExtensions))
+                    .LogWarning("No CosmosEndpoint configured; scan allowances are in-memory and will not survive restart.");
+                return new InMemoryScanAllowanceStore();
+            }
+            return new CosmosScanAllowanceStore(sp.GetRequiredService<CosmosClient>()
+                .GetContainer(options.CosmosDatabase, options.AllowancesContainer));
+        });
+        services.AddSingleton(sp => new CosmosClient(
+            options.CosmosEndpoint,
+            sp.GetRequiredService<TokenCredential>(),
+            new CosmosClientOptions { Serializer = new SystemTextJsonCosmosSerializer() }));
         services.AddSingleton<IJobStore>(sp =>
         {
             var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(ScanPlatformServiceCollectionExtensions));
@@ -70,10 +86,7 @@ public static class ScanPlatformServiceCollectionExtensions
                 return new InMemoryJobStore();
             }
 
-            var cosmos = new CosmosClient(
-                options.CosmosEndpoint,
-                sp.GetRequiredService<TokenCredential>(),
-                new CosmosClientOptions { Serializer = new SystemTextJsonCosmosSerializer() });
+            var cosmos = sp.GetRequiredService<CosmosClient>();
             var container = cosmos.GetContainer(options.CosmosDatabase, options.CosmosContainer);
             return new CosmosJobStore(container);
         });
@@ -89,6 +102,10 @@ public static class ScanPlatformServiceCollectionExtensions
             var queueService = new QueueServiceClient(new Uri(options.QueueAccountUrl!), sp.GetRequiredService<TokenCredential>());
             return new StorageQueueJobQueue(queueService.GetQueueClient(options.QueueName));
         });
+
+        services.AddSingleton<IJobExecutionGate>(sp => options.UsesAzureStorage
+            ? new BlobJobExecutionGate(CreateBlobServiceClient(sp, options), sp.GetRequiredService<ILogger<BlobJobExecutionGate>>())
+            : new LocalJobExecutionGate());
 
         return services;
     }

@@ -114,20 +114,27 @@ public static class ScanOwnershipTests
                 "adventure names come from the local printing without matching external punctuation or merging different spells");
             var missing = card with { Name = "Missing Card", CollectorNumber = "5",
                 Prices = new CardPrices { Layout = "normal", CardName = "Missing Card" } };
-            Check(index.Resolve(missing).IsMissing && index.Resolve(missing).OverlayText == "",
-                "zero in collection wins over stale main quantity; missing card has no quantity text");
+            Check(index.Resolve(missing).IsMissing && index.Resolve(missing).OverlayText == "Owned: 0\nAll sets: 0",
+                "zero in collection wins over stale main quantity and is always displayed");
             var dfc = card with { Name = "Double Front", CollectorNumber = "3",
                 Prices = new CardPrices { Layout = "modal_dfc", CardName = "Double Front // Double Back" } };
-            Check(index.Resolve(dfc).IsMissing && index.Resolve(dfc).OverlayText == ""
+            Check(index.Resolve(dfc).IsMissing && index.Resolve(dfc).OverlayText == "Owned: 1\nAll sets: 3"
                 && !index.Resolve(dfc with { CollectorNumber = "4" }).IsMissing,
-                "physical double-faced cards require two exact-printing copies and suppress quantity when short");
+                "physical double-faced cards require two exact-printing copies and display quantities when short");
             Check(ScanOwnershipIndex.RequiredQuantity("transform") == 2
                 && ScanOwnershipIndex.RequiredQuantity("battle") == 2
                 && ScanOwnershipIndex.RequiredQuantity("split") == 1
                 && ScanOwnershipIndex.RequiredQuantity("adventure") == 1,
                 "two-sided cards differ from two spells on one front");
-            foreach (var invalid in new[] { card with { CollectorNumber = "999" }, card with { CollectorNumber = "0" },
-                card with { Prices = null } })
+            foreach (var number in new[] { "999", "0" })
+                Check(index.Resolve(card with { CollectorNumber = number }) is { PrintingQuantity: 0, NameQuantity: 0, IsMissing: true },
+                    "absent local printings assume zero without altering the source databases");
+            var newPrinting = card with { Set = "new", CollectorNumber = "1",
+                Prices = new CardPrices { Layout = "normal",
+                    RelatedPrintings = [new("aaa", "1", [])] } };
+            Check(index.Resolve(newPrinting) is { PrintingQuantity: 0, NameQuantity: 121, IsMissing: true },
+                "desktop resolves canonical sibling totals without transferring their exact-printing quantities");
+            foreach (var invalid in new[] { card with { Prices = null } })
             {
                 try { index.Resolve(invalid); Check(false, "unavailable ownership must be explicit"); }
                 catch (InvalidOperationException) { }
@@ -162,9 +169,9 @@ public static class ScanOwnershipTests
             Check(ScanOwnershipRenderer.Render(path, result, index).Count == 0
                 && ReadPixel(40, 100).SequenceEqual(before)
                 && ReadPixel(60, 360)[2] > panelBefore[2]
-                && ReadPixel(60, 600).SequenceEqual(before)
+                && !ReadPixel(60, 600).SequenceEqual(before)
                 && ReadPixel(40, 1200).SequenceEqual(legend),
-                "missing card gets a taller pink price-overlay tint, no quantity or frame, and unchanged pixels outside the photo");
+                "missing card gets a red price-overlay tint and quantity panel, no frame, and unchanged pixels outside the photo");
             SaveBlank();
             Check(ScanOwnershipRenderer.Render(path, result with { Cards = [card] }, index).Count == 0
                 && ReadPixel(40, 100).SequenceEqual(before)
@@ -190,23 +197,21 @@ public static class ScanOwnershipTests
                     "diacritic and adventure-name differences keep owned overlays untinted with quantity text");
             }
             foreach (var unresolved in new[] { card with { Prices = null },
-                card with { CollectorNumber = "999" }, card with { CollectorNumber = null },
+                card with { CollectorNumber = null },
                 card with { Prices = new CardPrices { Layout = "future_layout" } } })
             {
                 SaveBlank();
                 Check(ScanOwnershipRenderer.Render(path, result with { Cards = [unresolved] }, index).Count == 1
                     && ReadPixel(40, 100).SequenceEqual(before)
-                    && ReadPixel(60, 360)[2] > panelBefore[2]
-                    && ReadPixel(60, 360)[1] > panelBefore[1]
+                    && ReadPixel(60, 360).SequenceEqual(panelBefore)
                     && !ReadPixel(60, 560).SequenceEqual(before)
                     && ReadPixel(40, 1200).SequenceEqual(legend),
-                    "unresolved ownership gets an amber overlay, unknown quantity panel, no frame and explicit warning");
+                    "unresolved ownership gets an unavailable quantity panel, no amber tint or frame and an explicit warning");
             }
             SaveBlank();
             ScanOwnershipRenderer.Render(path, result with { Cards = [card] }, null);
             Check(ReadPixel(40, 100).SequenceEqual(before)
-                && ReadPixel(60, 360)[2] > panelBefore[2]
-                && ReadPixel(60, 360)[1] > panelBefore[1]
+                && ReadPixel(60, 360).SequenceEqual(panelBefore)
                 && !ReadPixel(60, 560).SequenceEqual(before),
                 "unavailable local inventory also marks ownership unknown");
 

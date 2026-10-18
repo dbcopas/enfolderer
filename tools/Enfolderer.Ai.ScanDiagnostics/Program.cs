@@ -6,7 +6,8 @@ using Azure.Core;
 using Azure.Identity;
 using Enfolderer.Ai.Contracts;
 
-if (args.Length != 7)
+var allowanceMode = args.Length == 8 && args[2] == "allowance";
+if (args.Length != 7 && !allowanceMode)
 {
     Console.Error.WriteLine("Usage: ScanDiagnostics <config-file> <output-directory> <latest|job-id> <hours> <record-file> <import-record|none> <silent|sign-in>");
     return 2;
@@ -19,7 +20,7 @@ try
     if (api.Scheme != Uri.UriSchemeHttps) throw new InvalidOperationException("Diagnostics requires an HTTPS API URL.");
     if (!int.TryParse(args[3], out var hours) || hours is < 1 or > 168)
         throw new ArgumentException("Hours must be 1-168.");
-    if (args[2] != "latest" && (!Guid.TryParse(args[2], out var jobGuid) || jobGuid == Guid.Empty))
+    if (!allowanceMode && args[2] != "latest" && (!Guid.TryParse(args[2], out var jobGuid) || jobGuid == Guid.Empty))
         throw new ArgumentException("Job ID must be a GUID, or 'latest'.");
 
     var recordPath = Path.GetFullPath(args[4]);
@@ -57,6 +58,23 @@ try
     };
     client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
     var json = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+    if (allowanceMode)
+    {
+        using var command = JsonDocument.Parse(await File.ReadAllTextAsync(args[7]));
+        var objectId = command.RootElement.GetProperty("objectId").GetGuid();
+        if (objectId == Guid.Empty) throw new ArgumentException("A nonempty target object ID is required.");
+        var route = $"admin/allowances/{objectId:D}";
+        using var operation = command.RootElement.TryGetProperty("operationId", out _)
+            ? await client.PostAsJsonAsync(route, command.RootElement)
+            : await client.GetAsync(route);
+        if (!operation.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Allowance request failed ({(int)operation.StatusCode}): {await operation.Content.ReadAsStringAsync()}");
+        var content = await operation.Content.ReadFromJsonAsync<JsonElement>();
+        Directory.CreateDirectory(args[1]);
+        await File.WriteAllTextAsync(Path.Combine(args[1], "allowance.json"), JsonSerializer.Serialize(content, json));
+        Console.WriteLine(JsonSerializer.Serialize(content, json));
+        return 0;
+    }
     var jobId = args[2];
     if (jobId == "latest")
     {

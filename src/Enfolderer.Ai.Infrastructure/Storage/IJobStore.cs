@@ -8,6 +8,7 @@ namespace Enfolderer.Ai.Infrastructure.Storage;
 /// </summary>
 public interface IJobStore
 {
+    Task MarkUploadedAsync(string jobId, CancellationToken ct = default);
     Task<ScanJobDocument> CreateAsync(ScanJobDocument job, CancellationToken ct = default);
 
     Task<ScanJobDocument?> GetAsync(string jobId, CancellationToken ct = default);

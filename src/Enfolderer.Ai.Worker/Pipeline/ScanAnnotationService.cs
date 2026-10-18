@@ -17,6 +17,7 @@ public sealed class ScanAnnotationService(
         var enriched = new List<IdentifiedCard>();
         var cache = new Dictionary<(string Set, string Number, string Language), CardPrices>();
         var ownershipIndex = snapshot?.BuildIndex();
+        var relatedCache = new Dictionary<Guid, IReadOnlyList<CardPrintingReference>>();
         foreach (var card in result.Cards)
         {
             var updated = card;
@@ -48,6 +49,24 @@ public sealed class ScanAnnotationService(
             {
                 try
                 {
+                    if (ownershipIndex is not null && updated.Prices?.OracleId is { } oracleId
+                        && CollectionSnapshot.Resolve(updated, ownershipIndex).AllQuantity == 0)
+                    {
+                        try
+                        {
+                            if (!relatedCache.TryGetValue(oracleId, out var related))
+                            {
+                                related = await prices.GetRelatedPrintingsAsync(oracleId, ct);
+                                relatedCache.Add(oracleId, related);
+                            }
+                            updated = updated with { Prices = updated.Prices with { RelatedPrintings = related } };
+                        }
+                        catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidDataException
+                            || ex is OperationCanceledException && !ct.IsCancellationRequested)
+                        {
+                            throw new InvalidOperationException("All-sets ownership lookup failed; see scan logs.", ex);
+                        }
+                    }
                     updated = updated with { Ownership = ownershipIndex is null
                         ? new CardOwnership(0, 0, 1, ownershipError)
                         : CollectionSnapshot.Resolve(updated, ownershipIndex) };

@@ -31,6 +31,7 @@ public sealed class ScanJobProcessor
     private readonly ScanAnnotationService? _annotation;
     private readonly ICollectionSnapshotStore? _collections;
     private readonly ILogger<ScanJobProcessor> _log;
+    private readonly IJobExecutionGate _executionGate;
 
     public ScanJobProcessor(
         IJobStore jobs,
@@ -43,7 +44,8 @@ public sealed class ScanJobProcessor
         ILogger<ScanJobProcessor> log,
         CardArtVerifier? artVerifier = null,
         ScanAnnotationService? annotation = null,
-        ICollectionSnapshotStore? collections = null)
+        ICollectionSnapshotStore? collections = null,
+        IJobExecutionGate? executionGate = null)
     {
         _jobs = jobs;
         _images = images;
@@ -58,14 +60,23 @@ public sealed class ScanJobProcessor
         _annotation = annotation;
         _collections = collections;
         _log = log;
+        _executionGate = executionGate ?? new LocalJobExecutionGate();
     }
 
     public async Task ProcessAsync(ScanJobMessage message, CancellationToken ct)
+        => await _executionGate.RunAsync(message.JobId, token => ProcessOnceAsync(message, token), ct);
+
+    private async Task ProcessOnceAsync(ScanJobMessage message, CancellationToken ct)
     {
         var job = await _jobs.GetAsync(message.JobId, ct);
         if (job is null)
         {
             _log.LogWarning("Job {JobId} is no longer in the store; dropping the message.", message.JobId);
+            return;
+        }
+        if (job.Status is ScanJobStatus.Completed or ScanJobStatus.Failed)
+        {
+            _log.LogInformation("Job {JobId} is terminal; ignoring duplicate delivery.", job.JobId);
             return;
         }
 

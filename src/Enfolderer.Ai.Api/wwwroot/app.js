@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 let auth, account, config, photo, activeJob, polling = false, busy = false;
 let previewUrl, imageUrl, csvUrl, collectionAvailable = false;
+let scansAvailable = false;
 const scopes = () => [config.scope];
 const report = error => {
   console.error(error);
@@ -39,8 +40,13 @@ async function api(path, options = {}) {
     try {
       const body = await response.json();
       detail = body.error || body.detail || body.title || detail;
+      if (body.code === "scan_allowance_exhausted") {
+        scansAvailable = false;
+        $("allowance").textContent = detail;
+        setBusy(busy);
+      }
     } catch (error) { console.warn("The API error response was not JSON.", error); }
-    if (response.status === 403) detail = "This account is not approved for the private pilot. Ask the administrator to invite and approve your account.";
+    if (response.status === 403 && !detail.includes("scan allowance")) detail = "This account is not approved for the private pilot. Ask the administrator to invite and approve your account.";
     if (response.status === 413) detail = "This file is too large. Use a smaller photo or export a smaller collection snapshot.";
     throw new Error(detail);
   }
@@ -49,11 +55,22 @@ async function api(path, options = {}) {
 
 function setBusy(value) {
   busy = value;
-  $("scan").disabled = value || !photo;
+  $("scan").disabled = value || !photo || !scansAvailable;
   for (const id of ["camera", "photo", "game", "snapshot", "deleteCollection"]) $(id).disabled = value;
   $("useCollection").disabled = value || !collectionAvailable || $("game").value !== "mtg";
   $("previewWrap").classList.toggle("scanning", value);
   $("scanSweep").hidden = !value;
+}
+
+async function loadAllowance() {
+  scansAvailable = false;
+  setBusy(busy);
+  const allowance = await (await api("/allowance/")).json();
+  scansAvailable = allowance.unlimited || allowance.remaining > 0;
+  $("allowance").textContent = allowance.unlimited ? "Unlimited scans"
+    : `${allowance.remaining} scans remaining. One submitted photo uses one scan, including failed scans.`
+      + (scansAvailable ? "" : " Ask the administrator for more scans. Your previous downloads remain available.");
+  setBusy(busy);
 }
 
 async function loadCollection() {
@@ -144,8 +161,7 @@ async function showResults(result) {
       const owned = document.createElement("p");
       const o = card.ownership;
       owned.textContent = o.error ? `Ownership unknown: ${o.error}`
-        : o.quantity < o.requiredQuantity ? `Missing this printing (${o.quantity} owned; ${o.requiredQuantity} needed)`
-        : `Owned: ${o.quantity} | All printings: ${o.allQuantity}`;
+        : `Owned: ${o.quantity} | All sets: ${o.allQuantity}`;
       owned.className = o.error ? "warning" : o.quantity < o.requiredQuantity ? "missing" : "";
       row.append(owned);
     }
@@ -211,6 +227,8 @@ async function pollJob() {
 
 async function startScan() {
   if (!photo || busy) return;
+  await loadAllowance();
+  if (!scansAvailable) return;
   $("results").hidden = true;
   $("retry").hidden = true;
   $("progressPanel").hidden = false;
@@ -229,6 +247,7 @@ async function startScan() {
     await api(`/jobs/${job.jobId}/submit`, { method: "POST" });
     activeJob = { id: job.jobId, started: Date.now() };
     sessionStorage.setItem(jobKey(), JSON.stringify(activeJob));
+    try { await loadAllowance(); } catch (error) { report(error); }
   } catch (error) {
     setBusy(false);
     $("spinner").hidden = true;
@@ -257,6 +276,7 @@ async function initialize() {
   $("workspace").hidden = false;
   $("signOut").hidden = false;
   $("account").textContent = `Signed in as ${account.username}`;
+  try { await loadAllowance(); } catch (error) { report(error); }
   await loadCollection();
   const saved = sessionStorage.getItem(jobKey());
   if (saved) {

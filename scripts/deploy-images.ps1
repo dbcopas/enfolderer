@@ -52,6 +52,9 @@
     Comma-separated approved pilot operators allowed read-only diagnostics across pilot users.
     Omit to preserve the deployed value; pass an empty string to disable diagnostics.
 
+.PARAMETER ScanAllowanceAdminUserObjectIds
+    Explicit pilot administrators allowed to grant or adjust scan credits. Omit to preserve.
+
 .PARAMETER UseParametersFile
     Deploy from infra/main.parameters.json instead of the previous deployment's parameters. Only
     correct if that file holds your real values.
@@ -134,6 +137,7 @@ param(
     [string] $MobileWebClientId,
     [string] $ScanAllowedUserObjectIds,
     [string] $ScanDiagnosticUserObjectIds,
+    [string] $ScanAllowanceAdminUserObjectIds,
     [bool] $GrantGeometryAccess
 )
 
@@ -390,6 +394,14 @@ List what the registry holds with:
     }
 
     $overrides = [ordered] @{}
+    # The hostname/certificate can have been configured in the portal after the last deployment.
+    $apiIngress = az containerapp show -g "$prefix-platform" -n "$prefix-api" --query properties.configuration.ingress -o json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $apiIngress) { throw 'Could not read API ingress; refusing to risk removing custom domain bindings.' }
+    $domains = @()
+    if ($apiIngress.PSObject.Properties['customDomains'] -and $apiIngress.customDomains) {
+        $domains = @($apiIngress.customDomains)
+    }
+    $overrides['apiCustomDomains'] = $domains
     foreach ($mapping in @{
         BoundaryAgentId = 'boundaryAgentId'; MtgAgentId = 'mtgAgentId'; PokemonAgentId = 'pokemonAgentId'
         BoundaryAgentPrincipalId = 'boundaryAgentPrincipalId'; MtgAgentPrincipalId = 'mtgAgentPrincipalId'
@@ -402,6 +414,9 @@ List what the registry holds with:
     if ($PSBoundParameters.ContainsKey('ScanDiagnosticUserObjectIds')) {
         $overrides['scanDiagnosticUserObjectIds'] = $ScanDiagnosticUserObjectIds
     }
+    if ($PSBoundParameters.ContainsKey('ScanAllowanceAdminUserObjectIds')) {
+        $overrides['scanAllowanceAdminUserObjectIds'] = $ScanAllowanceAdminUserObjectIds
+    }
     $effective = if ($UseParametersFile) { $onFile } else { $parameters }
     $webId = if ($MobileWebClientId) { $MobileWebClientId }
         elseif ($effective.PSObject.Properties['mobileWebClientId']) { $effective.mobileWebClientId.value } else { '' }
@@ -409,6 +424,15 @@ List what the registry holds with:
         elseif ($effective.PSObject.Properties['scanAllowedUserObjectIds']) { $effective.scanAllowedUserObjectIds.value } else { '' }
     $operators = if ($overrides.Contains('scanDiagnosticUserObjectIds')) { $overrides['scanDiagnosticUserObjectIds'] }
         elseif ($effective.PSObject.Properties['scanDiagnosticUserObjectIds']) { $effective.scanDiagnosticUserObjectIds.value } else { '' }
+    $admins = if ($overrides.Contains('scanAllowanceAdminUserObjectIds')) { $overrides['scanAllowanceAdminUserObjectIds'] }
+        elseif ($effective.PSObject.Properties['scanAllowanceAdminUserObjectIds']) { $effective.scanAllowanceAdminUserObjectIds.value } else { '' }
+    foreach ($admin in $admins.Split(',', [StringSplitOptions]::RemoveEmptyEntries)) {
+        $parsedAdmin = [guid]::Empty
+        if (-not [guid]::TryParse($admin.Trim(), [ref]$parsedAdmin) -or $parsedAdmin -eq [guid]::Empty `
+            -or $admin.Trim() -notin @($pilot.Split(',') | ForEach-Object { $_.Trim() })) {
+            throw "Allowance administrator must be a valid approved pilot user: $admin"
+        }
+    }
     foreach ($operator in $operators.Split(',', [StringSplitOptions]::RemoveEmptyEntries)) {
         $parsedOperator = [guid]::Empty
         if (-not [guid]::TryParse($operator.Trim(), [ref]$parsedOperator) -or $parsedOperator -eq [guid]::Empty `

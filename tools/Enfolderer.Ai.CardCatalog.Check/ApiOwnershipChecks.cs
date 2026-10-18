@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using Enfolderer.Ai.Api;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Infrastructure.Queueing;
+using Enfolderer.Ai.Infrastructure.Allowances;
 using Enfolderer.Ai.Infrastructure.Storage;
 using Enfolderer.Ai.Mcp.CardCatalog.Mtg;
 using Microsoft.AspNetCore.Authentication;
@@ -33,6 +34,9 @@ internal static class ApiOwnershipChecks
         var store = new InMemoryJobStore();
         var images = new Images();
         var queue = new Queue();
+        var allowances = new InMemoryScanAllowanceStore();
+        await allowances.AdjustAsync(ScanAllowanceOwner.Key(Tenant, UserA), Guid.NewGuid(), 10, false,
+            UserA, "Test grant");
         await using var factory = new WebApplicationFactory<JobOwnerFilter>().WithWebHostBuilder(builder =>
         {
             builder.UseContentRoot(Directory.GetCurrentDirectory());
@@ -47,6 +51,8 @@ internal static class ApiOwnershipChecks
                 services.AddSingleton<IJobStore>(store);
                 services.AddSingleton<IScanImageStore>(images);
                 services.AddSingleton<IJobQueue>(queue);
+                services.RemoveAll<IScanAllowanceStore>();
+                services.AddSingleton<IScanAllowanceStore>(allowances);
                 services.AddAuthentication(options =>
                 {
                     options.DefaultAuthenticateScheme = "OwnershipTest";
@@ -322,6 +328,140 @@ internal static class ApiOwnershipChecks
                 check(true, "actual API host refuses startup with missing authentication configuration");
             }
         }
+        await CheckAllowancesAsync(check);
+    }
+
+    private static async Task CheckAllowancesAsync(Action<bool, string> check)
+    {
+        Console.WriteLine("\nScan allowances: real routes, concurrency, exhaustion and dispatch recovery");
+        var store = new InMemoryJobStore();
+        var allowances = new InMemoryScanAllowanceStore();
+        var queue = new Queue();
+        var images = new Images();
+        await using var factory = new WebApplicationFactory<JobOwnerFilter>().WithWebHostBuilder(builder =>
+        {
+            builder.UseContentRoot(Directory.GetCurrentDirectory());
+            builder.UseSetting("AzureAd:Instance", "https://login.microsoftonline.com/");
+            builder.UseSetting("AzureAd:TenantId", Tenant);
+            builder.UseSetting("AzureAd:ClientId", UserA);
+            builder.UseSetting("MobileWeb:AllowedUserObjectIds", $"{UserA},{UserB}");
+            builder.UseSetting("ScanAllowances:AdminUserObjectIds", UserA);
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IJobStore>();
+                services.RemoveAll<IScanImageStore>();
+                services.RemoveAll<IJobQueue>();
+                services.RemoveAll<IScanAllowanceStore>();
+                services.AddSingleton<IJobStore>(store);
+                services.AddSingleton<IScanImageStore>(images);
+                services.AddSingleton<IJobQueue>(queue);
+                services.AddSingleton<IScanAllowanceStore>(allowances);
+                services.AddAuthentication(options =>
+                {
+                    options.DefaultAuthenticateScheme = "QuotaTest";
+                    options.DefaultChallengeScheme = "QuotaTest";
+                }).AddScheme<AuthenticationSchemeOptions, TestIdentity>("QuotaTest", _ => { });
+            });
+        });
+        using var admin = factory.CreateClient();
+        admin.DefaultRequestHeaders.Add("X-Test-User", UserA);
+        using var guest = factory.CreateClient();
+        guest.DefaultRequestHeaders.Add("X-Test-User", UserB);
+        async Task<string> JobAsync()
+        {
+            using var response = await guest.PostAsJsonAsync("/jobs/", new CreateJobRequest { FileName = "test.jpg" });
+            response.EnsureSuccessStatusCode();
+            return (await response.Content.ReadFromJsonAsync<CreateJobResponse>())!.JobId;
+        }
+        var ungrantedJob = await JobAsync();
+        using var denied = await guest.PostAsync($"/jobs/{ungrantedJob}/submit", null);
+        check(denied.StatusCode == HttpStatusCode.Forbidden && queue.Messages == 0,
+            "approved users have no implicit scan grant, even when using direct API requests");
+        using var forbiddenAdmin = await guest.PostAsJsonAsync($"/admin/allowances/{UserB}", new
+        {
+            operationId = Guid.NewGuid(), delta = 100, unlimited = true, reason = "Self grant"
+        });
+        check(forbiddenAdmin.StatusCode == HttpStatusCode.Forbidden,
+            "guest cannot grant credits or unlimited access to themselves");
+        var grant = new { operationId = Guid.NewGuid(), delta = 10, unlimited = false, reason = "Initial guest grant" };
+        using var granted = await admin.PostAsJsonAsync($"/admin/allowances/{UserB}", grant);
+        granted.EnsureSuccessStatusCode();
+        using var repeatedGrant = await admin.PostAsJsonAsync($"/admin/allowances/{UserB}", grant);
+        repeatedGrant.EnsureSuccessStatusCode();
+        var key = ScanAllowanceOwner.Key(Tenant, UserB);
+        check((await allowances.GetAsync(key)).CreditsRemaining == 10,
+            "an admin adjustment retried with the same operation ID grants only once");
+        var missingUpload = await JobAsync();
+        images.Exists = false;
+        using var missingUploadResponse = await guest.PostAsync($"/jobs/{missingUpload}/submit", null);
+        check(missingUploadResponse.StatusCode == HttpStatusCode.BadRequest
+            && (await allowances.GetAsync(key)).CreditsRemaining == 10,
+            "submission without an uploaded photo consumes no credits");
+        images.Exists = true;
+        using var changedGrant = await admin.PostAsJsonAsync($"/admin/allowances/{UserB}", new
+        {
+            grant.operationId, delta = 20, unlimited = false, reason = grant.reason
+        });
+        check(changedGrant.StatusCode == HttpStatusCode.Conflict,
+            "reusing an adjustment ID with changed parameters is rejected");
+        var jobs = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => JobAsync()));
+        var responses = await Task.WhenAll(jobs.Select(id => guest.PostAsync($"/jobs/{id}/submit", null)));
+        try
+        {
+            check(responses.Count(r => r.StatusCode == HttpStatusCode.Accepted) == 10
+                && responses.Count(r => r.StatusCode == HttpStatusCode.Forbidden) == 2
+                && queue.Messages == 10 && (await allowances.GetAsync(key)).CreditsRemaining == 0,
+                "twelve simultaneous submissions spend exactly ten credits and dispatch exactly ten jobs");
+            var acceptedId = jobs[Array.FindIndex(responses, r => r.StatusCode == HttpStatusCode.Accepted)];
+            using var retried = await guest.PostAsync($"/jobs/{acceptedId}/submit", null);
+            using var oldResult = await guest.GetAsync($"/jobs/{acceptedId}");
+            check(retried.StatusCode == HttpStatusCode.Accepted && queue.Messages == 10
+                && oldResult.StatusCode == HttpStatusCode.OK,
+                "exhausted users can retry the same job and read existing results without another charge");
+        }
+        finally { foreach (var response in responses) response.Dispose(); }
+        using var ownBalance = await guest.GetAsync("/allowance/");
+        var balance = await ownBalance.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        check(balance.GetProperty("remaining").GetInt64() == 0 && !balance.GetProperty("unlimited").GetBoolean(),
+            "remaining balance is available to the signed-in user");
+        using var topup = await admin.PostAsJsonAsync($"/admin/allowances/{UserB}", new
+        {
+            operationId = Guid.NewGuid(), delta = 1, unlimited = false, reason = "Service failure refund"
+        });
+        topup.EnsureSuccessStatusCode();
+        var failedDispatchId = await JobAsync();
+        queue.Fail = true;
+        using var failedDispatch = await guest.PostAsync($"/jobs/{failedDispatchId}/submit", null);
+        check(failedDispatch.StatusCode == HttpStatusCode.InternalServerError
+            && (await allowances.GetAsync(key)).CreditsRemaining == 0,
+            "queue outage retains an atomic paid reservation rather than silently restoring or losing the credit");
+        queue.Fail = false;
+        await factory.Services.GetRequiredService<ScanDispatchService>().RecoverAsync(default);
+        await factory.Services.GetRequiredService<ScanDispatchService>().RecoverAsync(default);
+        check(queue.Messages == 11
+            && (await store.GetAsync(failedDispatchId))?.Status == ScanJobStatus.Uploaded,
+            "dispatch recovery sends reserved work after an outage without another charge or repeated recovery send");
+        var unlimitedId = Guid.NewGuid();
+        await allowances.AdjustAsync(key, unlimitedId, 0, true, UserA, "Unlimited test");
+        await guest.PostAsync($"/jobs/{await JobAsync()}/submit", null);
+        check((await allowances.GetAsync(key)) is { Unlimited: true, CreditsRemaining: 0 } && queue.Messages == 12,
+            "explicit unlimited grants allow scanning without a finite credit deduction");
+        await allowances.AdjustAsync(key, Guid.NewGuid(), 0, false, UserA, "Return to finite");
+        try
+        {
+            await allowances.AdjustAsync(key, Guid.NewGuid(), -1, false, UserA, "Invalid negative balance");
+            check(false, "negative balances must be rejected");
+        }
+        catch (InvalidOperationException) { check(true, "administration cannot create a negative credit balance"); }
+        var duplicateKey = ScanAllowanceOwner.Key(Tenant, Guid.NewGuid().ToString("D"));
+        await allowances.AdjustAsync(duplicateKey, Guid.NewGuid(), 1, false, UserA, "One scan");
+        var duplicateMessage = new ScanJobMessage(Guid.NewGuid().ToString("N"), "scans/test.jpg", null);
+        var reservations = await Task.WhenAll(Enumerable.Range(0, 30)
+            .Select(_ => allowances.ReserveAsync(duplicateKey, duplicateMessage)));
+        check(reservations.All(r => r.Allowed)
+            && reservations.Count(r => r.Outcome == ScanReservationOutcome.Reserved) == 1
+            && (await allowances.GetAsync(duplicateKey)) is { CreditsRemaining: 0, TotalReserved: 1 },
+            "thirty concurrent retries of one job reserve and charge exactly once");
     }
 
     private sealed class TestIdentity(
@@ -343,6 +483,7 @@ internal static class ApiOwnershipChecks
 
     private sealed class Images : IScanImageStore
     {
+        public bool Exists { get; set; } = true;
         public int Writes { get; private set; }
         public int Reads { get; private set; }
         public Task<Stream> OpenReadAsync(string path, CancellationToken ct = default)
@@ -355,15 +496,18 @@ internal static class ApiOwnershipChecks
             Writes++;
             return Task.CompletedTask;
         }
-        public Task<bool> ExistsAsync(string path, CancellationToken ct = default) => Task.FromResult(true);
+        public Task<bool> ExistsAsync(string path, CancellationToken ct = default) => Task.FromResult(Exists);
     }
 
     private sealed class Queue : IJobQueue
     {
-        public int Messages { get; private set; }
+        private int _messages;
+        public int Messages => _messages;
+        public bool Fail { get; set; }
         public Task EnqueueAsync(ScanJobMessage message, CancellationToken ct = default)
         {
-            Messages++;
+            if (Fail) throw new IOException("Simulated queue outage");
+            Interlocked.Increment(ref _messages);
             return Task.CompletedTask;
         }
     }

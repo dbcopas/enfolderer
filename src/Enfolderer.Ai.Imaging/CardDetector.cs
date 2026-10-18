@@ -203,7 +203,7 @@ public static class CardDetector
                 var recovered = RecoverWholeCards(source, arrangement, opts);
                 if (recovered.Count > 0)
                 {
-                    recoveryDiagnostic = $"Physical-card recovery: consistent contour regions replaced {arrangement.Count} overlapping, partial or merged arrangement regions with {recovered.Count} whole-card regions.";
+                    recoveryDiagnostic = $"Physical-card recovery: consistent contour regions recovered {recovered.Count} whole-card regions from {arrangement.Count} arrangement regions, preserving supported cards and recovering omitted or fragmented cards.";
                     return recovered;
                 }
             }
@@ -320,12 +320,22 @@ public static class CardDetector
             cards.Select(c => Area(c.Quad)).Order().ElementAt(cards.Count / 2);
         var arrangementArea = MedianArea(arrangement);
         IReadOnlyList<DetectedCard> best = [];
+        var measuredContours = new List<DetectedCard>();
         var bestCoverage = 0d;
+        var bestAngle = 0;
         // Title-frame recovery expects upright print. Preserve its point order when mapping back.
         foreach (var angle in new[] { 0, 90, 180, 270 })
         {
             using var oriented = source.Clone(c => c.Rotate(angle));
             var contours = CardContourDetector.Detect(oriented, options);
+            CardQuad Map(CardQuad quad) => new(quad.Points.Select(p => angle switch
+            {
+                90 => new ImagePoint(p.Y, source.Height - 1 - p.X),
+                180 => new ImagePoint(source.Width - 1 - p.X, source.Height - 1 - p.Y),
+                270 => new ImagePoint(source.Width - 1 - p.Y, p.X),
+                _ => p
+            }).ToArray());
+            measuredContours.AddRange(contours.Select(c => c with { Quad = Map(c.Quad) }));
             // JPEG re-encoding can break a dark border. Complete from measured neighbours
             // while their rows and columns are upright, before mapping back to source axes.
             if (contours.Count >= 3 && options.Arrangement is not null)
@@ -334,13 +344,7 @@ public static class CardDetector
             if (contours.Count < 3 || !fragmented && contours.Count <= arrangement.Count) continue;
             var candidates = contours.Select(c => c with
                 {
-                    Quad = new CardQuad(c.Quad.Points.Select(p => angle switch
-                    {
-                        90 => new ImagePoint(p.Y, source.Height - 1 - p.X),
-                        180 => new ImagePoint(source.Width - 1 - p.X, source.Height - 1 - p.Y),
-                        270 => new ImagePoint(source.Width - 1 - p.Y, p.X),
-                        _ => p
-                    }).ToArray())
+                    Quad = Map(c.Quad)
                 }).ToArray();
             if (MedianArea(candidates) < arrangementArea * 0.4) continue;
             var coverage = candidates.Sum(c => Area(c.Quad)) / (source.Width * (double)source.Height);
@@ -360,8 +364,162 @@ public static class CardDetector
             if (coverage < 0.15 || supported < arrangement.Count * 0.6 || coverage <= bestCoverage) continue;
             best = candidates;
             bestCoverage = coverage;
+            bestAngle = angle;
         }
-        return best;
+        if (best.Count > 0)
+        {
+            DetectedCard Orient(DetectedCard card, bool inverse) => card with
+            {
+                Quad = new CardQuad(card.Quad.Points.Select(p => (bestAngle, inverse) switch
+                {
+                    (90, false) => new ImagePoint(source.Height - 1 - p.Y, p.X),
+                    (270, true) => new ImagePoint(source.Width - 1 - p.Y, p.X),
+                    (180, _) => new ImagePoint(source.Width - 1 - p.X, source.Height - 1 - p.Y),
+                    (270, false) => new ImagePoint(p.Y, source.Width - 1 - p.X),
+                    (90, true) => new ImagePoint(p.Y, source.Height - 1 - p.X),
+                    _ => p
+                }).ToArray())
+            };
+            return RecoverShiftedFrames(best.Select(c => Orient(c, false)).ToArray(),
+                    measuredContours.Select(c => Orient(c, false)).ToArray())
+                .Select(c => Orient(c, true)).ToArray();
+        }
+        return options.Arrangement is { } completionOptions
+            ? RecoverMissingCards(arrangement, CardArrangementDetector.SupportedMeasured(
+                source, arrangement, measuredContours, completionOptions)) : [];
+    }
+
+    private static IReadOnlyList<DetectedCard> RecoverShiftedFrames(
+        IReadOnlyList<DetectedCard> cards, IReadOnlyList<DetectedCard> contours)
+    {
+        static double Median(IEnumerable<double> values) => values.Order().ElementAt(values.Count() / 2);
+        return SortMeasuredRows(cards.Select(card =>
+        {
+            var box = card.Quad.BoundingBox();
+            if (box.Width >= box.Height) return card;
+            var peers = cards.Where(other => other != card).Select(other => other.Quad.BoundingBox()).ToArray();
+            var row = peers.Where(b => Math.Abs(b.X + b.Width / 2 - box.X - box.Width / 2) > box.Width * 0.7
+                && Math.Abs(b.Y + b.Height / 2 - box.Y - box.Height / 2) < box.Height * 0.3).ToArray();
+            if (row.Length < 2 || !peers.Any(b =>
+                Math.Abs(b.X + b.Width / 2 - box.X - box.Width / 2) < box.Width * 0.25
+                && Math.Abs(b.Y + b.Height / 2 - box.Y - box.Height / 2) > box.Height * 0.7))
+                return card;
+            var center = Median(row.Select(b => b.Y + b.Height / 2));
+            var nearby = contours.Where(candidate =>
+            {
+                var b = candidate.Quad.BoundingBox();
+                return Math.Abs(b.X + b.Width / 2 - box.X - box.Width / 2) < box.Width * 0.15
+                    && b.Width / box.Width is > 0.85 and < 1.15
+                    && b.Height / box.Height is > 0.85 and < 1.15
+                    && Math.Abs(b.Y - box.Y) > box.Height * 0.1
+                    && Math.Abs(b.Y - box.Y) < box.Height * 0.4;
+            }).ToArray();
+            var alternative = Math.Abs(box.Y + box.Height / 2 - center) < box.Height * 0.06
+                && nearby.Any(candidate =>
+                {
+                    var b = candidate.Quad.BoundingBox();
+                    return Math.Abs(b.Y + b.Height / 2 - center) >= box.Height * 0.12;
+                }) ? card : nearby.Where(candidate =>
+                {
+                    var b = candidate.Quad.BoundingBox();
+                    return Math.Abs(box.Y + box.Height / 2 - center) >= box.Height * 0.12
+                        && Math.Abs(b.Y + b.Height / 2 - center) < box.Height * 0.06;
+                }).MinBy(candidate =>
+            {
+                var b = candidate.Quad.BoundingBox();
+                return Math.Abs(b.Y + b.Height / 2 - center);
+            });
+            if (alternative is null) return card;
+            var measured = alternative.Quad.BoundingBox();
+            // A lower title bar can project a false card upward. Opposite-turn contours and
+            // two neighbours must agree before restoring the row's full title/footer extent.
+            var top = Math.Min(measured.Y, row.Min(b => b.Y));
+            var bottom = Math.Max(measured.Y + measured.Height, row.Max(b => b.Y + b.Height));
+            var width = Math.Max(measured.Width, Median(row.Select(b => b.Width))) * 1.04;
+            var centerX = measured.X + measured.Width / 2;
+            var points = alternative.Quad.Points;
+            var dx = card.Quad.Points[1].X - card.Quad.Points[0].X;
+            var dy = card.Quad.Points[1].Y - card.Quad.Points[0].Y;
+            var start = Enumerable.Range(0, 4).MaxBy(i =>
+            {
+                var x = points[(i + 1) % 4].X - points[i].X;
+                var y = points[(i + 1) % 4].Y - points[i].Y;
+                return (x * dx + y * dy) / Math.Sqrt(x * x + y * y);
+            });
+            return alternative with { Quad = new CardQuad(Enumerable.Range(0, 4).Select(i =>
+            {
+                var p = points[(start + i) % 4];
+                return new ImagePoint(centerX + (p.X - centerX) * width / measured.Width,
+                    top + (p.Y - measured.Y) / measured.Height * (bottom - top));
+            }).ToArray()) };
+        }).ToArray());
+    }
+
+    private static IReadOnlyList<DetectedCard> RecoverMissingCards(
+        IReadOnlyList<DetectedCard> anchors, IReadOnlyList<DetectedCard> contours)
+    {
+        if (anchors.Count < 4) return [];
+        static double Median(IEnumerable<double> values) => values.Order().ElementAt(values.Count() / 2);
+        static double Intersection(CardQuad first, CardQuad second)
+        {
+            var a = first.BoundingBox();
+            var b = second.BoundingBox();
+            return Math.Max(0, Math.Min(a.X + a.Width, b.X + b.Width) - Math.Max(a.X, b.X))
+                * Math.Max(0, Math.Min(a.Y + a.Height, b.Y + b.Height) - Math.Max(a.Y, b.Y));
+        }
+        var typicalArea = Median(anchors.Select(a => Area(a.Quad)));
+        var additions = new List<(DetectedCard Card, double Error)>();
+        foreach (var candidate in contours)
+        {
+            var b = candidate.Quad.BoundingBox();
+            if (Area(candidate.Quad) < typicalArea * 0.7 || Area(candidate.Quad) > typicalArea * 1.3
+                || anchors.Any(a => Intersection(a.Quad, candidate.Quad) > Math.Min(Area(a.Quad), Area(candidate.Quad)) * 0.25))
+                continue;
+            var row = anchors.Where(a =>
+            {
+                var r = a.Quad.BoundingBox();
+                return Math.Abs(r.Y + r.Height / 2 - b.Y - b.Height / 2) < b.Height * 0.25;
+            }).Select(a => a.Quad.BoundingBox()).ToArray();
+            var column = anchors.Where(a =>
+            {
+                var c = a.Quad.BoundingBox();
+                return Math.Abs(c.X + c.Width / 2 - b.X - b.Width / 2) < b.Width * 0.3;
+            }).Select(a => a.Quad.BoundingBox()).ToArray();
+            // Two measured neighbours on each axis establish a genuine gap, not an extrapolated grid.
+            if (row.Length < 2 || column.Length < 2) continue;
+            var expectedWidth = Median(column.Select(c => c.Width));
+            var expectedHeight = Median(row.Select(r => r.Height));
+            var expectedX = Median(column.Select(c => c.X + c.Width / 2));
+            var expectedY = Median(row.Select(r => r.Y + r.Height / 2));
+            var error = Math.Abs(b.Width / expectedWidth - 1) + Math.Abs(b.Height / expectedHeight - 1)
+                + Math.Abs(b.X + b.Width / 2 - expectedX) / expectedWidth
+                + Math.Abs(b.Y + b.Height / 2 - expectedY) / expectedHeight;
+            if (error > 0.45) continue;
+            additions.Add((candidate, error));
+        }
+        var recovered = anchors.ToList();
+        foreach (var (card, _) in additions.OrderBy(a => a.Error))
+            if (!recovered.Any(a => Intersection(a.Quad, card.Quad) > Math.Min(Area(a.Quad), Area(card.Quad)) * 0.25))
+            {
+                var reference = anchors.OrderBy(a =>
+                {
+                    var aBox = a.Quad.BoundingBox();
+                    var cBox = card.Quad.BoundingBox();
+                    return Math.Abs(aBox.X - cBox.X) + Math.Abs(aBox.Y - cBox.Y);
+                }).First().Quad.Points;
+                var dx = reference[1].X - reference[0].X;
+                var dy = reference[1].Y - reference[0].Y;
+                var points = card.Quad.Points;
+                var start = Enumerable.Range(0, 4).MaxBy(i =>
+                {
+                    var x = points[(i + 1) % 4].X - points[i].X;
+                    var y = points[(i + 1) % 4].Y - points[i].Y;
+                    return (x * dx + y * dy) / Math.Sqrt(x * x + y * y);
+                });
+                recovered.Add(card with { Quad = new CardQuad(Enumerable.Range(0, 4)
+                    .Select(i => points[(start + i) % 4]).ToArray()) });
+            }
+        return recovered.Count > anchors.Count ? SortMeasuredRows(recovered) : [];
     }
 
     private static IReadOnlyList<DetectedCard> SortMeasuredRows(IReadOnlyList<DetectedCard> cards)

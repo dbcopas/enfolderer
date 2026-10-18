@@ -24,6 +24,7 @@ public sealed class ScanPlatformOptions
     public string CosmosDatabase { get; set; } = "enfolderer";
 
     public string CosmosContainer { get; set; } = "jobs";
+    public string AllowancesContainer { get; set; } = "scan-allowances";
 
     /// <summary>
     /// Client id of the user-assigned managed identity this service should present. Required when

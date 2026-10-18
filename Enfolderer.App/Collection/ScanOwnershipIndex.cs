@@ -7,7 +7,7 @@ namespace Enfolderer.App.Collection;
 public sealed record ScanOwnership(int PrintingQuantity, int NameQuantity, int RequiredQuantity)
 {
     public bool IsMissing => PrintingQuantity < RequiredQuantity;
-    public string OverlayText => IsMissing ? "" : $"Owned: {PrintingQuantity} | All: {NameQuantity}";
+    public string OverlayText => new CardOwnership(PrintingQuantity, NameQuantity, RequiredQuantity).OverlayText;
 }
 
 /// <summary>A read-only inventory snapshot; mapped collection rows take precedence over mainDb Qty.</summary>
@@ -58,13 +58,11 @@ public sealed class ScanOwnershipIndex
         var required = RequiredQuantity(card.Prices?.Layout);
         var matches = _printings.Where(p => string.Equals(p.Set, card.Set, StringComparison.OrdinalIgnoreCase)
             && string.Equals(p.Number, NormalizeNumber(card.CollectorNumber!), StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (matches.Length == 0 && card.Prices?.GathererIds is { Count: > 0 })
+        if (matches.Length == 0)
         {
             var legacy = CollectionSnapshot.Resolve(card, _snapshotIndex ??= ExportSnapshot().BuildIndex());
             return new ScanOwnership(legacy.Quantity, legacy.AllQuantity, legacy.RequiredQuantity);
         }
-        if (matches.Length == 0)
-            throw new InvalidOperationException($"Printing {card.Set} {card.CollectorNumber} is absent from the local card database.");
         var names = matches.Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var exact = SumSources(matches);
         var all = SumSources(_printings.Where(p => names.Contains(p.Name)));

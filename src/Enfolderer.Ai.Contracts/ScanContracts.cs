@@ -292,13 +292,19 @@ public static class CardValueRanking
     public static IReadOnlyList<IdentifiedCard> Order(IEnumerable<IdentifiedCard> cards) =>
         cards.OrderByDescending(Price).ThenBy(card => card.Index).ToArray();
 
-    public static IdentifiedCard? HighestNeeded(IEnumerable<IdentifiedCard> cards) =>
-        Order(cards.Where(c => c.IsIdentified && c.Ownership?.IsMissing == true && Price(c).HasValue))
+    public static IReadOnlyDictionary<int, int> Ranks(IEnumerable<IdentifiedCard> cards) =>
+        Order(cards.Where(card => card.IsIdentified)).Select((card, index) => (Card: card, Rank: index + 1))
+            .ToDictionary(item => item.Card.Index, item => item.Rank);
+
+    public static IdentifiedCard? HighestPriced(IEnumerable<IdentifiedCard> cards) =>
+        Order(cards.Where(c => c.IsIdentified && Price(c).HasValue))
             .FirstOrDefault();
 }
 
 public sealed record CardPrices
 {
+    public Guid? OracleId { get; init; }
+    public IReadOnlyList<CardPrintingReference> RelatedPrintings { get; init; } = [];
     public IReadOnlyList<int> GathererIds { get; init; } = [];
     public string? Layout { get; init; }
     public string? CardName { get; init; }

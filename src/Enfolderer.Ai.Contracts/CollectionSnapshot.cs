@@ -13,11 +13,14 @@ public sealed record CollectionGathererPrinting(
     [property: JsonRequired] int Quantity,
     [property: JsonRequired] int AllQuantity);
 
+public sealed record CardPrintingReference(string Set, string Number, IReadOnlyList<int> GathererIds);
+
 public sealed record CardOwnership(int Quantity, int AllQuantity, int RequiredQuantity, string? Error = null)
 {
     [JsonIgnore] public bool IsMissing => Error is null && Quantity < RequiredQuantity;
-    [JsonIgnore] public string OverlayText => Error is not null ? "Owned: ?"
-        : IsMissing ? "" : $"Owned: {Quantity} | All: {AllQuantity}";
+    [JsonIgnore] public string OverlayText => Error is not null
+        ? "Owned: unavailable\nAll sets: unavailable"
+        : $"Owned: {Quantity}\nAll sets: {AllQuantity}";
 }
 
 /// <summary>Portable quantities only: no database files, personal notes or card names.</summary>
@@ -87,9 +90,18 @@ public sealed record CollectionSnapshot
             if (matches.Length > 1)
                 throw new InvalidOperationException("Conflicting quantities for this printing's Gatherer identifiers.");
             printing = matches.SingleOrDefault();
-            if (printing is null) return new CardOwnership(0, 0, required);
         }
-        return new CardOwnership(printing.Quantity, printing.AllQuantity, required);
+        var all = printing?.AllQuantity ?? 0;
+        foreach (var related in card.Prices?.RelatedPrintings ?? [])
+        {
+            if (index.TryGetValue(Key(related.Set, related.Number), out var sibling))
+                all = Math.Max(all, sibling.AllQuantity);
+            else
+                foreach (var id in related.GathererIds)
+                    if (index.TryGetValue(GathererKey(id), out sibling))
+                        all = Math.Max(all, sibling.AllQuantity);
+        }
+        return new CardOwnership(printing?.Quantity ?? 0, all, required);
     }
 
     public static int RequiredQuantity(string? layout) => layout?.ToLowerInvariant() switch

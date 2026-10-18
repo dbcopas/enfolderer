@@ -15,6 +15,67 @@ string, a storage key, or a client secret: the storage account is created with
 `allowSharedKeyAccess: false` and Cosmos with `disableLocalAuth: true`, so key-based access is not
 merely discouraged, it is impossible.
 
+## Scan credit allowances
+
+All approved scan users require a durable allowance. The default is **zero**, including for
+tenant members and administrators. Invitation, app assignment, delegated consent and the
+pilot allowlist remain separate admission requirements; a credit grant does not bypass them.
+
+Deploy the updated Bicep first: it adds `scan-allowances` in the existing Cosmos database,
+partitioned by `/ownerKey`, without TTL. It shares existing database throughput. The API's
+existing managed-identity Cosmos data contributor permission covers the new container.
+The worker uses its existing output-container write permission for renewable execution locks.
+Configure `scanAllowanceAdminUserObjectIds` (or deployment script
+`-ScanAllowanceAdminUserObjectIds`) with an explicit comma-separated subset of pilot user IDs.
+Diagnostics permission alone does **not** permit credit changes. Omission preserves the deployed
+administrator parameter; an explicit empty string disables administration.
+The image deployment script now preserves live API custom-domain/certificate bindings, including
+those added in the portal. `apiCustomDomains` is also an explicit Bicep parameter. A fresh tenant
+must use newly issued destination certificates, not certificate resource IDs from the old tenant.
+
+The new API blocks submissions with no credit grant. Immediately after the first rollout,
+grant the owner unlimited access before testing scans. Administration itself needs no scan
+credits. Commands use the existing encrypted desktop authentication cache and the
+`Scan.Submit` delegated scope; use `-SignIn` to authenticate interactively. Use a matching
+`-ConfigFile` for a different deployment/tenant.
+
+```powershell
+# Owner access (use that user's object ID in this tenant)
+.\scripts\manage-scan-allowance.ps1 -UserObjectId '<owner-oid>' -Unlimited -Reason 'Owner access' -SignIn
+# Give an already approved guest ten submitted-photo scans
+.\scripts\manage-scan-allowance.ps1 -UserObjectId '<guest-oid>' -Credits 10 -Reason 'Initial pilot grant'
+# Inspect/export current balance to the local allowance.json output
+.\scripts\manage-scan-allowance.ps1 -UserObjectId '<guest-oid>'
+# Refund one service failure, or top up with any explicit positive amount
+.\scripts\manage-scan-allowance.ps1 -UserObjectId '<guest-oid>' -Credits 1 -Reason 'Refund failed job <job-id>'
+```
+
+Each adjustment prints an operation GUID. **Reuse it with `-OperationId` and identical arguments
+after an ambiguous network failure**, or a newly generated operation will add credits again.
+Audit entries retain administrator, reason, time and adjustment. Negative adjustments are
+permitted only when the resulting balance stays nonnegative. An adjustment without `-Unlimited`
+selects finite mode; `-Credits 0` can explicitly remove unlimited mode without changing balance.
+The script writes its last inspected/adjusted balance to the selected output directory; archive
+exports under separate filenames when preparing a migration.
+
+One accepted photo consumes one credit, irrespective of card count or scan success. Uploads
+that are not submitted consume none. The reservation and its dispatch receipt commit atomically
+with the balance. The API's recovery loop retries pending dispatch after queue/API outages.
+Requests for a previously reserved job do not spend again. Exhaustion does not revoke login,
+collection management, polling or downloads. Job expiry never restores credits.
+
+### Moving allowances to another tenant
+
+Before teardown, inspect/export each pilot user's balance and unlimited flag; preserve the
+old tenant/user mapping and adjustment records privately. Freeze submissions during the final
+export/cutover so balances cannot change after export. In the new tenant recreate admission,
+admin configuration and infrastructure, then explicitly map each old user to the new tenant
+object ID. Grant **the exported remaining balance**, not another default ten, using a stable
+operation ID and a migration reason. Reapply unlimited only for accounts that had it. Do not
+copy pending dispatch receipts across tenants; let old work complete or refund it explicitly
+before cutover. Allowance documents contain tenant-specific identities, so do not blindly
+restore the old container into a new tenant.
+
 ## Read-only scan diagnostics
 
 Use this when an operator or coding assistant needs the actual uploaded photo, measured crops,

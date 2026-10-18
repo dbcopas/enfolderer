@@ -10,6 +10,17 @@ namespace Enfolderer.Ai.Infrastructure.Storage;
 /// </summary>
 public sealed class CosmosJobStore : IJobStore
 {
+    public async Task MarkUploadedAsync(string jobId, CancellationToken ct = default)
+    {
+        try
+        {
+            await _container.PatchItemAsync<ScanJobDocument>(jobId, new PartitionKey(jobId),
+                [PatchOperation.Set("/status", "Uploaded"), PatchOperation.Set("/updatedAt", DateTimeOffset.UtcNow)],
+                new PatchItemRequestOptions { FilterPredicate = "FROM c WHERE c.status = 'Pending'" }, ct);
+        }
+        catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.PreconditionFailed) { }
+    }
+
     private readonly Container _container;
 
     public CosmosJobStore(Container container) => _container = container;
