@@ -79,6 +79,30 @@ internal static class LegacyPrintingChecks
             && !many.RootElement.GetProperty("alternatesComplete").GetBoolean(),
             "a bounded list explicitly signals incompleteness rather than presenting a biased field as complete");
 
+        foreach (var hasPaper in new[] { true, false })
+        {
+            using var digitalHandler = new Handler(request =>
+            {
+                if (request.RequestUri!.AbsolutePath == "/cards/named")
+                    return JsonSerializer.Serialize(Printing("me4", 216, digital: true));
+                check(Uri.UnescapeDataString(request.RequestUri.Query).Contains("game:paper"),
+                    "a rejected digital default falls back only to physical printings");
+                return JsonSerializer.Serialize(new
+                {
+                    data = hasPaper ? new[] { Printing("ice", 330) } : Array.Empty<object>(), has_more = false
+                });
+            });
+            using var digitalHttp = new HttpClient(digitalHandler);
+            var physical = await new ScryfallCatalogue(digitalHttp)
+                .ResolveAsync("Legacy card", "", null, "en", default);
+            check(hasPaper
+                    ? physical.Printing?.Set == "ice" && physical.Printing.CollectorNumber == "330"
+                        && physical.Resolution == Resolutions.Unplaced && physical.ReadCollectorNumber is null
+                    : physical.Printing is null && physical.Resolution == Resolutions.Unresolved,
+                hasPaper ? "a digital default cannot hide a paper card or invent printed number evidence"
+                    : "a genuinely digital-only card remains unresolved");
+        }
+
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
         try

@@ -236,8 +236,14 @@ public sealed class ScryfallCatalogue
             $"{ApiRoot}/cards/named?fuzzy={Uri.EscapeDataString(name)}&set={Uri.EscapeDataString(setCode)}",
             ct);
 
-    public Task<CataloguePrinting?> LookupByNameAsync(string name, CancellationToken ct) =>
-        GetPrintingAsync($"{ApiRoot}/cards/named?fuzzy={Uri.EscapeDataString(name)}", ct);
+    public async Task<CataloguePrinting?> LookupByNameAsync(string name, CancellationToken ct)
+    {
+        var found = await GetPrintingAsync($"{ApiRoot}/cards/named?fuzzy={Uri.EscapeDataString(name)}", ct);
+        if (found is not null) return found;
+        // The named endpoint may prefer a digital-only reprint of a real paper card.
+        // Parse excludes digital cards, but that must not hide the physical printings too.
+        return (await SearchPrintingsAsync(name, null, null, ct)).FirstOrDefault();
+    }
 
     /// <summary>
     /// One printing from a name that may not have been transcribed perfectly.

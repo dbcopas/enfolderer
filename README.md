@@ -173,6 +173,9 @@ not amber or a question mark.
 For small loose-card photos, recovery checks physical outlines at all four rotations. It can
 recover a measured neighbouring card or replace supported artwork fragments with complete
 outlines, without projecting title bars into unmeasured neighbouring slots.
+Confirmed English identifications must also agree with the photographed title; an unrelated
+card returned by a number lookup triggers the existing bounded agent re-read instead of acceptance.
+Name-only lookups fall back to paper printings when Scryfall's preferred result is digital-only.
 Double-faced cards still require two copies. Existing rendered images are
 unchanged by later snapshot replacement/deletion. Desktop scans keep their local ownership path.
 Older MTG Studio rows can have legacy set codes and no collector number (for example `VI` rather

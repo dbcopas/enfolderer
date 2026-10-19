@@ -155,6 +155,7 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
             {
                 var parsed = ParseIdentification(text, crop, Game, AgentId);
                 ValidateLanguage(parsed);
+                ValidateTitle(parsed);
                 if ((parsed.Resolution == "unresolved" || parsed.Resolution == "assumed")
                     && uncertainReadings++ == 0)
                 {
@@ -222,6 +223,12 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
                which set the card is from. Answer with the set, collector number and name it gives back,
                never with the number you read, and copy its "resolution", "readCollectorNumber" and
                "readSet" into your reply.
+
+               For an English card, "name" must agree with "readName" (or its named face), unless
+               the catalogue explicitly returned a fuzzy name match. If they disagree, call
+               resolve_printing with the photographed title, not the unrelated name from a number
+               lookup. Older cards may have no printed collector number: leave readCollectorNumber
+               empty rather than inventing digits to match a catalogue entry.
 
                If the tool answers "unresolved", or you cannot call it, answer with what you read off the card
                and lower "confidence" to say so. A card recorded from your own reading can be checked later; a
@@ -342,6 +349,23 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
                 $"The printed title '{card.ReadName}' contains Japanese kana but language is '{card.Language}'. "
                 + "Re-read the photographed title and footer, resolve with language 'ja', and retain Japanese "
                 + "as the photographed language even if the catalogue falls back to an English printing.");
+    }
+
+    internal static void ValidateTitle(IdentifiedCard card)
+    {
+        if (card.Game != CardGames.Magic || !card.IsIdentified || card.Language != "en"
+            || card.ReadName is null || card.Resolution != "confirmed") return;
+        static string Letters(string text) => new(text.Where(char.IsLetterOrDigit).ToArray());
+        var read = Letters(card.ReadName);
+        var names = card.Name!.Split("//", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Prepend(card.Name);
+        if (read.Length > 0 && names.Any(name =>
+            string.Equals(read, Letters(name), StringComparison.OrdinalIgnoreCase))) return;
+        throw new InvalidOperationException(
+            $"The photographed English title '{card.ReadName}' contradicts the confirmed catalogue name '{card.Name}'. "
+            + "Call resolve_printing with the photographed title, not the unrelated name found by number. "
+            + "Leave the read collector number empty if none is printed; never invent digits or change the title "
+            + "to make a number lookup agree.");
     }
 
     private static string? NormalizeLanguage(string? language) => language?.Trim().ToLowerInvariant() switch

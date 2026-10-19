@@ -75,7 +75,7 @@ internal static class ScanReliabilityChecks
         foreach (var outcome in new[] { "confirmed", resolution, "declined" })
         {
             var unresolved = $$"""{"set":"wrong","collectorNumber":"269","name":"Read title","readName":"Read title","language":"en","resolution":"{{resolution}}"}""";
-            var resolved = """{"set":"right","collectorNumber":"269","name":"Catalogue title","readName":"Read title","language":"en","resolution":"confirmed"}""";
+            var resolved = """{"set":"right","collectorNumber":"269","name":"Read title","readName":"Read title","language":"en","resolution":"confirmed"}""";
             var retryReply = outcome == "confirmed" ? resolved
                 : outcome == "declined" ? """{"error":"Catalogue could not resolve this reading"}""" : unresolved;
             using var handler = new RunHandler(["completed"], replies: [unresolved, retryReply]);
@@ -86,6 +86,19 @@ internal static class ScanReliabilityChecks
             check(handler.Runs == 2 && handler.Corrections == 1
                 && result.Resolution == (outcome == "confirmed" ? "confirmed" : resolution) && result.Name is not null,
                 $"{resolution} named readings retry once; {outcome} outcome preserves a readable row");
+        }
+        using (var handler = new RunHandler(["completed"], replies:
+        [
+            """{"set":"ice","collectorNumber":"311","name":"Arcum's Whistle","readName":"Naked Singularity","language":"en","resolution":"confirmed"}""",
+            """{"set":"ice","collectorNumber":"330","name":"Naked Singularity","readName":"Naked Singularity","language":"en","resolution":"named"}"""
+        ]))
+        using (var http = new HttpClient(handler))
+        {
+            var agent = new FoundryCardIdentificationAgent(Client(http, new ListLogger<FoundryAgentClient>()),
+                GameAgentProfile.Mtg, "agent", new ListLogger<FoundryCardIdentificationAgent>());
+            var result = await agent.IdentifyAsync(new CardCrop(0, Image(), first, CardGames.Magic));
+            check(handler.Runs == 2 && handler.Corrections == 1 && result.Name == "Naked Singularity",
+                "a contradictory confirmed title enters bounded re-reading and retains the corrected card identity");
         }
         await ConcurrencyChecks.RunAsync(check);
         foreach (var status in new[] { HttpStatusCode.InternalServerError, HttpStatusCode.ServiceUnavailable,
@@ -980,6 +993,29 @@ internal static class ScanReliabilityChecks
         check(true, "English, German, Japanese without a legible footer, and Chinese titles remain valid");
         FoundryCardIdentificationAgent.ValidateLanguage(Parse("""{"error":"Unreadable card"}"""));
         check(true, "an unreadable card is not retried for missing language evidence");
+        var contradiction = Parse(Reply("en", "Naked Singularity", null)) with
+        {
+            Name = "Arcum's Whistle", Set = "ice", CollectorNumber = "311"
+        };
+        var rejectedTitle = false;
+        try { FoundryCardIdentificationAgent.ValidateTitle(contradiction); }
+        catch (InvalidOperationException ex)
+        {
+            rejectedTitle = ex.Message.Contains("Naked Singularity") && ex.Message.Contains("resolve_printing");
+        }
+        check(rejectedTitle, "a confirmed number lookup cannot replace the photographed English title with a different card");
+        foreach (var acceptable in new[]
+        {
+            contradiction with { Name = "Naked Singularity" },
+            contradiction with { ReadName = "ARCUM\u2019S WHISTLE" },
+            contradiction with { Name = "Emeritus of Woe // Demonic Tutor", ReadName = "Emeritus of Woe" },
+            contradiction with { Name = "Emeritus of Woe // Demonic Tutor", ReadName = "Emeritus of Woe // Demonic Tutor" },
+            contradiction with { Language = "de" },
+            contradiction with { Resolution = "fuzzy" },
+            contradiction with { Game = CardGames.Pokemon }
+        })
+            FoundryCardIdentificationAgent.ValidateTitle(acceptable);
+        check(true, "title validation preserves punctuation, case, named faces, translations and explicit fuzzy matches");
         check(Parse(Reply(null, null, null), CardGames.Pokemon).Language == "en",
             "non-MTG legacy language parsing is unchanged");
         var roundTrip = JsonSerializer.Deserialize<IdentifiedCard>(
