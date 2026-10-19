@@ -80,7 +80,14 @@ app.Use(async (context, next) =>
     await next(context);
 });
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        if (context.Context.Request.Path == "/app.js")
+            context.Context.Response.Headers.CacheControl = "no-cache";
+    }
+});
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapMobileWeb();
