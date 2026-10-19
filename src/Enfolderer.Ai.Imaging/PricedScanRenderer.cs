@@ -68,11 +68,14 @@ public static class PricedScanRenderer
                     canvas.Mutate(c => c.DrawText(printing, printingFont, Color.White,
                         new PointF(x + padding - printingBounds.X, panelY + panelWidth * 0.39f - printingBounds.Y)));
                 }
-                var ownershipText = card.Ownership?.OverlayText ?? "Owned: unavailable\nAll sets: unavailable";
-                var ownershipFont = FitOverlayFont(family, ownershipText, textWidth, panelWidth * 0.24f);
-                var ownershipBounds = TextMeasurer.MeasureBounds(ownershipText, new TextOptions(ownershipFont));
-                canvas.Mutate(c => c.DrawText(ownershipText, ownershipFont, Color.White,
-                    new PointF(x + padding - ownershipBounds.X, panelY + panelWidth * 0.58f - ownershipBounds.Y)));
+                if (card.Ownership is { } ownership)
+                {
+                    var ownershipText = ownership.OverlayText;
+                    var ownershipFont = FitOverlayFont(family, ownershipText, textWidth, panelWidth * 0.24f);
+                    var ownershipBounds = TextMeasurer.MeasureBounds(ownershipText, new TextOptions(ownershipFont));
+                    canvas.Mutate(c => c.DrawText(ownershipText, ownershipFont, Color.White,
+                        new PointF(x + padding - ownershipBounds.X, panelY + panelWidth * 0.58f - ownershipBounds.Y)));
+                }
                 if (card != highest && ranks.TryGetValue(card.Index, out var rank))
                 {
                     var rankText = rank.ToString(CultureInfo.InvariantCulture);

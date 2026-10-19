@@ -163,8 +163,9 @@ the desktop; original databases, card names and personal notes are not uploaded.
 after inventory changes or delete it on the website. Snapshots are private, isolated by validated
 tenant/object IDs, and remain until replaced/deleted. The worker reads the snapshot when rendering
 an opted-in scan; removing it mid-scan produces explicit unknown ownership, not invented zeros.
-Missing exact printings get red overlay backgrounds; all cards show exact-printing and all-sets
-quantities, including zero. Genuine lookup failures show `unavailable`, not amber or a question mark.
+When collection comparison is enabled, missing exact printings get red overlay backgrounds;
+all cards show exact-printing and all-sets quantities, including zero. With comparison disabled,
+neither ownership line is printed. Genuine lookup failures show `unavailable`, not amber or a question mark.
 Double-faced cards still require two copies. Existing rendered images are
 unchanged by later snapshot replacement/deletion. Desktop scans keep their local ownership path.
 Older MTG Studio rows can have legacy set codes and no collector number (for example `VI` rather

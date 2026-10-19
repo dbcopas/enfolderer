@@ -212,6 +212,10 @@ internal static class PriceAnnotationChecks
             check(new[] { 413, 467 }.All(top => Enumerable.Range(top, 20).Any(y => Enumerable.Range(55, 150)
                 .Any(x => png[x, y].R > 180 && png[x, y].G > 180 && png[x, y].B > 180))),
                 "taller overlay includes card name and exact set/number on separate lines under the prices");
+            check(result.Cards.All(c => c.Ownership is null)
+                && !Enumerable.Range(540, 90).Any(y => Enumerable.Range(55, 240)
+                    .Any(x => png[x, y].R > 220 && png[x, y].G > 220 && png[x, y].B > 220)),
+                "without collection comparison, ownership stays absent and neither quantity line is rendered");
             foreach (var candidate in new[]
             {
                 card with { Resolution = "confirmed" },
@@ -345,6 +349,11 @@ internal static class PriceAnnotationChecks
             check(unavailable.Cards[0].Ownership is { Error: not null, OverlayText: "Owned: unavailable\nAll sets: unavailable" }
                 && CardValueRanking.Ranks(unavailable.Cards).Count == 1,
                 "a genuine collection failure remains explicit without a question mark or amber panel and does not suppress price rank");
+            using var unavailableImage = Image.Load<Rgba32>(output.Content!);
+            check(Enumerable.Range(540, 90).Any(y => Enumerable.Range(55, 240)
+                .Any(x => unavailableImage[x, y].R > 220 && unavailableImage[x, y].G > 220
+                    && unavailableImage[x, y].B > 220)),
+                "an explicitly requested comparison that fails still renders unavailable ownership quantities");
             var conflicting = new CollectionSnapshot { GathererPrintings = [new(1, 1, 1), new(2, 2, 2)] };
             try
             {
