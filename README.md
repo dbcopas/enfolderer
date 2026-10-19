@@ -213,6 +213,7 @@ default 24-hour search. Failed and running attempts are included; pending upload
 as the latest scan. Downloads go outside the repository under local application data by default.
 Run this on an explicit investigation request, not as background collection; use the latest scan
 unless the requester specifies another job.
+
 The manifest records missing files explicitly and SHA-256 hashes of downloaded evidence.
 Job-correlated logs and time-window context logs are separate because concurrent scans can overlap.
 Log ingestion can lag; rerun after a scan finishes for final evidence.
@@ -440,6 +441,51 @@ To publish a self-contained Windows executable:
 ```powershell
 dotnet publish Enfolderer.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
+
+## Hibernating an owned demo
+
+Run PowerShell 7 after `az login`:
+
+```powershell
+.\scripts\stop-demo.ps1 -WhatIf
+.\scripts\stop-demo.ps1
+.\scripts\restore-demo.ps1 -WhatIf
+.\scripts\restore-demo.ps1
+```
+
+These scripts discover successful Enfolderer subscription deployments in the signed-in tenant
+and require effective **Owner** (direct, group or inherited) on all three deployment resource
+groups. An approved scanner is not necessarily an infrastructure owner. Multiple owned demos
+require `-SubscriptionId <id> -DeploymentName <name>` on stop; use `-ManifestPath <path>` to
+select a recovery manifest on restore. Other users discover their own deployments, not yours.
+Only the repository's three-environment topology is supported; shared/consolidated environments
+are rejected rather than guessed. Azure discovery failures are errors, not absent resources.
+
+**Stop is destructive:** it cancels in-flight scans and deletes the scans, crops and outputs
+containers, the scan queue, all five apps, their exclusive environments and the three data
+private endpoints. Container deletion uses the ARM management plane, so storage remains private
+and no keys or temporary public access are needed. The containers/queue are recreated empty on
+restore. Storage soft-delete retention may retain deleted data and charges until expiry.
+Collection snapshots, Cosmos/credit balances/job metadata, registry images, Foundry deployments,
+identities, DNS zones, logs and security settings are retained. Their charges do not all pause:
+in particular, provisioned Cosmos throughput and ACR Basic still bill. This is cost-reducing
+hibernation with durable user state, **not a zero-cost teardown**.
+
+Before any deletion, the exact deployed ARM template, parameters, resource IDs and old custom
+domains are saved under the current user's local application-data
+`Enfolderer\DemoLifecycle\<tenant>\<object-id>` directory. Keep that manifest privately backed
+up: it is necessary for recovery and is not a backup of deleted photos. A partial stop remains
+restorable; the script never silently overwrites unfinished recovery state. Restore uses the
+saved template/images, not whatever source happens to be checked out later. It can be retried
+after failure. Completed manifests are retained; subsequent stops create new manifests.
+
+Restore checks endpoint health and prints the **remaining required steps**: update Foundry MCP
+URLs with `update-demo.ps1 -SkipImages`, update DNS and obtain/rebind managed certificates,
+check Entra redirect URIs, desktop/API Management URLs, then run access checks and a sample scan.
+Environment recreation changes generated URLs and invalidates old environment certificate IDs.
+Health alone does not mean the demo is ready. Scripts do not change the CLI's selected subscription.
+Validate the scripts offline with `.\scripts\test-demo-lifecycle.ps1`; `-WhatIf` performs live
+discovery/preflight without stopping or deleting anything.
 
 ## Attribution and license
 
