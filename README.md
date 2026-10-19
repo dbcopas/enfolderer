@@ -487,6 +487,28 @@ Health alone does not mean the demo is ready. Scripts do not change the CLI's se
 Validate the scripts offline with `.\scripts\test-demo-lifecycle.ps1`; `-WhatIf` performs live
 discovery/preflight without stopping or deleting anything.
 
+### Clearing scan images without hibernating
+
+```powershell
+.\scripts\clear-demo-images.ps1 -WhatIf
+.\scripts\clear-demo-images.ps1
+```
+
+Uses the same owner-scoped discovery and optional `-SubscriptionId` / `-DeploymentName`
+selectors. It pauses the API and worker, deletes and recreates the entire `scans`, `crops`,
+`outputs` and legacy `results` containers, restores their settings and container-scoped roles,
+then resumes the original revisions/modes. Queued work is discarded and in-flight scans are
+interrupted, so images cannot be recreated during cleanup. Collections, credits, Cosmos/history
+metadata and unrelated storage accounts are untouched; old history image links will no longer work.
+Unknown containers, immutable/locked containers and enabled soft-delete retention cause an
+explicit refusal before mutation, rather than a misleading permanent-purge claim.
+
+A private recovery receipt is saved under the owner's lifecycle directory in `ImageCleanup`.
+Keep it if cleanup fails; use `clear-demo-images.ps1 -ResumePath <receipt>` to repair containers,
+restore permissions and resume services. Recovery does not prove that an interrupted purge
+finished; rerun cleanup if necessary. `-ReceiptPath` overrides the receipt file location.
+No public storage access, account keys, DNS changes or image rebuilds are required.
+
 ## Attribution and license
 
 Card data and images are provided by [Scryfall](https://scryfall.com) and are © Wizards of the Coast. Enfolderer is unofficial and is not endorsed by Wizards of the Coast.

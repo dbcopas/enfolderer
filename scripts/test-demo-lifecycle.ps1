@@ -10,6 +10,7 @@ $global:DemoLifecycleTest = @{
     Mutations = [Collections.Generic.List[string]]::new()
     Deleted = [Collections.Generic.List[string]]::new()
     FailDelete = $false; FailRestore = $false; Shared = $false; ExtraOwner = $false
+    Retention = $false; FailPurge = $false; Fresh = $false; CreateCooldown = $false
 }
 function Assert($condition, $message) { if (-not $condition) { throw $message } }
 function Invoke-RestMethod { @{ status = 'ok' } }
@@ -37,7 +38,7 @@ function az {
                 properties = @{
                     environmentId = "$scope/$($s.Prefix)-$($entry[0])/providers/Microsoft.App/managedEnvironments/$($s.Prefix)-$($entry[0])-env"
                     customDomainVerificationId = 'verification'
-                    configuration = @{ ingress = @{
+                    configuration = @{ activeRevisionsMode = 'Single'; ingress = @{
                         fqdn = "$($entry[1]).example.test"
                         customDomains = @(@{ name = 'scan.example.test'; certificateId = 'old-certificate' })
                     } }
@@ -55,6 +56,14 @@ function az {
         'account list' { $result = @(@{ id = $s.Subscription; tenantId = $s.Tenant; state = 'Enabled' }) }
         'ad signed-in-user' { $result = @{ id = $s.User } }
         'role assignment' {
+            if ((Value '--scope') -like '*/containers/*') {
+                $result = @(@{
+                    id = "$(Value '--scope')/providers/Microsoft.Authorization/roleAssignments/grant"
+                    scope = Value '--scope'; principalId = 'identity'; principalType = 'ServicePrincipal'
+                    roleDefinitionId = 'reader'
+                })
+                break
+            }
             $result = @()
             if ((Value '--scope') -notlike '*other-demo*' -or $s.ExtraOwner) {
                 $result = @(@{ roleDefinitionId = '/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635' })
@@ -104,6 +113,39 @@ function az {
             $s.Deleted.Add((Value '--ids'))
             if ($s.FailDelete) { $global:LASTEXITCODE = 1 }
         }
+        'containerapp revision' {
+            if ($a[2] -eq 'list') {
+                $result = @(@{ name = "$(Value '-n')--v1"; properties = @{ active = $true } })
+            }
+            else { $s.Mutations.Add("$($a[2]) $(Value '-n')") }
+        }
+        'containerapp replica' { $result = @() }
+        'storage account' {
+            $result = @{ deleteRetentionPolicy = @{ enabled = $s.Retention }; containerDeleteRetentionPolicy = $null }
+        }
+        'storage container-rm' {
+            $result = @(
+                foreach ($name in 'scans', 'crops', 'outputs', 'results', 'collections') {
+                    @{
+                        id = "$storage/blobServices/default/containers/$name"; name = $name
+                        hasImmutabilityPolicy = $false; hasLegalHold = $false; leaseStatus = 'Unlocked'
+                        immutableStorageWithVersioning = @{ enabled = $false }; publicAccess = 'None'
+                        etag = if ($s.Fresh) { 'new' } else { 'old' }
+                    }
+                }
+            )
+        }
+        'rest --method' {
+            $s.Mutations.Add("put $(Value '--url')")
+            if ($s.CreateCooldown -and (Value '--url') -like '*/containers/*?api-version=2023-05-01') {
+                $s.CreateCooldown = $false
+                $global:LASTEXITCODE = 1
+                Write-Error 'The specified container is being deleted. Try operation later.' -ErrorAction Continue
+                return
+            }
+            if ((Value '--url') -like '*/containers/*?api-version=2023-05-01') { $s.Fresh = $true }
+            $result = @{}
+        }
         'network private-endpoint' {
             $linked = if ((Value '--ids') -like '*cosmos-pe') { $cosmos } else { $storage }
             $result = @{ privateLinkServiceConnections = @(@{ privateLinkServiceId = $linked }) }
@@ -126,6 +168,7 @@ function az {
         'resource delete' {
             $s.Mutations.Add("delete $(Value '--ids')")
             $s.Deleted.Add((Value '--ids'))
+            if ($s.FailPurge) { $global:LASTEXITCODE = 1 }
         }
         default { throw "Unexpected Azure command: $a" }
     }
@@ -188,8 +231,34 @@ try {
     catch { $rejected = $_.Exception.Message -like '*Azure command failed*' }
     Assert $rejected 'Azure deletion errors must propagate.'
     Assert ((Get-Content $path -Raw | ConvertFrom-Json).status -eq 'StopFailed') 'Partial shutdown must retain restorable failure state.'
+    $s.FailDelete = $false; $s.Deleted.Clear(); $s.Mutations.Clear()
+    $receiptPath = Join-Path $root 'image-receipt.json'
+    & (Join-Path $PSScriptRoot 'clear-demo-images.ps1') -ReceiptPath $receiptPath -WhatIf
+    Assert ($s.Mutations.Count -eq 0) 'Image purge WhatIf must not mutate services or storage.'
+    $s.Retention = $true
+    $rejected = $false
+    try { & (Join-Path $PSScriptRoot 'clear-demo-images.ps1') -ReceiptPath $receiptPath -Confirm:$false }
+    catch { $rejected = $_.Exception.Message -like '*Permanent cleanup*' }
+    Assert ($rejected -and $s.Mutations.Count -eq 0) 'Retention must fail before any image deletion.'
+    $s.Retention = $false; $s.CreateCooldown = $true
+    $report = & (Join-Path $PSScriptRoot 'clear-demo-images.ps1') -ReceiptPath $receiptPath -Confirm:$false
+    Assert (($report -join "`n") -like '*verified fresh empty containers*') 'Purge must verify newly recreated containers before reporting success.'
+    $deletions = @($s.Mutations | Where-Object { $_ -like 'delete *' })
+    Assert ($deletions.Count -eq 5 -and -not @($deletions | Where-Object { $_ -match 'collections|other-demo|containerApps' }).Count) 'Image purge must erase only four image containers and the scan queue.'
+    Assert (@($s.Mutations | Where-Object { $_ -like 'activate *' }).Count -eq 2) 'Both original API/worker revisions must resume.'
+    Assert (@($s.Mutations | Where-Object { $_ -like '*roleAssignments/grant*' }).Count -eq 4) 'Image purge must restore exact container-scoped permissions.'
+    $receipt = ($report | Where-Object { $_ -like 'Receipt: *' }).Substring(9)
+    $null = & (Join-Path $PSScriptRoot 'clear-demo-images.ps1') -ResumePath $receipt -Confirm:$false
+    Assert ((Get-Content $receipt -Raw | ConvertFrom-Json).status -eq 'Recovered') 'Saved cleanup receipts must support explicit service recovery.'
+    $s.Mutations.Clear(); $s.FailPurge = $true
+    $failed = $false
+    try { & (Join-Path $PSScriptRoot 'clear-demo-images.ps1') -ReceiptPath (Join-Path $root 'image-failure.json') -Confirm:$false }
+    catch { $failed = $_.Exception.Message -like '*Azure command failed*' }
+    Assert ($failed -and @($s.Mutations | Where-Object { $_ -like 'activate *' }).Count -eq 2) 'A failed purge must report failure while repairing containers and resuming services.'
+    $s.FailPurge = $false
+    Remove-Item -LiteralPath $receipt
     $global:LASTEXITCODE = 0
-    Write-Output 'All lifecycle checks passed: two owners, WhatIf, exact deletion scope, restore steps, cross-user refusal, shared resources, ambiguity, repeated cycles and stop/restore failures.'
+    Write-Output 'All lifecycle and image-cleanup checks passed: owner isolation, WhatIf, exact deletion scope, repeated recovery, retention refusal, service resumption and permission restoration.'
 }
 finally {
     Get-ChildItem -LiteralPath $root -File | Remove-Item -Force
