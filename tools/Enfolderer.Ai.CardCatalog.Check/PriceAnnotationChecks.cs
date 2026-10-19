@@ -144,8 +144,9 @@ internal static class PriceAnnotationChecks
         var lettering = new List<byte[]>();
         foreach (var sample in new[]
         {
-            card with { Language = "en" },
-            card with { Language = "de", Name = string.Join(" ", Enumerable.Repeat("Very long translated name", 8)) },
+            card with { Language = "en", Prices = new CardPrices { Nonfoil = 10 } },
+            card with { Language = "de", Prices = new CardPrices { Nonfoil = 10 },
+                Name = string.Join(" ", Enumerable.Repeat("Very long translated name", 8)) },
             card with { Language = "de", Name = "Short", Prices = new CardPrices { Nonfoil = 123456789.99m, Foil = 999999999.99m } }
         })
         {
@@ -154,7 +155,8 @@ internal static class PriceAnnotationChecks
             PricedScanRenderer.Render(source, [sample], rendered);
             using var renderedImage = Image.Load<Rgba32>(rendered.ToArray());
             var pixels = new List<byte>();
-            for (var y = 466; y < 505; y++)
+            var printingTop = sample.Language == "en" ? 412 : 466;
+            for (var y = printingTop; y < printingTop + 39; y++)
                 for (var x = 55; x < 340; x++)
                 {
                     var pixel = renderedImage[x, y];
@@ -162,12 +164,25 @@ internal static class PriceAnnotationChecks
                 }
             lettering.Add(pixels.ToArray());
             if (sample.Language == "en")
-                check(!Enumerable.Range(412, 35).Any(y => Enumerable.Range(55, 285)
-                    .Any(x => renderedImage[x, y].R > 220 && renderedImage[x, y].G > 220 && renderedImage[x, y].B > 220)),
-                    "English card name is absent from the actual rendered title band");
+                check(renderedImage[60, 510] == image[60, 510],
+                    "English overlays remove the name band and expose the photo below the shorter panel");
         }
         check(lettering.Skip(1).All(p => p.SequenceEqual(lettering[0])),
             "actual set/number pixels are independent of English name omission, long foreign names and long price text");
+        foreach (var language in new[] { "en", "de" })
+        foreach (var compare in new[] { false, true })
+        {
+            source.Position = 0;
+            using var output = new MemoryStream();
+            PricedScanRenderer.Render(source, [card with { Language = language, Prices = new CardPrices { Nonfoil = 10 },
+                Ownership = compare ? new(1, 4, 1) : null }], output);
+            using var rendered = Image.Load<Rgba32>(output.ToArray());
+            var bottom = (int)Math.Ceiling(325.6 + 360 * (0.24 + (language == "en" ? 0 : 0.15)
+                + 0.19 + (compare ? 0.32 : 0)));
+            check(rendered[60, bottom - 2] != image[60, bottom - 2]
+                && rendered[60, bottom + 2] == image[60, bottom + 2],
+                $"{language}, comparison {compare}: rendered panel height includes only the active text bands");
+        }
         await CheckRelatedOwnershipAsync(check, card, source);
         check(PricedScanRenderer.OverlayConfidenceColor(card with { Resolution = "confirmed" }) == Color.LimeGreen
             && PricedScanRenderer.OverlayConfidenceColor(card) == Color.Gold

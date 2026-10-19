@@ -9,7 +9,8 @@ namespace Enfolderer.Ai.Imaging;
 
 internal static class CardContourDetector
 {
-    public static IReadOnlyList<DetectedCard> Detect(Image<Rgba32> source, CardDetectorOptions options)
+    public static IReadOnlyList<DetectedCard> Detect(Image<Rgba32> source, CardDetectorOptions options,
+        bool includeFrameAnchors = true)
     {
         var scale = Math.Min(1d, options.WorkingSize / (double)Math.Max(source.Width, source.Height));
         using var working = source.Clone(c => c.Resize(
@@ -106,7 +107,7 @@ internal static class CardContourDetector
                     (float)(Math.Atan((slopeA + slopeB) / 2) * 180 / Math.PI)));
             }
         // Extended-art title frames remain measurable when the physical border blends into black.
-        foreach (var rect in bars)
+        foreach (var rect in bars.Where(_ => includeFrameAnchors))
         {
             var longSide = Math.Max(rect.Size.Width, rect.Size.Height);
             var corners = rect.Points();

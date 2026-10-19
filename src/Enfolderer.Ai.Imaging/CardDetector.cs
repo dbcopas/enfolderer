@@ -184,6 +184,15 @@ public static class CardDetector
         if (opts.Arrangement is not null)
         {
             var arrangement = CardArrangementDetector.Detect(source, opts.Arrangement);
+            if (arrangement.Count is 1 or 2)
+            {
+                var loose = RecoverLooseCards(source, arrangement, opts);
+                if (loose.Count > 0)
+                {
+                    recoveryDiagnostic = $"Physical-card recovery: measured neighbouring outlines recovered {loose.Count} loose cards from {arrangement.Count} arrangement regions.";
+                    return loose;
+                }
+            }
             var coverage = arrangement.Sum(card => Area(card.Quad)) / (fullWidth * (double)fullHeight);
             if (coverage < 0.15)
             {
@@ -301,6 +310,77 @@ public static class CardDetector
     {
         var (_, _, w, h) = quad.BoundingBox();
         return w * h;
+    }
+
+    private static IReadOnlyList<DetectedCard> RecoverLooseCards(
+        Image<Rgba32> source, IReadOnlyList<DetectedCard> anchors, CardDetectorOptions options)
+    {
+        var recovered = anchors.ToList();
+        foreach (var angle in new[] { 0, 90, 180, 270 })
+        {
+            using var oriented = source.Clone(c => c.Rotate(angle));
+            var candidates = CardContourDetector.Detect(oriented, options, includeFrameAnchors: false).Select(c => c with
+            {
+                Quad = new CardQuad(c.Quad.Points.Select(p => angle switch
+                {
+                    90 => new ImagePoint(p.Y, source.Height - 1 - p.X),
+                    180 => new ImagePoint(source.Width - 1 - p.X, source.Height - 1 - p.Y),
+                    270 => new ImagePoint(source.Width - 1 - p.Y, p.X),
+                    _ => p
+                }).ToArray())
+            }).ToArray();
+            // A sideways card can become two portrait artwork fragments. Replace only when
+            // complete physical contours cover every fragment and substantially increase area.
+            if (candidates.Length is > 0 and <= 3
+                && candidates.Sum(c => Area(c.Quad)) > anchors.Sum(c => Area(c.Quad)) * 1.3
+                && candidates.Min(c => Area(c.Quad)) > anchors.Max(c => Area(c.Quad)) * 1.5
+                && anchors.All(a =>
+                {
+                    var r = a.Quad.BoundingBox();
+                    return candidates.Any(c =>
+                    {
+                        var b = c.Quad.BoundingBox();
+                        var intersection = Math.Max(0, Math.Min(r.X + r.Width, b.X + b.Width) - Math.Max(r.X, b.X))
+                            * Math.Max(0, Math.Min(r.Y + r.Height, b.Y + b.Height) - Math.Max(r.Y, b.Y));
+                        return intersection > r.Width * r.Height * 0.7;
+                    });
+                }))
+                return SortMeasuredRows(candidates);
+            foreach (var candidate in candidates)
+            {
+                var b = candidate.Quad.BoundingBox();
+                if (recovered.Any(a =>
+                {
+                    var r = a.Quad.BoundingBox();
+                    var intersection = Math.Max(0, Math.Min(r.X + r.Width, b.X + b.Width) - Math.Max(r.X, b.X))
+                        * Math.Max(0, Math.Min(r.Y + r.Height, b.Y + b.Height) - Math.Max(r.Y, b.Y));
+                    return intersection > Math.Min(Area(a.Quad), Area(candidate.Quad)) * 0.15;
+                })) continue;
+                var neighbour = anchors.FirstOrDefault(a =>
+                {
+                    var r = a.Quad.BoundingBox();
+                    if (b.Width / r.Width is < 0.75 or > 1.35 || b.Height / r.Height is < 0.75 or > 1.35)
+                        return false;
+                    var dx = Math.Abs(b.X + b.Width / 2 - r.X - r.Width / 2) / r.Width;
+                    var dy = Math.Abs(b.Y + b.Height / 2 - r.Y - r.Height / 2) / r.Height;
+                    return dx is > 0.8 and < 1.6 && dy < 0.2
+                        || dy is > 0.8 and < 1.6 && dx < 0.2;
+                });
+                if (neighbour is null) continue;
+                var reference = neighbour.Quad.Points;
+                var dx = reference[1].X - reference[0].X;
+                var dy = reference[1].Y - reference[0].Y;
+                var points = candidate.Quad.Points;
+                var start = Enumerable.Range(0, 4).MaxBy(i =>
+                    (points[(i + 1) % 4].X - points[i].X) * dx
+                    + (points[(i + 1) % 4].Y - points[i].Y) * dy);
+                recovered.Add(candidate with
+                {
+                    Quad = new CardQuad(Enumerable.Range(0, 4).Select(i => points[(start + i) % 4]).ToArray())
+                });
+            }
+        }
+        return recovered.Count > anchors.Count ? SortMeasuredRows(recovered) : [];
     }
 
     private static IReadOnlyList<DetectedCard> RecoverWholeCards(

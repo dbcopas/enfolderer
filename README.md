@@ -166,8 +166,13 @@ an opted-in scan; removing it mid-scan produces explicit unknown ownership, not 
 When collection comparison is enabled, missing exact printings get red overlay backgrounds;
 all cards show exact-printing and all-sets quantities, including zero. With comparison disabled,
 neither ownership line is printed and the overlay is shortened to remove that space, with the
-confidence dot moved to its new lower-right corner. Genuine lookup failures show `unavailable`,
+confidence dot moved to its new lower-right corner. English cards also omit the name band;
+panel height follows the displayed price, foreign-name, printing and ownership lines.
+Genuine lookup failures show `unavailable`,
 not amber or a question mark.
+For small loose-card photos, recovery checks physical outlines at all four rotations. It can
+recover a measured neighbouring card or replace supported artwork fragments with complete
+outlines, without projecting title bars into unmeasured neighbouring slots.
 Double-faced cards still require two copies. Existing rendered images are
 unchanged by later snapshot replacement/deletion. Desktop scans keep their local ownership path.
 Older MTG Studio rows can have legacy set codes and no collector number (for example `VI` rather

@@ -40,7 +40,13 @@ public static class PricedScanRenderer
                 var padding = panelWidth * 0.04f;
                 var radius = panelWidth * 0.035f;
                 var priceHeight = panelWidth * 0.24f;
-                var panelHeight = panelWidth * (card.Ownership is null ? 0.58f : 0.90f);
+                var title = DescribeOverlayName(card);
+                var printing = DescribeOverlayPrinting(card);
+                var titleY = panel.Length > 0 ? priceHeight : padding;
+                var printingY = titleY + (title.Length > 0 ? panelWidth * 0.15f : 0);
+                var ownershipY = printingY + (printing.Length > 0 ? panelWidth * 0.19f : 0);
+                var panelHeight = Math.Max(panelWidth * 0.18f,
+                    ownershipY + (card.Ownership is not null ? panelWidth * 0.32f : 0));
                 var textWidth = panelWidth - padding * 3 - radius * 2;
                 var textHeight = priceHeight - padding * 2;
                 var priceFont = FitOverlayFont(family, panel, textWidth, textHeight);
@@ -52,21 +58,19 @@ public static class PricedScanRenderer
                 if (panel.Length > 0)
                     canvas.Mutate(c => c.DrawText(panel, priceFont, Color.White, new PointF(
                         x + padding - textBounds.X, panelY + (priceHeight - textBounds.Height) / 2 - textBounds.Y)));
-                var title = DescribeOverlayName(card);
                 if (title.Length > 0)
                 {
                     var titleFont = FitOverlayFont(family, title, textWidth, panelWidth * 0.14f - padding);
                     var titleBounds = TextMeasurer.MeasureBounds(title, new TextOptions(titleFont));
                     canvas.Mutate(c => c.DrawText(title, titleFont, Color.White,
-                        new PointF(x + padding - titleBounds.X, panelY + priceHeight - titleBounds.Y)));
+                        new PointF(x + padding - titleBounds.X, panelY + titleY - titleBounds.Y)));
                 }
-                var printing = DescribeOverlayPrinting(card);
                 if (printing.Length > 0)
                 {
                     var printingFont = FitOverlayFont(family, printing, textWidth, panelWidth * 0.12f - padding);
                     var printingBounds = TextMeasurer.MeasureBounds(printing, new TextOptions(printingFont));
                     canvas.Mutate(c => c.DrawText(printing, printingFont, Color.White,
-                        new PointF(x + padding - printingBounds.X, panelY + panelWidth * 0.39f - printingBounds.Y)));
+                        new PointF(x + padding - printingBounds.X, panelY + printingY - printingBounds.Y)));
                 }
                 if (card.Ownership is { } ownership)
                 {
@@ -74,7 +78,7 @@ public static class PricedScanRenderer
                     var ownershipFont = FitOverlayFont(family, ownershipText, textWidth, panelWidth * 0.24f);
                     var ownershipBounds = TextMeasurer.MeasureBounds(ownershipText, new TextOptions(ownershipFont));
                     canvas.Mutate(c => c.DrawText(ownershipText, ownershipFont, Color.White,
-                        new PointF(x + padding - ownershipBounds.X, panelY + panelWidth * 0.58f - ownershipBounds.Y)));
+                        new PointF(x + padding - ownershipBounds.X, panelY + ownershipY - ownershipBounds.Y)));
                 }
                 if (card != highest && ranks.TryGetValue(card.Index, out var rank))
                 {

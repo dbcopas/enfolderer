@@ -445,6 +445,7 @@ internal static class ScanReliabilityChecks
         await CheckSidewaysMobilePhotoAsync(check, root, "mobile-upload.jpg");
         await CheckOmittedBinderCardAsync(check, root);
         await CheckBottomTitleCardAsync(check, root);
+        CheckLoosePair(check, root);
         var total = 0;
         for (var page = 1; page <= 7; page++)
         {
@@ -517,6 +518,46 @@ internal static class ScanReliabilityChecks
             blank.SaveAsPng(encoded);
             encoded.Position = 0;
             check(CardDetector.Detect(encoded).Count == 0, $"blank {color} surface does not invent a card grid");
+        }
+    }
+
+    private static void CheckLoosePair(Action<bool, string> check, string root)
+    {
+        using var original = SixLabors.ImageSharp.Image.Load<Rgba32>(Path.Combine(root, "01", "loose-pair-upload.jpg"));
+        foreach (var angle in new[] { 0, 90, 180, 270 })
+        {
+            using var rotated = original.Clone(c => c.Rotate(angle));
+            using var input = new MemoryStream(Png(rotated));
+            var cards = CardDetector.Detect(input);
+            check(cards.Count == 2, $"loose pair at {angle} degrees: both physical cards recovered");
+            foreach (var target in new[] { new ImagePoint(1590, 320), new ImagePoint(1670, 1590) })
+            {
+                var point = angle switch
+                {
+                    90 => new ImagePoint(original.Height - 1 - target.Y, target.X),
+                    180 => new ImagePoint(original.Width - 1 - target.X, original.Height - 1 - target.Y),
+                    270 => new ImagePoint(target.Y, original.Width - 1 - target.X),
+                    _ => target
+                };
+                check(cards.Count(card =>
+                {
+                    var cross = Enumerable.Range(0, 4).Select(i =>
+                    {
+                        var a = card.Quad.Points[i];
+                        var b = card.Quad.Points[(i + 1) % 4];
+                        return (b.X - a.X) * (point.Y - a.Y) - (b.Y - a.Y) * (point.X - a.X);
+                    }).ToArray();
+                    return cross.All(x => x >= 0) || cross.All(x => x <= 0);
+                }) == 1, $"loose pair at {angle} degrees: Naked Singularity title/footer included in exactly one crop");
+            }
+            using var single = original.Clone();
+            for (var y = 0; y < single.Height; y++)
+            for (var x = 1230; x < single.Width; x++)
+                single[x, y] = original[x, y % 100];
+            single.Mutate(c => c.Rotate(angle));
+            using var singleInput = new MemoryStream(Png(single));
+            check(CardDetector.Detect(singleInput).Count == 1,
+                $"single loose card at {angle} degrees does not invent a neighbour");
         }
     }
 
