@@ -104,6 +104,9 @@ jobs.MapPost("/", async (
     ScanPlatformOptions platform,
     CancellationToken ct) =>
 {
+    if (!string.IsNullOrWhiteSpace(request.GameHint) && !CardGames.IsSupported(CardGames.Normalize(request.GameHint)))
+        return Results.BadRequest(new { error = "Only Magic: The Gathering (mtg) scans are supported." });
+
     var jobId = Guid.NewGuid().ToString("n");
     var owner = JobOwnerFilter.ReadOwner(context.User)
         ?? throw new InvalidOperationException("The job ownership filter must validate the caller before job creation.");
@@ -128,7 +131,7 @@ jobs.MapPost("/", async (
             Status = ScanJobStatus.Pending,
             BlobPath = blobPath,
             UploadExpiresAt = uploadExpiresAt,
-            GameHint = string.IsNullOrWhiteSpace(request.GameHint) ? null : CardGames.Normalize(request.GameHint)
+            GameHint = CardGames.Magic
         };
 
         await store.CreateAsync(job, ct);

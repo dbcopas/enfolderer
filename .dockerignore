@@ -3,6 +3,9 @@
 # image needs and which would otherwise be uploaded to ACR on every build.
 *
 !src/
+!src/**
 
 src/**/bin/
+src/**/bin/**
 src/**/obj/
+src/**/obj/**

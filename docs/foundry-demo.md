@@ -1,5 +1,10 @@
 # Foundry multi-project demo: geometry vs. identification
 
+> This walkthrough describes `main`. This cost-optimized branch intentionally does not implement
+> team isolation, separate ACA environments or private endpoints. Use the
+> [branch deployment guide](azure-setup.md) instead; the demo topology switches below are not
+> supported here.
+
 This repository contains a working example of **two Azure AI Foundry projects owned by two
 different teams**, cooperating on one workload while being unable to reach into each other's
 assets. The workload is the Enfolderer card scanner: photograph a page of collectible cards, get

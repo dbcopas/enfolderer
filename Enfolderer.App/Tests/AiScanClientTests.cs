@@ -84,11 +84,11 @@ public static class AiScanClientTests
             AiScanConfig.InitializeFromDefaults(directory);
             failures += Check(File.ReadAllText(local) == File.ReadAllText(shipped),
                 "fresh installation initializes from shipped defaults");
-            File.AppendAllText(local, Environment.NewLine + "game_hint=pokemon");
+            File.AppendAllText(local, Environment.NewLine + "game_hint=magic");
             var customized = File.ReadAllText(local);
             AiScanConfig.InitializeFromDefaults(directory);
             failures += Check(File.ReadAllText(local) == customized
-                && AiScanConfig.Load(local).GameHint == "pokemon",
+                && AiScanConfig.Load(local).GameHint == "mtg",
                 "existing local configuration is preserved");
             return failures;
         }
@@ -439,6 +439,26 @@ public static class AiScanClientTests
             "api base url gets a trailing slash so relative paths resolve");
         failures += Check(config.Scopes.Length == 1 && config.Scopes[0] == "api://app-id/Scan.Submit", "scope parsed");
         failures += Check(config.GameHint == "mtg", "game hint parsed");
+        foreach (var hint in new[] { "pokemon", "pokémon", "ptcg", "yugioh", "lorcana", "invalid" })
+        {
+            var rejected = false;
+            try
+            {
+                AiScanConfig.Parse(new Dictionary<string, string>
+                {
+                    ["api_base_url"] = "https://scan.example.com",
+                    ["tenant_id"] = "tenant",
+                    ["client_id"] = "client",
+                    ["scope"] = "api://app-id/Scan.Submit",
+                    ["game_hint"] = hint
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                rejected = ex.Message.Contains("Only Magic: The Gathering");
+            }
+            failures += Check(rejected, $"unsupported '{hint}' desktop configuration is rejected");
+        }
         failures += Check(!config.UseDeviceCode, "device code defaults to off");
 
         // Relative paths must resolve under the base URL, not replace it.

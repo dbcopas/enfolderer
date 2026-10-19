@@ -19,12 +19,11 @@
       1. The deployment, and from it the name prefix every resource is named after.
       2. The Foundry account and project endpoints, read from the resource groups rather than the
          deployment outputs, so a deployment that failed once still gives usable answers.
-      3. Each team's MCP server URLs, read from the container apps themselves. These cannot be
-         composed by hand: every team has its own Container Apps environment and so its own random
-         default domain, and a URL built from the wrong one fails at agent run time with a 424.
+      3. MCP server URLs, read from the container apps themselves rather than assuming an
+         environment's generated default domain.
       4. Verifies the credential-free MCP resource registration and its v2 token audience.
-      5. Provisions the three live named agents with distinct agent identities and secretless
-         AgenticIdentityToken MCP connections, each restricted to its owning team's tools.
+      5. Provisions the two live named agents with distinct agent identities and secretless
+         AgenticIdentityToken MCP connections, each restricted to its agent's tools.
       6. Builds and deploys images with named agent references and exact per-agent caller IDs.
          SkipImages is allowed only after the first Responses migration.
 
@@ -68,7 +67,7 @@
 
 [CmdletBinding()]
 param(
-    [string] $DeploymentName = 'enfolderer-scan',
+    [string] $DeploymentName = 'enfolderer-cost',
     [string] $NamePrefix,
     [switch] $SkipImages,
     [switch] $SkipAgents,
@@ -210,10 +209,8 @@ then re-run naming it:
             Locate a Foundry project by name and return its data-plane endpoint.
 
             .DESCRIPTION
-            The template has two topologies - one shared account with two projects, or an account
-            per team - and the demo is usually run on the first and explained in terms of the
-            second. Rather than ask which, search the team's own resource group first and then the
-            platform one, which covers both without needing to know.
+            The shared account lives in the platform resource group. Component resource groups
+            remain discovery candidates for compatibility.
 
             The endpoint is built from the account's custom subdomain, not from the account name.
             They are usually the same string and are allowed not to be, and the data plane only
@@ -268,11 +265,8 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
             The https URL an MCP container app answers on, or $null if it is not deployed.
 
             .DESCRIPTION
-            Always read, never composed. Each team has its own Container Apps environment, and an
-            environment's default domain carries a random suffix chosen when it was created - so
-            the same server name under a different team is a completely different hostname. A URL
-            assembled from the wrong team's domain resolves to nothing, and Foundry reports that as
-            a 424 at run time rather than at provisioning time, long after the mistake was made.
+            Read the deployed hostname: the shared environment's default domain has a generated
+            suffix, and an incorrect hostname fails only when Foundry invokes the tool.
         #>
         param([Parameter(Mandatory)] [string] $Name, [Parameter(Mandatory)] [string] $ResourceGroup)
 
@@ -286,8 +280,7 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
     $idMcp  = @{}
     foreach ($s in @(
         @{ Name = 'mcp-imaging';            Rg = $geoRg; Map = $geoMcp },
-        @{ Name = 'mcp-cardcatalog-mtg';     Rg = $idRg;  Map = $idMcp },
-        @{ Name = 'mcp-cardcatalog-pokemon'; Rg = $idRg;  Map = $idMcp }
+        @{ Name = 'mcp-cardcatalog-mtg';     Rg = $idRg;  Map = $idMcp }
     )) {
         $url = Get-McpUrl -Name $s.Name -ResourceGroup $s.Rg
         if ($url) {
@@ -325,16 +318,16 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
         return
     }
 
-    Write-Step '6. Provision Team A (cardgeo)'
+    Write-Step '6. Provision geometry agents (cardgeo)'
     $audience = & (Join-Path $PSScriptRoot 'configure-mcp-audience.ps1') -NamePrefix $NamePrefix
     $provision = Join-Path $repoRoot 'agents/provision-foundry.ps1'
     $teamA = @(& $provision -ProjectEndpoint $geo.Endpoint -Path (Join-Path $repoRoot 'agents/cardgeo') `
         -Only CardBoundaryAgent -McpServerUrl $geoMcp -McpAudience $audience)
     $teamA | Format-Table Name, Id, File -AutoSize
 
-    Write-Step '7. Provision Team B (cardid)'
+    Write-Step '7. Provision identification agents (cardid)'
     $teamB = @(& $provision -ProjectEndpoint $idn.Endpoint -Path (Join-Path $repoRoot 'agents/cardid') `
-        -Only MtgCardIdAgent, PokemonCardIdAgent -McpServerUrl $idMcp -McpAudience $audience)
+        -Only MtgCardIdAgent -McpServerUrl $idMcp -McpAudience $audience)
     $teamB | Format-Table Name, Id, File -AutoSize
 
     function Get-AgentId { param([string] $Name)
@@ -349,7 +342,6 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
     $ids = @{
         BoundaryAgentId = Get-AgentId 'CardBoundaryAgent'
         MtgAgentId      = Get-AgentId 'MtgCardIdAgent'
-        PokemonAgentId  = Get-AgentId 'PokemonCardIdAgent'
     }
     $pass = @{
         DeploymentName = $DeploymentName
@@ -357,7 +349,6 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
         McpAudience = $audience
         BoundaryAgentPrincipalId = ($teamA | Where-Object Name -eq CardBoundaryAgent).PrincipalId
         MtgAgentPrincipalId = ($teamB | Where-Object Name -eq MtgCardIdAgent).PrincipalId
-        PokemonAgentPrincipalId = ($teamB | Where-Object Name -eq PokemonCardIdAgent).PrincipalId
     }
     if (-not $SkipImages) { $pass['Tag'] = $tag }
     foreach ($k in $ids.Keys) { if ($ids[$k]) { $pass[$k] = $ids[$k] } }

@@ -1,11 +1,9 @@
-# Team B ("Identification") — Azure AI Foundry project: cardid
-# Deployment status: live (deployed)
+# Identification component in the shared Foundry account.
 name: MtgCardIdAgent
 project: cardid
-owner: team-b-identification
+owner: enfolderer
 model:
-  deployment: gpt-4o
-  temperature: 0
+  deployment: gpt-5-mini
   response_format: json_object
 description: >
   Identifies a single Magic: The Gathering card from a perspective-corrected crop, using its own

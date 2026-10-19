@@ -3,24 +3,18 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "namePrefix": {
-      "value": "enf-demo"
+      "value": "enf-cost"
     },
     "location": {
-      "value": "eastus2"
+      "value": "swedencentral"
     },
-    "teamAGroupObjectId": {
-      "value": "00000000-0000-0000-0000-000000000000"
-    },
-    "teamBGroupObjectId": {
+    "ownerObjectId": {
       "value": "00000000-0000-0000-0000-000000000000"
     },
     "apiClientId": {
       "value": "00000000-0000-0000-0000-000000000000"
     },
-    "singleAccount": {
-      "value": true
-    },
-    "grantIdentificationAccessToGeometry": {
+    "cosmosFreeTier": {
       "value": true
     },
     "mcpAudience": {
@@ -31,9 +25,6 @@
     },
     "mtgAgentId": {
       "value": "MtgCardIdAgent"
-    },
-    "pokemonAgentId": {
-      "value": "PokemonCardIdAgent"
     }
   }
 }

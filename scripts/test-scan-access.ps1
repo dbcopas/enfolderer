@@ -22,8 +22,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not read Foundry projects.' }
 
 foreach ($entry in @(
     @{ Group = "$NamePrefix-cardgeo"; App = "$NamePrefix-mcp-imaging"; Project = 'cardgeo'; Agent = 'CardBoundaryAgent'; Connection = 'mcp-imaging-agent-identity' },
-    @{ Group = "$NamePrefix-cardid"; App = "$NamePrefix-mcp-cardcatalog-mtg"; Project = 'cardid'; Agent = 'MtgCardIdAgent'; Connection = 'mcp-cardcatalog-mtg-agent-identity' },
-    @{ Group = "$NamePrefix-cardid"; App = "$NamePrefix-mcp-cardcatalog-pokemon"; Project = 'cardid'; Agent = 'PokemonCardIdAgent'; Connection = 'mcp-cardcatalog-pokemon-agent-identity' }
+    @{ Group = "$NamePrefix-cardid"; App = "$NamePrefix-mcp-cardcatalog-mtg"; Project = 'cardid'; Agent = 'MtgCardIdAgent'; Connection = 'mcp-cardcatalog-mtg-agent-identity' }
 )) {
     $app = az containerapp show -g $entry.Group -n $entry.App -o json | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw "Could not read $($entry.App)." }

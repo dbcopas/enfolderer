@@ -179,7 +179,6 @@ $apps = @(
     [pscustomobject]@{ Rg = $platformRg; Name = "$Prefix-worker" }
     [pscustomobject]@{ Rg = $geoRg;      Name = "$Prefix-mcp-imaging" }
     [pscustomobject]@{ Rg = $idRg;       Name = "$Prefix-mcp-cardcatalog-mtg" }
-    [pscustomobject]@{ Rg = $idRg;       Name = "$Prefix-mcp-cardcatalog-pokemon" }
 )
 
 foreach ($app in $apps) {

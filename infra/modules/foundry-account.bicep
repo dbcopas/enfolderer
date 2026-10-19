@@ -1,10 +1,4 @@
-// One Azure AI Foundry account: the container for projects, model deployments and account-wide
-// settings.
-//
-// The account is the outer isolation tier. Everything defined here is shared by every project
-// inside it — model deployments and their quota, local-auth and networking settings, and the blast
-// radius of a mistake. Projects isolate agents, connections and authoring; they do not isolate any
-// of this. See docs/foundry-demo.md for the scenario that makes the difference visible.
+// Shared Foundry account and pay-per-token model deployment.
 targetScope = 'resourceGroup'
 
 @description('Foundry account name (must be globally unique).')
@@ -18,15 +12,10 @@ param location string = resourceGroup().location
 @description('Model deployments to create. Shared by every project in this account.')
 param modelDeployments array = [
   {
-    name: 'gpt-4o'
-    model: 'gpt-4o'
-    version: '2024-11-20'
-    // Capacity is thousands of tokens per minute, and it is spent per card: a page of nine crops
-    // sent at high detail is tens of thousands of tokens in under a minute. At 10 the first few
-    // cards of a page identify and the rest come back 'rate_limit_exceeded', which reads as the
-    // photograph being at fault when it is the quota. This is also the sharpest illustration of
-    // the account being the outer isolation tier — Team A and Team B draw on this one number, so
-    // a boundary demo running both projects at once needs headroom for both.
+    name: 'gpt-5-mini'
+    model: 'gpt-5-mini'
+    version: '2025-08-07'
+    // Keep 100k TPM headroom for multi-card scans; this is not provisioned throughput.
     capacity: 100
   }
 ]

@@ -9,6 +9,8 @@ param namePrefix string
 @description('Location for the data-plane resources.')
 param location string = resourceGroup().location
 
+param enableFreeTier bool = true
+
 @description('Job document time-to-live in seconds. Demo jobs expire after a week.')
 param jobTtlSeconds int = 604800
 
@@ -21,12 +23,12 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
   properties: {
-    // Private-only, which is both corporate policy in the tenant this demo was built against and
-    // the more honest posture for a store of customer photographs. Everything that reads or writes
-    // blobs reaches the account through the private endpoints in modules/network.bicep; nothing
-    // touches it from the public internet, including the desktop app, which uploads through the
-    // API. This is permanent: no client is ever given a blob URL to write to.
-    publicNetworkAccess: 'Disabled'
+    // Public transport, Entra-only data access. Clients still upload through the API.
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'None'
+    }
     // The API and worker present an Entra identity, so shared keys are switched off: there is no
     // account key to leak, and a private endpoint on its own would not have prevented that.
     allowSharedKeyAccess: false
@@ -83,11 +85,8 @@ resource cosmos 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
     databaseAccountOfferType: 'Standard'
     // Job state is only ever read through the data-plane RBAC roles below.
     disableLocalAuth: true
-    // Private-only, matching the storage account: job documents hold the customer's scan history,
-    // and are reached over the private endpoint in modules/network.bicep. Stated explicitly rather
-    // than left to default, because a policy-governed subscription may disable public access
-    // anyway — and without the endpoint below, that silently cuts the API off from its job store.
-    publicNetworkAccess: 'Disabled'
+    publicNetworkAccess: 'Enabled'
+    enableFreeTier: enableFreeTier
     consistencyPolicy: { defaultConsistencyLevel: 'Session' }
     locations: [
       {

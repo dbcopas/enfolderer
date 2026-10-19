@@ -1,9 +1,4 @@
-// The MCP servers one team owns, hosted over HTTPS as container apps.
-//
-// They are ASP.NET sites rather than the stdio processes they started as, because the Foundry
-// agent data plane will only accept an https:// URL for a tool server. Hosting them in the owning
-// team's environment, in the owning team's resource group, keeps the blast radius honest: Team B
-// cannot redeploy, reconfigure or read the logs of Team A's imaging server, and vice versa.
+// Authenticated HTTPS MCP servers in the shared Consumption environment.
 targetScope = 'resourceGroup'
 
 @description('Prefix for all resource names, e.g. "enf-demo".')
@@ -11,7 +6,7 @@ param namePrefix string
 
 param location string = resourceGroup().location
 
-@description('Resource id of this team\'s Container Apps environment.')
+@description('Resource id of the shared Container Apps environment.')
 param environmentId string
 
 @description('Login server of the container registry, e.g. myacr.azurecr.io.')
@@ -92,8 +87,8 @@ resource apps 'Microsoft.App/containerApps@2024-03-01' = [for server in servers:
           name: server.name
           image: hasImages ? '${registryLoginServer}/enfolderer/${server.image}:${imageTag}' : placeholder
           resources: {
-            cpu: json('0.25')
-            memory: '0.5Gi'
+            cpu: server.name == 'mcp-imaging' ? json('0.5') : json('0.25')
+            memory: server.name == 'mcp-imaging' ? '1Gi' : '0.5Gi'
           }
           env: concat(
             [

@@ -24,13 +24,11 @@ public sealed class ScanPipelineOptions
     public string? IdentificationProjectEndpoint { get; set; }
 
     /// <summary>
-    /// Agent id per game, e.g. <c>{"mtg": "MtgCardIdAgent", "pokemon": "PokemonCardIdAgent"}</c>.
-    /// A game with no entry here has no deployed agent and is reported per card in the result.
+    /// MTG identification agent, keyed by <c>mtg</c> for configuration compatibility.
     /// </summary>
     public Dictionary<string, string> IdentificationAgentIds { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
-        [CardGames.Magic] = "MtgCardIdAgent",
-        [CardGames.Pokemon] = "PokemonCardIdAgent"
+        [CardGames.Magic] = "MtgCardIdAgent"
     };
 
     /// <summary>Data-plane API version used for the Foundry Agents endpoints.</summary>

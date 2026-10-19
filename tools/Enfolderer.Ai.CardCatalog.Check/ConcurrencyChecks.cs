@@ -15,6 +15,24 @@ internal static class ConcurrencyChecks
 {
     public static async Task RunAsync(Action<bool, string> check)
     {
+        var unsupportedStore = new RecordingStore();
+        await unsupportedStore.CreateAsync(new ScanJobDocument
+        {
+            Id = "unsupported", JobId = "unsupported", BlobPath = "scan.png", GameHint = CardGames.Pokemon
+        });
+        var unsupportedImages = new Images();
+        var unsupportedAgent = new IdentificationAgent();
+        var unsupportedProcessor = new ScanJobProcessor(
+            unsupportedStore, unsupportedImages, new Boundaries(), [unsupportedAgent],
+            new ScanPipelineOptions(), new Credential(), new ScanPlatformOptions(),
+            NullLogger<ScanJobProcessor>.Instance);
+        await unsupportedProcessor.ProcessAsync(new ScanJobMessage("unsupported", "scan.png", CardGames.Pokemon), default);
+        var unsupportedJob = await unsupportedStore.GetAsync("unsupported");
+        check(unsupportedJob?.Status == ScanJobStatus.Failed
+            && unsupportedJob.Error!.Contains("Only Magic: The Gathering")
+            && unsupportedImages.Reads == 0 && unsupportedAgent.Completed.IsEmpty,
+            "legacy unsupported queued jobs fail explicitly before image downloads or agent calls");
+
         foreach (var concurrency in new[] { 1, 2, 3 })
         {
             var store = new RecordingStore();
@@ -126,8 +144,10 @@ internal static class ConcurrencyChecks
 
     private sealed class Images : IScanImageStore
     {
+        public int Reads { get; private set; }
         public Task<Stream> OpenReadAsync(string path, CancellationToken ct = default)
         {
+            Reads++;
             using var image = new Image<Rgba32>(400, 140);
             var stream = new MemoryStream();
             image.SaveAsPng(stream);

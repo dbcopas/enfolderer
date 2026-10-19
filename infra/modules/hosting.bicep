@@ -1,4 +1,4 @@
-// Hosting for the job API and the pipeline worker, as container apps in the platform team's
+// Hosting for the job API and the pipeline worker in the shared Container Apps
 // environment. Both run with a user-assigned managed identity so that no connection string or
 // storage key ever exists in configuration, and so the identities and their role assignments
 // survive a redeploy or a recreated app.
@@ -7,7 +7,7 @@ targetScope = 'resourceGroup'
 param namePrefix string
 param location string = resourceGroup().location
 
-@description('Resource id of the platform team\'s Container Apps environment.')
+@description('Resource id of the shared Container Apps environment.')
 param environmentId string
 
 @description('Login server of the container registry, e.g. myacr.azurecr.io.')
@@ -40,10 +40,10 @@ param scanDiagnosticUserObjectIds string = ''
 param scanAllowanceAdminUserObjectIds string = ''
 param apiCustomDomains array = []
 
-@description('Endpoint of Team A\'s geometry project.')
+@description('Endpoint of the geometry project.')
 param geometryProjectEndpoint string
 
-@description('Endpoint of Team B\'s identification project.')
+@description('Endpoint of the identification project.')
 param identificationProjectEndpoint string
 
 @description('Resource id of the API\'s user-assigned managed identity.')
@@ -59,14 +59,11 @@ param workerIdentityId string
 param workerIdentityClientId string
 
 // Named agent references are durable deployment parameters, not classic assistant IDs.
-@description('Named Foundry agent for Team A\'s boundary detection.')
+@description('Named Foundry agent for boundary detection.')
 param boundaryAgentId string = 'CardBoundaryAgent'
 
 @description('Named Foundry agent for Magic identification.')
 param mtgAgentId string = 'MtgCardIdAgent'
-
-@description('Named Foundry agent for Pokemon identification.')
-param pokemonAgentId string = 'PokemonCardIdAgent'
 
 // Until the first `az acr build`, there is nothing to pull. The placeholder is Microsoft's own
 // sample image; it does nothing useful, and the app is meant to be pointed at a real tag straight
@@ -123,7 +120,7 @@ var sharedSettings = [
   }
 ]
 
-resource api 'Microsoft.App/containerApps@2024-03-01' = {
+resource api 'Microsoft.App/containerApps@2025-01-01' = {
   name: '${namePrefix}-api'
   location: location
   identity: {
@@ -193,16 +190,14 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        // Not zero: a scan starts with the desktop app waiting on POST /jobs, and a cold start
-        // there is the first thing anyone watching the demo would see.
-        minReplicas: 1
+        minReplicas: 0
         maxReplicas: 3
       }
     }
   }
 }
 
-resource worker 'Microsoft.App/containerApps@2024-03-01' = {
+resource worker 'Microsoft.App/containerApps@2025-01-01' = {
   name: '${namePrefix}-worker'
   location: location
   identity: {
@@ -227,8 +222,8 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'worker'
           image: workerImage
           resources: {
-            cpu: json('0.5')
-            memory: '1Gi'
+            cpu: json('1.0')
+            memory: '2Gi'
           }
           env: concat(sharedSettings, [
             {
@@ -259,18 +254,28 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ScanPipeline__IdentificationAgentIds__mtg'
               value: mtgAgentId
             }
-            {
-              name: 'ScanPipeline__IdentificationAgentIds__pokemon'
-              value: pokemonAgentId
-            }
           ])
         }
       ]
       scale: {
-        // Fixed at one replica. The queue would happily drive a KEDA scaler, but a second worker
-        // would race the first for the same job and the demo has nothing like the load to need it.
-        minReplicas: 1
+        minReplicas: 0
         maxReplicas: 1
+        rules: [
+          {
+            name: 'scan-queue'
+            custom: {
+              type: 'azure-queue'
+              identity: workerIdentityId
+              metadata: {
+                accountName: first(split(replace(queueAccountUrl, 'https://', ''), '.'))
+                queueName: 'scan-jobs'
+                queueLength: '1'
+                // Include invisible leased messages so active scans keep the worker running.
+                queueLengthStrategy: 'all'
+              }
+            }
+          }
+        ]
       }
     }
   }

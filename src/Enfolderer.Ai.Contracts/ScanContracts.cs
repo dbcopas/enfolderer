@@ -15,7 +15,7 @@ public enum ScanJobStatus
     Uploaded,
     /// <summary>Team A's boundary agent is locating card quadrilaterals.</summary>
     DetectingBoundaries,
-    /// <summary>Team B's per-game identification agents are running over the crops.</summary>
+    /// <summary>The MTG identification agent is running over the crops.</summary>
     Identifying,
     /// <summary>Result document is available.</summary>
     Completed,
@@ -23,7 +23,7 @@ public enum ScanJobStatus
     Failed
 }
 
-/// <summary>Games that have a dedicated identification agent (or a reserved growth slot).</summary>
+/// <summary>Game identifiers retained for reading historical results; only Magic is supported.</summary>
 public static class CardGames
 {
     public const string Magic = "mtg";
@@ -33,7 +33,7 @@ public static class CardGames
     public const string Unknown = "unknown";
 
     /// <summary>Games that currently have a live identification agent.</summary>
-    public static readonly string[] Supported = [Magic, Pokemon];
+    public static readonly string[] Supported = [Magic];
 
     public static bool IsSupported(string? game) =>
         game is not null && Array.Exists(Supported, g => string.Equals(g, game, StringComparison.OrdinalIgnoreCase));
@@ -338,7 +338,7 @@ public sealed record ScanJobDocument
     /// <summary>Blob path of the uploaded image, e.g. <c>scans/{jobId}/page1.jpg</c>.</summary>
     [JsonPropertyName("blobPath")] public string BlobPath { get; init; } = string.Empty;
 
-    /// <summary>Optional caller hint restricting which game agents run.</summary>
+    /// <summary>Optional caller hint. Only MTG and its aliases are accepted; omission defaults to MTG.</summary>
     [JsonPropertyName("gameHint")] public string? GameHint { get; init; }
 
     [JsonPropertyName("cardsDetected")] public int CardsDetected { get; init; }
@@ -382,7 +382,7 @@ public sealed record CreateJobRequest
     /// <summary>Original file name; only the extension and a sanitized stem are used.</summary>
     [JsonPropertyName("fileName")] public string FileName { get; init; } = "scan.jpg";
 
-    /// <summary>Optional game hint, see <see cref="CardGames"/>.</summary>
+    /// <summary>Game hint, see <see cref="CardGames"/>. New jobs use MTG.</summary>
     [JsonPropertyName("gameHint")] public string? GameHint { get; init; }
 }
 

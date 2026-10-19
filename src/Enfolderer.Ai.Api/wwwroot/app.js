@@ -56,8 +56,8 @@ async function api(path, options = {}) {
 function setBusy(value) {
   busy = value;
   $("scan").disabled = value || !photo || !scansAvailable;
-  for (const id of ["camera", "photo", "game", "snapshot", "deleteCollection"]) $(id).disabled = value;
-  $("useCollection").disabled = value || !collectionAvailable || $("game").value !== "mtg";
+  for (const id of ["camera", "photo", "snapshot", "deleteCollection"]) $(id).disabled = value;
+  $("useCollection").disabled = value || !collectionAvailable;
   $("previewWrap").classList.toggle("scanning", value);
   $("scanSweep").hidden = !value;
 }
@@ -81,7 +81,7 @@ async function loadCollection() {
     ? `${state.printings.toLocaleString()} printings. Exported ${new Date(state.exportedAt).toLocaleString()}.`
     : "No collection snapshot. You can still scan for printings and prices.";
   $("deleteCollection").hidden = !state.available;
-  $("useCollection").checked = state.available && $("game").value === "mtg";
+  $("useCollection").checked = state.available;
   setBusy(busy);
 }
 
@@ -240,8 +240,8 @@ async function startScan() {
   try {
     const job = await (await api("/jobs/", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileName: "mobile-photo.jpg", gameHint: $("game").value,
-        useCollection: $("useCollection").checked && $("game").value === "mtg" })
+      body: JSON.stringify({ fileName: "mobile-photo.jpg", gameHint: "mtg",
+        useCollection: $("useCollection").checked })
     })).json();
     await api(`/jobs/${job.jobId}/content`, { method: "PUT", headers: { "Content-Type": "image/jpeg" }, body: photo });
     await api(`/jobs/${job.jobId}/submit`, { method: "POST" });
@@ -292,10 +292,6 @@ $("camera").onchange = run(choosePhoto);
 $("photo").onchange = run(choosePhoto);
 $("scan").onclick = run(startScan);
 $("retry").onclick = run(pollJob);
-$("game").onchange = () => {
-  $("useCollection").checked = collectionAvailable && $("game").value === "mtg";
-  setBusy(busy);
-};
 $("snapshot").onchange = run(async event => {
   const file = event.target.files[0];
   event.target.value = "";

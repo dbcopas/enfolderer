@@ -526,11 +526,12 @@ internal static class Program
         Check(!mtg.Contains("bottom-left corner"), "the card-reading instructions are not duplicated here");
         Check(!mtg.Contains("lookup first"), "the old number-first instruction is gone");
 
-        var pokemon = FoundryCardIdentificationAgent.BuildPrompt(GameAgentProfile.Pokemon);
-        Check(!pokemon.Contains("resolve_printing"), "a game without the tool is not told to call it");
-        Check(pokemon.Contains("mcp-cardcatalog-pokemon"), "but is still pointed at its own catalogue");
-        foreach (var profile in new[] { GameAgentProfile.Mtg, GameAgentProfile.Pokemon,
-            GameAgentProfile.YuGiOh, GameAgentProfile.Lorcana })
+        Check(CardGames.Supported.SequenceEqual([CardGames.Magic])
+            && GameAgentProfile.Live.Count == 1 && GameAgentProfile.Live[0] == GameAgentProfile.Mtg,
+            "MTG is the only supported game and the only registered identification agent");
+        Check(new ScanPipelineOptions().IdentificationAgentIds.Keys.SequenceEqual([CardGames.Magic]),
+            "default worker configuration contains only the MTG agent");
+        foreach (var profile in GameAgentProfile.Live)
         {
             var prompt = FoundryCardIdentificationAgent.BuildPrompt(profile);
             Check(!prompt.Contains("\"finish", StringComparison.OrdinalIgnoreCase)

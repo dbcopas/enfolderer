@@ -82,6 +82,9 @@ public sealed class ScanJobProcessor
 
         try
         {
+            if (!string.IsNullOrWhiteSpace(job.GameHint) && !CardGames.IsSupported(CardGames.Normalize(job.GameHint)))
+                throw new InvalidOperationException("Only Magic: The Gathering (mtg) scans are supported.");
+
             var totalTimer = Stopwatch.StartNew();
             var stageTimer = Stopwatch.StartNew();
             _log.LogInformation("Job {JobId} started: detecting boundaries.", job.JobId);

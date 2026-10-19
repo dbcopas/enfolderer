@@ -33,10 +33,6 @@ tools:
     name: mtg
     project: cardid
     agent: MtgCardIdAgent
-  - type: connected_agent
-    name: pokemon
-    project: cardid
-    agent: PokemonCardIdAgent
 
 identity:
   role_assignments:

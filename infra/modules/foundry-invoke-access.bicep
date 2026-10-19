@@ -1,14 +1,6 @@
 // Invoke-only access to one Foundry project, granted to one principal.
 //
-// Scoped to the *project*, never to the account. That distinction is the whole demo when both
-// projects share an account: an account-scoped grant would hand the principal access to every
-// project in the account, including its siblings, which is the opposite of what is being claimed.
-//
-// Used twice from main.bicep:
-//
-//   * the orchestrator on Team B's own project, which it must always have; and
-//   * the orchestrator on Team A's project, which is the cross-project hop that demo scenario 1
-//     revokes by redeploying with grantIdentificationAccessToGeometry=false.
+// The worker always receives this role on both pipeline projects, not on the account.
 targetScope = 'resourceGroup'
 
 @description('Name of the Foundry account holding the project.')

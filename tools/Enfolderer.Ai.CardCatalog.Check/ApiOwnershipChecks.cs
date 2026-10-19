@@ -40,6 +40,7 @@ internal static class ApiOwnershipChecks
         await using var factory = new WebApplicationFactory<JobOwnerFilter>().WithWebHostBuilder(builder =>
         {
             builder.UseContentRoot(Directory.GetCurrentDirectory());
+            builder.UseWebRoot(Path.Combine(Directory.GetCurrentDirectory(), "src", "Enfolderer.Ai.Api", "wwwroot"));
             builder.UseSetting("AzureAd:Instance", "https://login.microsoftonline.com/");
             builder.UseSetting("AzureAd:TenantId", Tenant);
             builder.UseSetting("AzureAd:ClientId", UserA);
@@ -64,9 +65,24 @@ internal static class ApiOwnershipChecks
         {
             AllowAutoRedirect = false
         });
+        var website = await client.GetStringAsync("/");
+        check(website.Contains("Magic: The Gathering") && !website.Contains("id=\"game\"")
+            && !website.Contains("pokemon", StringComparison.OrdinalIgnoreCase),
+            "mobile UI advertises MTG without offering a game selector");
+        var mobileScript = await client.GetStringAsync("/app.js");
+        check(mobileScript.Contains("gameHint: \"mtg\"") && !mobileScript.Contains("$(\"game\")"),
+            "mobile requests always specify MTG without referencing a removed selector");
         using var anonymous = await client.PostAsJsonAsync("/jobs/", new CreateJobRequest());
         check(anonymous.StatusCode == HttpStatusCode.Unauthorized, "anonymous callers cannot create jobs");
         client.DefaultRequestHeaders.Add("X-Test-User", UserA);
+        foreach (var hint in new[] { "pokemon", "pokémon", "ptcg", "yugioh", "lorcana", "invalid" })
+        {
+            using var unsupported = await client.PostAsJsonAsync("/jobs/",
+                new CreateJobRequest { FileName = "scan.jpg", GameHint = hint });
+            check(unsupported.StatusCode == HttpStatusCode.BadRequest
+                && (await unsupported.Content.ReadAsStringAsync()).Contains("Only Magic: The Gathering"),
+                $"{hint}: unsupported scans are explicitly rejected before creating work");
+        }
         using var created = await client.PostAsJsonAsync("/jobs/", new
         {
             fileName = "scan.jpg",
@@ -80,6 +96,16 @@ internal static class ApiOwnershipChecks
             ?? throw new InvalidOperationException("API did not store a created job.");
         check(job.OwnerTenantId == Tenant && job.OwnerObjectId == UserA,
             "job creation persists the authenticated caller, not request-body ownership");
+        check(job.GameHint == CardGames.Magic, "jobs without a hint default explicitly to MTG");
+        foreach (var hint in new[] { " MTG ", "magic", "magic-the-gathering", "" })
+        {
+            using var accepted = await client.PostAsJsonAsync("/jobs/",
+                new CreateJobRequest { FileName = "scan.jpg", GameHint = hint });
+            accepted.EnsureSuccessStatusCode();
+            var result = await accepted.Content.ReadFromJsonAsync<CreateJobResponse>();
+            check((await store.GetAsync(result!.JobId))?.GameHint == CardGames.Magic,
+                $"'{hint}': compatible MTG hints are normalized");
+        }
 
         foreach (var caller in new[] { UserB, "other-tenant", "missing-claims", "" })
         {

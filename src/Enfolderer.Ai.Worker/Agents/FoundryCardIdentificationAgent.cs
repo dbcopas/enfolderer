@@ -6,14 +6,10 @@ using Microsoft.Extensions.Logging;
 namespace Enfolderer.Ai.Worker.Agents;
 
 /// <summary>
-/// Identifies one of Team B's identification agents, and says which catalogue tool settles a
-/// printing for that game. Each agent is deployed separately in the <c>cardid</c> project and is
-/// wired to its own catalogue MCP server, so adding a game means adding a definition here plus an
-/// agent and an MCP server — no pipeline changes.
+/// Identifies the MTG agent and the catalogue tool that settles its printings.
 /// </summary>
 /// <param name="ResolutionTool">
-/// The tool that settles a printing from the name, or null for a game whose catalogue has none
-/// yet. Only Magic has one; the rest still look a number up, with everything that costs.
+/// The catalogue tool that settles a printing from its photographed evidence.
 /// </param>
 /// <remarks>
 /// What this deliberately no longer carries is the agent's instructions. They live in the agent
@@ -42,50 +38,12 @@ public sealed record GameAgentProfile(
         """,
         ResolutionTool: "resolve_printing");
 
-    public static readonly GameAgentProfile Pokemon = new(
-        CardGames.Pokemon,
-        "PokemonCardIdAgent",
-        "mcp-cardcatalog-pokemon",
-        """
-        This is a Pokémon Trading Card Game card.
-        - The collector number is in the bottom-right corner as "012/198"; the set symbol sits
-          next to it, and the set code (e.g. "sv1", "swsh12") is not always printed.
-        - Promo cards use "SWSH###" / "SVP###" style numbers with no denominator.
-        - Regulation mark (a single letter) appears in the bottom-left on recent sets.
-        - Illustration-rare and special-art cards are full-art: the name may be stylised, so use
-          the number plus the set symbol first and the name only to disambiguate.
-        """);
-
-    public static readonly GameAgentProfile YuGiOh = new(
-        CardGames.YuGiOh,
-        "YugiohCardIdAgent",
-        "mcp-cardcatalog-yugioh",
-        """
-        This is a Yu-Gi-Oh! card.
-        - The passcode is printed in the bottom-left; the set code (e.g. "LOB-EN005") is in the
-          bottom-right of the artwork area.
-        """);
-
-    public static readonly GameAgentProfile Lorcana = new(
-        CardGames.Lorcana,
-        "LorcanaCardIdAgent",
-        "mcp-cardcatalog-lorcana",
-        """
-        This is a Disney Lorcana card.
-        - The collector number appears bottom-left as "123/204" with the set number beside it.
-        - Enchanted cards are full-art with an alternate frame and a number above the set total.
-        """);
-
     /// <summary>Profiles that currently have a deployed agent.</summary>
-    public static IReadOnlyList<GameAgentProfile> Live => [Mtg, Pokemon];
-
-    /// <summary>Growth slots: defined, not yet deployed.</summary>
-    public static IReadOnlyList<GameAgentProfile> Planned => [YuGiOh, Lorcana];
+    public static IReadOnlyList<GameAgentProfile> Live => [Mtg];
 }
 
 /// <summary>
-/// Team B identification agent, reached through the <c>cardid</c> project endpoint. One instance is
-/// created per game; the underlying Foundry agent owns the catalogue MCP server for that game.
+/// MTG identification agent, reached through the <c>cardid</c> project endpoint and its catalogue MCP server.
 /// </summary>
 public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, ICardPrintingReviewAgent
 {

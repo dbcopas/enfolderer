@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Enfolderer.Ai.Contracts;
 
 namespace Enfolderer.App.Utilities;
 
@@ -39,8 +40,8 @@ public sealed class AiScanConfig
     /// <summary>Use device code flow instead of the interactive browser.</summary>
     public bool UseDeviceCode { get; init; }
 
-    /// <summary>Optional game hint sent with each job, e.g. <c>mtg</c> or <c>pokemon</c>.</summary>
-    public string? GameHint { get; init; }
+    /// <summary>Only Magic: The Gathering scans are supported.</summary>
+    public string? GameHint { get; init; } = CardGames.Magic;
 
     /// <summary>
     /// Invoked with the device code details when <see cref="UseDeviceCode"/> is set. The returned
@@ -60,8 +61,8 @@ public sealed class AiScanConfig
         client_id=00000000-0000-0000-0000-000000000000
         # Scope exposed by the scan API app registration.
         scope=api://00000000-0000-0000-0000-000000000000/Scan.Submit
-        # Optional: mtg, pokemon, yugioh, lorcana. Leave unset to let the boundary agent decide.
-        #game_hint=mtg
+        # Only Magic: The Gathering is supported.
+        game_hint=mtg
         # Optional: use the device code flow instead of an interactive browser window.
         #use_device_code=true
         """;
@@ -104,6 +105,10 @@ public sealed class AiScanConfig
         var scopes = Required("scope")
             .Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+        if (values.TryGetValue("game_hint", out var hint) && !string.IsNullOrWhiteSpace(hint)
+            && !CardGames.IsSupported(CardGames.Normalize(hint)))
+            throw new InvalidOperationException("Only Magic: The Gathering (mtg) scans are supported; remove or update 'game_hint'.");
+
         return new AiScanConfig
         {
             ApiBaseUrl = parsedUrl,
@@ -112,7 +117,7 @@ public sealed class AiScanConfig
             Scopes = scopes,
             UseDeviceCode = values.TryGetValue("use_device_code", out var useDeviceCode)
                             && bool.TryParse(useDeviceCode, out var parsedFlag) && parsedFlag,
-            GameHint = values.TryGetValue("game_hint", out var hint) && !string.IsNullOrWhiteSpace(hint) ? hint : null
+            GameHint = CardGames.Magic
         };
     }
 }

@@ -14,14 +14,14 @@
 
     It does three things, in order:
 
-      1. Builds all five images with `az acr build`. The build happens in Azure — ACR Tasks
+      1. Builds all four images with `az acr build`. The build happens in Azure — ACR Tasks
          compiles the source this script uploads — so you need neither Docker nor the .NET SDK.
       2. Redeploys infra/main.bicep with the new tag. This is not the same as
          `az containerapp update --image`: as well as the image it sets each app's ingress target
          port (80 on the placeholder, 8080 on ours) and the registry configuration that lets the
          app pull as its own managed identity. An `update` alone leaves an app that cannot pull,
          or one whose ingress points at a port nothing is listening on.
-      3. Reports the image and revision state of all five apps, and calls the API's /healthz.
+      3. Reports the image and revision state of all four apps, and calls the API's /healthz.
 
     The redeploy reuses the parameters of the previous deployment rather than reading
     infra/main.parameters.json, because that file is checked in with placeholder object ids. If
@@ -64,14 +64,11 @@
     exists in the registry, for example to roll back.
 
 .PARAMETER BoundaryAgentId
-    Named Foundry agent for Team A's boundary detection. Omit to keep whatever the last deployment
+    Named Foundry agent for boundary detection. Omit to keep whatever the last deployment
     used.
 
 .PARAMETER MtgAgentId
-    Agent id of Team B's Magic: The Gathering identification agent.
-
-.PARAMETER PokemonAgentId
-    Agent id of Team B's Pokemon identification agent.
+    Agent id of the Magic: The Gathering identification agent.
 
 .PARAMETER BoundaryAgentPrincipalId
     Distinct Entra agent principal allowed on the imaging MCP server.
@@ -79,17 +76,8 @@
 .PARAMETER MtgAgentPrincipalId
     Distinct Entra agent principal allowed on the MTG catalogue MCP server.
 
-.PARAMETER PokemonAgentPrincipalId
-    Distinct Entra agent principal allowed on the Pokemon catalogue MCP server.
-
 .PARAMETER McpAudience
     Registered single-tenant resource app client ID, matching the v2 token audience.
-
-.PARAMETER GrantGeometryAccess
-    Whether the orchestrator may invoke Team A's boundary agent. Pass $false to run demo scenario
-    1 and $true to restore it. Omit to keep whatever the last deployment used. Use this rather than
-    a bare `az deployment sub create`, which would deploy imageTag's empty default and send every
-    app back to the placeholder image.
 
 .EXAMPLE
     ./scripts/deploy-images.ps1
@@ -108,12 +96,6 @@
     `az deployment sub create`: that would deploy imageTag's empty default and send every app back
     to the placeholder.
 
-.EXAMPLE
-    ./scripts/deploy-images.ps1 -SkipBuild -GrantGeometryAccess $false
-
-    Stop declaring the geometry Consumer grant and explicitly remove the existing worker/project
-    assignment after deployment; incremental ARM alone does not remove omitted assignments.
-
 .NOTES
     Run from the repository root: the build context is '.', and every service project has
     ProjectReferences reaching up into src/.
@@ -123,22 +105,19 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $DeploymentName = 'enfolderer-scan',
+    [string] $DeploymentName = 'enfolderer-cost',
     [string] $Tag,
     [switch] $UseParametersFile,
     [switch] $SkipBuild,
     [string] $BoundaryAgentId,
     [string] $MtgAgentId,
-    [string] $PokemonAgentId,
     [string] $BoundaryAgentPrincipalId,
     [string] $MtgAgentPrincipalId,
-    [string] $PokemonAgentPrincipalId,
     [string] $McpAudience,
     [string] $MobileWebClientId,
     [string] $ScanAllowedUserObjectIds,
     [string] $ScanDiagnosticUserObjectIds,
-    [string] $ScanAllowanceAdminUserObjectIds,
-    [bool] $GrantGeometryAccess
+    [string] $ScanAllowanceAdminUserObjectIds
 )
 
 Set-StrictMode -Version Latest
@@ -193,7 +172,6 @@ $images = [ordered] @{
     'worker'                  = 'Enfolderer.Ai.Worker'
     'mcp-imaging'             = 'Enfolderer.Ai.Mcp.Imaging'
     'mcp-cardcatalog-mtg'     = 'Enfolderer.Ai.Mcp.CardCatalog.Mtg'
-    'mcp-cardcatalog-pokemon' = 'Enfolderer.Ai.Mcp.CardCatalog.Pokemon'
 }
 
 # A build needs a tag no image already uses, because both ARM and `az containerapp update` decide
@@ -262,7 +240,7 @@ List the ones you have with:
         # in — so check before deploying rather than diagnosing it afterwards.
         $placeholder = '00000000-0000-0000-0000-000000000000'
         $unset = @(
-            foreach ($n in 'apiClientId', 'teamAGroupObjectId', 'teamBGroupObjectId') {
+            foreach ($n in 'apiClientId', 'ownerObjectId', 'mcpAudience') {
                 if ($onFile.PSObject.Properties[$n] -and $onFile.$n.value -eq $placeholder) { $n }
             }
         )
@@ -326,6 +304,14 @@ them. Do not commit the filled-in parameters file.
         }
     }
 
+    # Earlier cost deployments recorded these removed template parameters.
+    foreach ($source in @($parameters, $onFile)) {
+        if ($null -eq $source) { continue }
+        foreach ($obsolete in 'pokemonAgentId', 'pokemonAgentPrincipalId') {
+            $source.PSObject.Properties.Remove($obsolete)
+        }
+    }
+
     $prefix = $parameters.namePrefix.value
     Write-Note "deployment '$DeploymentName' in $location, prefix '$prefix'"
     if (-not $registry) {
@@ -356,7 +342,7 @@ them. Do not commit the filled-in parameters file.
 
     # The whole reason this script replays parameters: imageTag defaults to empty, and an empty
     # imageTag means "no images exist yet, run the placeholder". So any deployment that forgets to
-    # pass it silently sends all five apps back to mcr.microsoft.com/k8se/quickstart, whose only
+    # pass it silently sends all four apps back to mcr.microsoft.com/k8se/quickstart, whose only
     # visible symptom is a 404 on every route. Recover the tag the deployment is really using.
     $deployedTag = ''
     if ($parameters.PSObject.Properties['imageTag']) {
@@ -403,9 +389,9 @@ List what the registry holds with:
     }
     $overrides['apiCustomDomains'] = $domains
     foreach ($mapping in @{
-        BoundaryAgentId = 'boundaryAgentId'; MtgAgentId = 'mtgAgentId'; PokemonAgentId = 'pokemonAgentId'
+        BoundaryAgentId = 'boundaryAgentId'; MtgAgentId = 'mtgAgentId'
         BoundaryAgentPrincipalId = 'boundaryAgentPrincipalId'; MtgAgentPrincipalId = 'mtgAgentPrincipalId'
-        PokemonAgentPrincipalId = 'pokemonAgentPrincipalId'; McpAudience = 'mcpAudience'
+        McpAudience = 'mcpAudience'
         MobileWebClientId = 'mobileWebClientId'; ScanAllowedUserObjectIds = 'scanAllowedUserObjectIds'
     }.GetEnumerator()) {
         $value = Get-Variable -Name $mapping.Key -ValueOnly
@@ -452,7 +438,7 @@ List what the registry holds with:
             }
         }
     }
-    foreach ($key in 'boundaryAgentPrincipalId', 'mtgAgentPrincipalId', 'pokemonAgentPrincipalId', 'mcpAudience') {
+    foreach ($key in 'boundaryAgentPrincipalId', 'mtgAgentPrincipalId', 'mcpAudience') {
         $value = if ($overrides.Contains($key)) { $overrides[$key] }
             elseif ($effective.PSObject.Properties[$key]) { $effective.$key.value } else { '' }
         $parsed = [guid]::Empty
@@ -460,7 +446,7 @@ List what the registry holds with:
             throw "Missing registered $key. Run update-demo.ps1 to provision distinct agent identities before deploying secured images."
         }
     }
-    foreach ($key in 'boundaryAgentId', 'mtgAgentId', 'pokemonAgentId') {
+    foreach ($key in 'boundaryAgentId', 'mtgAgentId') {
         $value = if ($overrides.Contains($key)) { $overrides[$key] }
             elseif ($effective.PSObject.Properties[$key]) { $effective.$key.value } else { '' }
         if (-not $value -or $value.StartsWith('asst_')) {
@@ -470,7 +456,7 @@ List what the registry holds with:
 
     if (-not $SkipBuild) {
         Write-Step "1. Build the images"
-        Write-Note "Five builds in Azure, a few minutes each. Nothing is built on this machine."
+        Write-Note "Four builds in Azure, a few minutes each. Nothing is built on this machine."
 
         $n = 0
         foreach ($image in $images.Keys) {
@@ -497,9 +483,6 @@ List what the registry holds with:
 
     # Agent ids are deployment parameters, so they are set here rather than with
     # `az containerapp update --set-env-vars`, which the next deployment would overwrite.
-    if ($PSBoundParameters.ContainsKey('GrantGeometryAccess')) {
-        $overrides['grantIdentificationAccessToGeometry'] = $GrantGeometryAccess
-    }
     foreach ($o in $overrides.GetEnumerator()) {
         Write-Note "$($o.Key) = $($o.Value)"
     }
@@ -590,12 +573,7 @@ List what the registry holds with:
         parameters = $savedParameters
     } | ConvertTo-Json -Depth 20 | Set-Content -Path $cache -Encoding utf8
 
-    $geometryAccess = if ($overrides.Contains('grantIdentificationAccessToGeometry')) {
-        [bool]$overrides['grantIdentificationAccessToGeometry']
-    } elseif ($effective.PSObject.Properties['grantIdentificationAccessToGeometry']) {
-        [bool]$effective.grantIdentificationAccessToGeometry.value
-    } else { $true }
-    & (Join-Path $PSScriptRoot 'sync-foundry-worker-access.ps1') -NamePrefix $prefix -GrantGeometryAccess $geometryAccess
+    & (Join-Path $PSScriptRoot 'sync-foundry-worker-access.ps1') -NamePrefix $prefix
 
     Write-Step "3. Check what is running"
 
@@ -604,7 +582,6 @@ List what the registry holds with:
         @{ name = "$prefix-worker";                  rg = "$prefix-platform" }
         @{ name = "$prefix-mcp-imaging";             rg = "$prefix-cardgeo" }
         @{ name = "$prefix-mcp-cardcatalog-mtg";     rg = "$prefix-cardid" }
-        @{ name = "$prefix-mcp-cardcatalog-pokemon"; rg = "$prefix-cardid" }
     )
 
     # One read per app, returning both the image and the ingress hostname. Two separate `az
@@ -698,7 +675,7 @@ List what the registry holds with:
         Write-Bad "All apps are on tag '$Tag', but $unhealthy did not answer /healthz."
     }
     else {
-        Write-Good "All five apps are running tag '$Tag' and answering /healthz."
+        Write-Good "All four apps are running tag '$Tag' and answering /healthz."
         Write-Note "Deploy a later code change with: ./scripts/deploy-images.ps1"
     }
     if ($stillPlaceholder -gt 0 -or $missing -gt 0 -or $unhealthy -gt 0) {

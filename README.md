@@ -99,6 +99,10 @@ The advanced **Collection Maintenance** actions modify the local `mtgstudio.coll
 
 ## Scanning cards with the Azure AI pipeline
 
+This branch supports **Magic: The Gathering only**. The website has no game selector, desktop
+configuration defaults to `mtg`, and other game hints are rejected by the API before work is created.
+Only imaging and MTG catalogue MCP services are built or deployed; no Pokemon hosting is required.
+
 The API requires Entra authentication and records each job's creator tenant/object identity.
 Only that identity can upload, submit, poll or download its job. Jobs created before ownership
 was recorded are inaccessible through these routes; create a new scan rather than claiming an
@@ -106,10 +110,10 @@ old job by its ID. The API refuses to start without its tenant/client configurat
 MCP servers refuse missing tenant/audience or caller allow-lists, including local runs.
 The worker uses named Foundry agent Responses endpoints. Each agent has its own Entra Agent ID;
 Foundry obtains short-lived MCP tokens through `AgenticIdentityToken` project connections.
-Geometry, Magic and Pokemon servers accept only their corresponding agent principal, not worker
+Geometry and Magic servers accept only their corresponding agent principal, not worker
 or project managed identities. Run `.\scripts\update-demo.ps1` for the first migration; it provisions
 identities/connections before deploying images and persists the audience and caller IDs.
-See [setup and migration](docs/azure-setup.md#4-create-the-agents).
+See [setup and migration](docs/azure-setup.md#4-provision-agents-and-build-real-images).
 
 **Scan Single Image...** turns a photograph into binder entries: the app uploads a single image to a
 job API and polls it while a multi-agent Azure AI Foundry pipeline finds each card's outline and
@@ -140,7 +144,7 @@ The private pilot uses an explicit tenant user/guest object-ID allowlist. It app
 and desktop API calls. An Outlook.com user first accepts a tenant guest invitation and must be
 assigned to the web enterprise app and included in that allowlist. Assignment-required applications
 need one-time tenant-wide administrator consent; ordinary approved users need no administrator role.
-See [mobile setup](docs/azure-setup.md#mobile-website-private-pilot).
+See [mobile setup](docs/azure-setup.md#5-mobile-website-and-separate-desktop-configuration).
 
 On a phone, take or select a photo, choose the game, and start the scan. The browser normalizes
 orientation, removes metadata and caps the longest edge at 4096 pixels before upload. Use a
@@ -220,7 +224,7 @@ Log ingestion can lag; rerun after a scan finishes for final evidence.
 Diagnostics is disabled by default. An explicitly approved operator signs in once with
 `.\scripts\get-scan-diagnostics.ps1 -SignIn`; subsequent investigations reuse the OS-encrypted
 token cache, without copying secrets into this repository. The ordinary pilot allowlist does not
-grant diagnostics access. See [operator setup](docs/azure-setup.md#read-only-scan-diagnostics) for
+grant diagnostics access. See [operator setup](docs/azure-setup.md#6-verification-and-cutover-gate) for
 the separate operator allowlist, permissions and privacy/retention considerations.
 
 Deploy the updated worker and rebuild/restart the desktop before comparing the same photos at
@@ -366,9 +370,12 @@ overwritten, even by a newer build. Edit the local file to use another deploymen
 If no defaults are shipped, the app writes a template instead.
 
 The services, agent definitions, and infrastructure are in `src/Enfolderer.Ai.*`, `agents/`, and
-`infra/`. See [docs/azure-setup.md](docs/azure-setup.md) to deploy the Azure resources, and
-[docs/foundry-demo.md](docs/foundry-demo.md) for the architecture and the security boundary
-walkthrough.
+`infra/`. See [docs/azure-setup.md](docs/azure-setup.md) to deploy this branch's cost-optimized
+architecture: one shared ACA Consumption environment, Entra-only public data endpoints and
+Cosmos free tier. This branch has no separate-team ownership or private endpoints.
+The [security-boundary walkthrough](docs/foundry-demo.md) describes `main`, not this branch.
+Existing client defaults are intentionally unchanged until the new deployment passes real scan
+validation; use a separate config to test it.
 
 ### Guest scan allowances
 
@@ -386,7 +393,7 @@ Queue duplicates are serialized by a renewable execution lease; terminal jobs ar
 Owners must be explicitly granted unlimited access, just like guests must be granted finite
 credits. No user is automatically unlimited based on account type.
 
-See [allowance administration and tenant migration](docs/azure-setup.md#scan-credit-allowances)
+See [allowance administration and tenant migration](docs/azure-setup.md#5-mobile-website-and-separate-desktop-configuration)
 for setup, grants, top-ups, refunds and balance migration.
 Run `dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check` for API allowance, concurrent
 submission, dispatch recovery and worker duplicate-delivery regressions. Run

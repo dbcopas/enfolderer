@@ -1,20 +1,16 @@
-# Team A ("Geometry") — Azure AI Foundry project: cardgeo
-#
-# This agent is the only asset Team A exposes outside its own project. Team B may *invoke* it
-# (Foundry User on this project) but may not read, edit or redeploy it.
+# Geometry component in the shared Foundry account.
 name: CardBoundaryAgent
 project: cardgeo
-owner: team-a-geometry
+owner: enfolderer
 model:
   # Any vision-capable deployment in the cardgeo project.
-  deployment: gpt-4o
-  temperature: 0
+  deployment: gpt-5-mini
   response_format: json_object
 description: >
-  Locates every collectible trading card in a photograph and returns its quadrilateral, regardless
-  of game, frame treatment, rotation or perspective distortion. Knows nothing about card catalogues.
+  Locates Magic: The Gathering cards in a photograph and returns their quadrilaterals, regardless
+  of frame treatment, rotation or perspective distortion. Knows nothing about card catalogues.
 instructions: |
-  Locate every collectible trading card visible in this photo.
+  Locate every Magic: The Gathering card visible in this photo.
 
   The orchestrator appends the photo's exact pixel dimensions, and the blob path it is stored at,
   to this prompt at run time.
@@ -47,7 +43,7 @@ instructions: |
   Return ONLY a JSON object of the form:
   {"cards":[{"quad":{"points":[{"x":0.0,"y":0.0},{"x":0.0,"y":0.0},
                                {"x":0.0,"y":0.0},{"x":0.0,"y":0.0}]},
-             "confidence":0.0,"gameHint":"mtg|pokemon|yugioh|lorcana|unknown"}]}
+             "confidence":0.0,"gameHint":"mtg|unknown"}]}
 
   Rules:
   - x and y are FRACTIONS of the image, between 0 and 1: x = 0 is the left edge, x = 1 the
@@ -59,7 +55,7 @@ instructions: |
     so a card photographed upside down still reports its printed top-left first.
   - The four points must be the corners of one single card. Never return a box that contains
     several cards, and never return the whole image as one card.
-  - gameHint is your best guess of the game from the card back/frame; use "unknown" if unsure.
+  - gameHint is "mtg" for Magic: The Gathering; use "unknown" if unsure.
   - Emit no prose or markdown fences. Preserve measured regions even when unsure of the game.
 
 # One tool, from Team A's own MCP server, in Team A's own resource group, running as Team A's own
@@ -84,5 +80,4 @@ tools:
 # exercised by the "break it" scenarios in docs/foundry-demo.md.
 denied_connections:
   - mcp-cardcatalog-mtg
-  - mcp-cardcatalog-pokemon
   - cosmos:enfolderer/jobs

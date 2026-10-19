@@ -40,7 +40,7 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
     /// </para>
     /// </summary>
     internal static string BuildPrompt(int width, int height, string scanBlobPath) => $$"""
-        Locate every collectible trading card visible in this photo.
+        Locate every Magic: The Gathering card visible in this photo.
 
         The photo is {{width}} pixels wide and {{height}} pixels high. The same photo is stored at
         the blob path {{scanBlobPath}}.
@@ -70,7 +70,7 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
         Return ONLY a JSON object of the form:
         {"cards":[{"quad":{"points":[{"x":0.0,"y":0.0},{"x":0.0,"y":0.0},
                                      {"x":0.0,"y":0.0},{"x":0.0,"y":0.0}]},
-                   "confidence":0.0,"gameHint":"mtg|pokemon|yugioh|lorcana|unknown"}]}
+                   "confidence":0.0,"gameHint":"mtg|unknown"}]}
 
         Rules:
         - x and y are FRACTIONS of the image, between 0 and 1: x = 0 is the left edge, x = 1 the
@@ -80,7 +80,7 @@ public sealed class FoundryCardBoundaryAgent : ICardBoundaryAgent
           so a card photographed upside down still reports its printed top-left first.
         - The four points must be the corners of one single card. Never return a box that contains
           several cards, and never return the whole image as one card.
-        - gameHint is your best guess of the game from the card back/frame; use "unknown" if unsure.
+        - gameHint is "mtg" for Magic: The Gathering; use "unknown" if unsure.
         - Emit no prose or markdown fences. Preserve measured regions even when unsure of the game.
         """;
 

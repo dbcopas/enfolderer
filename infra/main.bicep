@@ -1,20 +1,5 @@
-// Enfolderer AI scan pipeline — full demo environment.
-//
-// Three resource groups on purpose:
-//   <prefix>-platform  shared data plane + API/worker hosting (platform team)
-//   <prefix>-cardgeo   Team A's identity and MCP server (geometry)
-//   <prefix>-cardid    Team B's identity and MCP servers (identification)
-//
-// There are two isolation tiers here, and the demo is about telling them apart:
-//
-//   Project  isolates agents, connections and authoring. Each team's group holds Azure AI Project
-//            Manager over its own project only, so Team B cannot edit Team A's boundary agent even
-//            when both projects sit in the same account. The only path from cardid to cardgeo is
-//            the invoke-only assignment in modules/foundry-invoke-access.bicep.
-//   Account  isolates model deployments and their quota, local-auth and networking settings, and
-//            the blast radius of a mistake. Projects share all of it.
-//
-// singleAccount picks which tier you are demonstrating.
+// Cost-optimized deployment: one ACA environment and Foundry account, no private networking.
+// Resource groups and project names identify pipeline components, not separate teams.
 targetScope = 'subscription'
 
 @description('Prefix for all resource names, e.g. "enf-demo".')
@@ -22,13 +7,13 @@ targetScope = 'subscription'
 @maxLength(12)
 param namePrefix string
 
-param location string = deployment().location
+param location string = 'swedencentral'
 
-@description('Entra group object id owning Team A\'s geometry project.')
-param teamAGroupObjectId string
+@description('Entra user object ID administering both Foundry projects.')
+param ownerObjectId string
 
-@description('Entra group object id owning Team B\'s identification project.')
-param teamBGroupObjectId string
+@description('Enable Cosmos free tier at account creation. Only one account per subscription may use it.')
+param cosmosFreeTier bool = true
 
 @description('Tenant id used to validate desktop-app tokens.')
 param tenantId string = subscription().tenantId
@@ -49,12 +34,6 @@ param scanAllowanceAdminUserObjectIds string = ''
 @description('API custom-domain bindings. deploy-images.ps1 preserves current bindings; use destination certificate IDs when moving environments.')
 param apiCustomDomains array = []
 
-@description('Set to false to run the "revoke Team B\'s access to Team A\'s agent" demo scenario.')
-param grantIdentificationAccessToGeometry bool = true
-
-@description('One Foundry account holding both projects (true, the default), or one account per team (false). True is the layout this demo is about: the boundary between the teams is then the Foundry project boundary, enforced by project-scoped role assignments. False additionally separates quota, model deployments and account settings, but the boundary becomes plain Azure RBAC between two unrelated resources — stronger isolation, weaker demonstration of Foundry itself.')
-param singleAccount bool = true
-
 @description('MCP resource app client ID (v2 JWT aud). Agent-identity connections request tokens for api://<this id>.')
 @minLength(1)
 param mcpAudience string
@@ -69,23 +48,17 @@ configuration that lets it pull as its own managed identity.
 ''')
 param imageTag string = ''
 
-@description('Named Foundry agent for Team A\'s boundary detection, not a classic asst_ id.')
+@description('Named Foundry agent for boundary detection, not a classic asst_ id.')
 param boundaryAgentId string = 'CardBoundaryAgent'
 
 @description('Named Foundry agent for Magic identification.')
 param mtgAgentId string = 'MtgCardIdAgent'
-
-@description('Named Foundry agent for Pokemon identification.')
-param pokemonAgentId string = 'PokemonCardIdAgent'
 
 @description('Distinct Entra agent identity principal of the boundary agent. Empty only during placeholder bootstrap.')
 param boundaryAgentPrincipalId string = ''
 
 @description('Distinct Entra agent identity principal of the Magic agent.')
 param mtgAgentPrincipalId string = ''
-
-@description('Distinct Entra agent identity principal of the Pokemon agent.')
-param pokemonAgentPrincipalId string = ''
 
 resource platformRg 'Microsoft.Resources/resourceGroups@2023-07-01' = {
   name: '${namePrefix}-platform'
@@ -102,9 +75,7 @@ resource identificationRg 'Microsoft.Resources/resourceGroups@2023-07-01' = {
   location: location
 }
 
-// One user-assigned managed identity per role, each created in the resource group of the team that
-// owns it. Creating them before everything else means the RBAC below is granted to principals that
-// survive redeploys, and Team A's identity is a resource Team B cannot touch.
+// Keep separate workload identities and least-privilege data roles, without team ownership.
 module apiIdentity 'modules/identity.bicep' = {
   name: 'api-identity'
   scope: platformRg
@@ -147,33 +118,17 @@ module data 'modules/data.bicep' = {
   params: {
     namePrefix: namePrefix
     location: location
+    enableFreeTier: cosmosFreeTier
   }
 }
 
-// The private path to the data tier. Deployed before anything that reaches the data plane, so the
-// endpoints and DNS zones exist by the time the API and worker start.
-module network 'modules/network.bicep' = {
-  name: 'network'
-  scope: platformRg
-  params: {
-    namePrefix: namePrefix
-    location: location
-    storageAccountId: data.outputs.storageAccountId
-    cosmosAccountId: data.outputs.cosmosAccountId
-  }
-}
-
-// Account topology. A project lives in the same resource group as its account, so singleAccount
-// decides both which account each project is created under and where it lands.
 var sharedAccountName = '${namePrefix}-ai'
-var geometryAccountName = singleAccount ? sharedAccountName : '${namePrefix}-cardgeo-ai'
-var identificationAccountName = singleAccount ? sharedAccountName : '${namePrefix}-cardid-ai'
-var geometryProjectRg = singleAccount ? platformRg.name : geometryRg.name
-var identificationProjectRg = singleAccount ? platformRg.name : identificationRg.name
+var geometryAccountName = sharedAccountName
+var identificationAccountName = sharedAccountName
+var geometryProjectRg = platformRg.name
+var identificationProjectRg = platformRg.name
 
-// One account for both teams: the platform team owns the account, its model deployments and its
-// quota, and each team owns only its project inside it.
-module sharedAccount 'modules/foundry-account.bicep' = if (singleAccount) {
+module sharedAccount 'modules/foundry-account.bicep' = {
   name: 'foundry-account'
   scope: platformRg
   params: {
@@ -186,40 +141,18 @@ module sharedAccount 'modules/foundry-account.bicep' = if (singleAccount) {
   }
 }
 
-// One account per team: each team owns its own quota and account settings as well as its project.
-module geometryAccount 'modules/foundry-account.bicep' = if (!singleAccount) {
-  name: 'foundry-account-cardgeo'
-  scope: geometryRg
-  params: {
-    accountName: geometryAccountName
-    teamIdentityIds: [ geometryIdentity.outputs.id ]
-    location: location
-  }
-}
-
-module identificationAccount 'modules/foundry-account.bicep' = if (!singleAccount) {
-  name: 'foundry-account-cardid'
-  scope: identificationRg
-  params: {
-    accountName: identificationAccountName
-    teamIdentityIds: [ identificationIdentity.outputs.id ]
-    location: location
-  }
-}
-
 module geometryProject 'modules/foundry-project.bicep' = {
   name: 'cardgeo'
   scope: resourceGroup(geometryProjectRg)
   params: {
     accountName: geometryAccountName
     projectName: 'cardgeo'
-    ownerGroupObjectId: teamAGroupObjectId
+    ownerObjectId: ownerObjectId
     teamIdentityIds: [ geometryIdentity.outputs.id ]
     location: location
   }
   dependsOn: [
     sharedAccount
-    geometryAccount
   ]
 }
 
@@ -229,19 +162,16 @@ module identificationProject 'modules/foundry-project.bicep' = {
   params: {
     accountName: identificationAccountName
     projectName: 'cardid'
-    ownerGroupObjectId: teamBGroupObjectId
+    ownerObjectId: ownerObjectId
     teamIdentityIds: [ identificationIdentity.outputs.id ]
     location: location
   }
   dependsOn: [
     sharedAccount
-    identificationAccount
   ]
 }
 
-// One registry for all five images, owned by the platform team. Both teams can pull from it, which
-// is the same kind of shared platform dependency as the Foundry account and its model deployment —
-// see the "two isolation tiers" note at the top of this file.
+// Basic registry shared by all four services; pulls use managed identities.
 module registry 'modules/registry.bicep' = {
   name: 'registry'
   scope: platformRg
@@ -257,36 +187,13 @@ module registry 'modules/registry.bicep' = {
   }
 }
 
-// One Container Apps environment per team, each on its own subnet and with its own log workspace.
-// The environment is the thing a team operates, so sharing one would quietly undo the resource
-// group boundary the rest of this file is built on.
+// All four apps share this environment and log workspace, including apps in other resource groups.
 module platformEnv 'modules/container-env.bicep' = {
   name: 'platform-env'
   scope: platformRg
   params: {
     name: '${namePrefix}-platform-env'
     location: location
-    infrastructureSubnetId: network.outputs.platformSubnetId
-  }
-}
-
-module geometryEnv 'modules/container-env.bicep' = {
-  name: 'cardgeo-env'
-  scope: geometryRg
-  params: {
-    name: '${namePrefix}-cardgeo-env'
-    location: location
-    infrastructureSubnetId: network.outputs.geometrySubnetId
-  }
-}
-
-module identificationEnv 'modules/container-env.bicep' = {
-  name: 'cardid-env'
-  scope: identificationRg
-  params: {
-    name: '${namePrefix}-cardid-env'
-    location: location
-    infrastructureSubnetId: network.outputs.identificationSubnetId
   }
 }
 
@@ -317,19 +224,17 @@ module hosting 'modules/hosting.bicep' = {
     identificationProjectEndpoint: identificationProject.outputs.projectEndpoint
     boundaryAgentId: boundaryAgentId
     mtgAgentId: mtgAgentId
-    pokemonAgentId: pokemonAgentId
   }
 }
 
-// Team A's MCP server, in Team A's resource group, running as Team A's identity — which already
-// holds read on the scans container and nothing else.
+// Imaging retains read-only scan access and exact-agent caller authorization.
 module geometryMcp 'modules/mcp-servers.bicep' = {
   name: 'cardgeo-mcp'
   scope: geometryRg
   params: {
     namePrefix: namePrefix
     location: location
-    environmentId: geometryEnv.outputs.id
+    environmentId: platformEnv.outputs.id
     registryLoginServer: registry.outputs.loginServer
     imageTag: imageTag
     identityId: geometryIdentity.outputs.id
@@ -349,15 +254,14 @@ module geometryMcp 'modules/mcp-servers.bicep' = {
   }
 }
 
-// Team B's catalogue servers. Team A's principals are deliberately absent from every allow-list
-// here: that is demo scenario 2, and it must fail even if someone hands Team A the URL.
+// Catalogue servers retain their exact-agent allowlists.
 module identificationMcp 'modules/mcp-servers.bicep' = {
   name: 'cardid-mcp'
   scope: identificationRg
   params: {
     namePrefix: namePrefix
     location: location
-    environmentId: identificationEnv.outputs.id
+    environmentId: platformEnv.outputs.id
     registryLoginServer: registry.outputs.loginServer
     imageTag: imageTag
     identityId: identificationIdentity.outputs.id
@@ -370,12 +274,6 @@ module identificationMcp 'modules/mcp-servers.bicep' = {
         image: 'mcp-cardcatalog-mtg'
         needsStorage: false
         allowedCallerObjectIds: empty(mtgAgentPrincipalId) ? [] : [mtgAgentPrincipalId]
-      }
-      {
-        name: 'mcp-cardcatalog-pokemon'
-        image: 'mcp-cardcatalog-pokemon'
-        needsStorage: false
-        allowedCallerObjectIds: empty(pokemonAgentPrincipalId) ? [] : [pokemonAgentPrincipalId]
       }
     ]
   }
@@ -393,10 +291,7 @@ module dataRbac 'modules/data-rbac.bicep' = {
   }
 }
 
-// The orchestrator's access to Team B's own project. The worker creates a thread, uploads the card
-// image and runs an identification agent there on every job, so without this the pipeline cannot
-// start — and because the role is Foundry User rather than Project Manager, the orchestrator still
-// cannot author or alter a single agent.
+// The worker can invoke both projects, but cannot author agents.
 module identificationAccess 'modules/foundry-invoke-access.bicep' = {
   name: 'cardid-invoke-access'
   scope: resourceGroup(identificationProjectRg)
@@ -407,12 +302,7 @@ module identificationAccess 'modules/foundry-invoke-access.bicep' = {
   }
 }
 
-// The same grant on Team A's project, wherever that project lives. This one is the cross-project
-// hop: it is the only route from Team B's pipeline into Team A's, and it is granted to the worker
-// because the worker is the identity that actually presents itself to the cardgeo endpoint. Flip
-// grantIdentificationAccessToGeometry to false and redeploy to break the pipeline at
-// DetectingBoundaries — see docs/foundry-demo.md.
-module crossProjectAccess 'modules/foundry-invoke-access.bicep' = if (grantIdentificationAccessToGeometry) {
+module crossProjectAccess 'modules/foundry-invoke-access.bicep' = {
   name: 'cross-project-access'
   scope: resourceGroup(geometryProjectRg)
   params: {

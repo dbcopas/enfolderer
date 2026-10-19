@@ -3,8 +3,8 @@
     Migrates a deployment from the old App Service hosting to Container Apps.
 
 .DESCRIPTION
-    This repository used to host the API, the worker and the three MCP servers on App Service. It
-    now runs all five as container apps. An existing deployment cannot simply be redeployed onto
+    The MTG pipeline hosts the API, worker and two MCP servers as container apps.
+    An existing App Service deployment cannot simply be redeployed onto
     the new templates, for two reasons:
 
     * ARM incremental deployments never delete a resource that was merely removed from a template,
@@ -96,7 +96,6 @@ $images = [ordered]@{
     'worker'                  = 'Enfolderer.Ai.Worker'
     'mcp-imaging'             = 'Enfolderer.Ai.Mcp.Imaging'
     'mcp-cardcatalog-mtg'     = 'Enfolderer.Ai.Mcp.CardCatalog.Mtg'
-    'mcp-cardcatalog-pokemon' = 'Enfolderer.Ai.Mcp.CardCatalog.Pokemon'
 }
 
 # The sites and plans the old templates created, in the resource groups they were created in.
@@ -105,7 +104,6 @@ $oldSites = @(
     @{ Rg = $platformRg; Name = "$Prefix-worker" }
     @{ Rg = $geoRg;      Name = "$Prefix-mcp-imaging" }
     @{ Rg = $idRg;       Name = "$Prefix-mcp-cardcatalog-mtg" }
-    @{ Rg = $idRg;       Name = "$Prefix-mcp-cardcatalog-pokemon" }
 )
 
 $oldPlans = @(
@@ -685,8 +683,7 @@ Write-Host @"
 
      az containerapp update -g $platformRg -n "$Prefix-worker" --set-env-vars ``
        ScanPipeline__BoundaryAgentId='<boundary asst_ id>' ``
-       ScanPipeline__IdentificationAgentIds__mtg='<mtg asst_ id>' ``
-       ScanPipeline__IdentificationAgentIds__pokemon='<pokemon asst_ id>'
+       ScanPipeline__IdentificationAgentIds__mtg='<mtg asst_ id>'
 
   3. Repoint the desktop app. The API hostname has changed:
 
