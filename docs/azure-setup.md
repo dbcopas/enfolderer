@@ -250,6 +250,22 @@ double grant. Admission, app consent/assignment, diagnostics permissions and cre
 independent checks. Cross-tenant users need new tenant object IDs; collections/allowances and
 pending jobs are not automatically migrated.
 
+List every approved demo user and their current remaining scans, including users who have not
+accepted their invitations:
+
+```powershell
+.\scripts\list-demo-users.ps1 -ConfigFile '<new-config-path>' -SignIn |
+    Format-Table DisplayName, RemainingScans, InvitationStatus -AutoSize
+```
+
+Subsequent calls can omit `-SignIn`. The script defaults to `-NamePrefix enf-cost`, discovers
+the live API allowlist (including the owner), and reports unlimited accounts as `Unlimited`.
+It requires Azure CLI read access to the Container App and directory users, plus delegated
+allowance-administrator access. `-AuthenticationRecord '<existing-record-path>'` can import an
+existing desktop authentication record for the same tenant/client. Results are PowerShell
+objects, so they can also be piped to `Export-Csv` or `ConvertTo-Json`. The script is read-only:
+it does not assign users, grant or consume credits, or change authentication policy.
+
 ## 6. Verification and cutover gate
 
 ```powershell

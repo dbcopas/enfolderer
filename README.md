@@ -397,6 +397,10 @@ credits. No user is automatically unlimited based on account type.
 
 See [allowance administration and tenant migration](docs/azure-setup.md#5-mobile-website-and-separate-desktop-configuration)
 for setup, grants, top-ups, refunds and balance migration.
+Use `.\scripts\list-demo-users.ps1 -ConfigFile '<demo-config-path>' -SignIn` to enumerate the live
+demo allowlist with names, invitation status and remaining scans; unlimited accounts are labelled
+`Unlimited`. Later calls reuse the cached sign-in. This read-only report requires an allowance
+administrator and Azure CLI access to the deployment and directory users.
 Run `dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check` for API allowance, concurrent
 submission, dispatch recovery and worker duplicate-delivery regressions. Run
 `dotnet run --project tools\Enfolderer.Ai.Allowance.Check` for Cosmos batch-failure, ETag,
