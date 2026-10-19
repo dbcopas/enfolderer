@@ -269,7 +269,7 @@ async function initialize() {
   const redirected = await auth.handleRedirectPromise();
   account = redirected?.account || auth.getActiveAccount() || auth.getAllAccounts()[0];
   $("signIn").disabled = false;
-  $("signIn").textContent = "Sign in with Microsoft";
+  $("signIn").textContent = "Sign in with your invited account";
   if (!account) return;
   auth.setActiveAccount(account);
   $("welcome").hidden = true;

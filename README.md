@@ -141,9 +141,11 @@ the existing delegated `Scan.Submit` API permission. The pinned MSAL library and
 are served locally; `scripts/restore-web-assets.ps1` restores the integrity-checked dependency.
 
 The private pilot uses an explicit tenant user/guest object-ID allowlist. It applies to both web
-and desktop API calls. An Outlook.com user first accepts a tenant guest invitation and must be
+and desktop API calls. An external user first accepts a tenant guest invitation and must be
 assigned to the web enterprise app and included in that allowlist. Assignment-required applications
 need one-time tenant-wide administrator consent; ordinary approved users need no administrator role.
+Guests sign in with the invited email address, using their existing identity or an emailed
+one-time passcode when enabled in Entra. A Microsoft account is not required for email-passcode guests.
 See [mobile setup](docs/azure-setup.md#5-mobile-website-and-separate-desktop-configuration).
 
 On a phone, take or select a photo, choose the game, and start the scan. The browser normalizes

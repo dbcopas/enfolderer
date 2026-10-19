@@ -69,9 +69,17 @@ internal static class ApiOwnershipChecks
         check(website.Contains("Magic: The Gathering") && !website.Contains("id=\"game\"")
             && !website.Contains("pokemon", StringComparison.OrdinalIgnoreCase),
             "mobile UI advertises MTG without offering a game selector");
+        check(website.Contains("Sign in with your invited account")
+            && website.Contains("Accept your invitation first, then use the same email address")
+            && website.Contains("Sign-in may use your existing account or a code sent to your email")
+            && !website.Contains("invited Microsoft account") && !website.Contains("Outlook.com users"),
+            "mobile welcome explains invited-email sign-in without requiring a Microsoft account");
         var mobileScript = await client.GetStringAsync("/app.js");
         check(mobileScript.Contains("gameHint: \"mtg\"") && !mobileScript.Contains("$(\"game\")"),
             "mobile requests always specify MTG without referencing a removed selector");
+        check(mobileScript.Contains("$(\"signIn\").textContent = \"Sign in with your invited account\"")
+            && !mobileScript.Contains("Sign in with Microsoft"),
+            "initialized sign-in button uses the same invited-account wording");
         using var anonymous = await client.PostAsJsonAsync("/jobs/", new CreateJobRequest());
         check(anonymous.StatusCode == HttpStatusCode.Unauthorized, "anonymous callers cannot create jobs");
         client.DefaultRequestHeaders.Add("X-Test-User", UserA);

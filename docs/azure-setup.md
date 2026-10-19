@@ -225,6 +225,11 @@ $mobile = .\scripts\configure-mobile-web.ps1 -ApiClientId $auth.ApiClientId `
 
 The SPA requires assignment and admin consent;
 adding a pilot user requires app assignment as well as the API allowlist.
+Guests must accept their invitation and sign in with the same email address. A Microsoft account
+is not required when Entra email one-time passcode is enabled: guests without another supported
+identity can receive a code by email. Check **External Identities > All identity providers >
+Email one-time passcode** in the Entra admin center. The website wording covers both sign-in methods;
+it does not change the tenant's authentication policy.
 
 Create a **separate** desktop config for this deployment; do not overwrite the existing default or
 point current users at the new API before scan validation. Copy the existing config format and
