@@ -206,16 +206,16 @@ internal static class PriceAnnotationChecks
             check(png.Width == 800 && png.Height == image.Height && png[0, 0] == image[0, 0]
                 && png[60, 370] != image[60, 370],
                 "output preserves original photo dimensions and pixels outside labels, with no footer or appended legend");
-            check(png[373, 623] == Color.Gold.ToPixel<Rgba32>() && png[45, 45] == image[45, 45]
+            check(png[373, 514] == Color.Gold.ToPixel<Rgba32>() && png[45, 45] == image[45, 45]
                 && png[399, 340] != image[399, 340] && png[401, 340] == image[401, 340],
                 "price box occupies exactly half the card width, with lower-right circle");
             check(new[] { 413, 467 }.All(top => Enumerable.Range(top, 20).Any(y => Enumerable.Range(55, 150)
                 .Any(x => png[x, y].R > 180 && png[x, y].G > 180 && png[x, y].B > 180))),
                 "taller overlay includes card name and exact set/number on separate lines under the prices");
             check(result.Cards.All(c => c.Ownership is null)
-                && !Enumerable.Range(540, 90).Any(y => Enumerable.Range(55, 240)
-                    .Any(x => png[x, y].R > 220 && png[x, y].G > 220 && png[x, y].B > 220)),
-                "without collection comparison, ownership stays absent and neither quantity line is rendered");
+                && Enumerable.Range(540, 106).All(y => Enumerable.Range(40, 360)
+                    .All(x => png[x, y] == image[x, y])),
+                "without collection comparison, the entire former ownership band preserves the original photo");
             foreach (var candidate in new[]
             {
                 card with { Resolution = "confirmed" },
@@ -227,7 +227,7 @@ internal static class PriceAnnotationChecks
                 PricedScanRenderer.Render(source, [candidate with { Prices = result.Cards[0].Prices }], rendered);
                 rendered.Position = 0;
                 using var confidenceImage = Image.Load<Rgba32>(rendered);
-                check(confidenceImage[373, 623] == PricedScanRenderer.OverlayConfidenceColor(candidate).ToPixel<Rgba32>(),
+                check(confidenceImage[373, 514] == PricedScanRenderer.OverlayConfidenceColor(candidate).ToPixel<Rgba32>(),
                     "rendered circle uses the actual green/red match confidence color");
             }
             foreach (var needed in new[] { true, false })
@@ -317,6 +317,7 @@ internal static class PriceAnnotationChecks
                 "worker always displays exact-printing quantities, including zero, and the all-sets total");
             using var rendered = Image.Load<Rgba32>(output.Content!);
             check(rendered[41, 100] == image[41, 100]
+                && rendered[373, 623] == Color.Gold.ToPixel<Rgba32>()
                 && (quantity == 0 ? rendered[60, 340].R > rendered[60, 340].G
                     : rendered[60, 340].R == 0)
                 && Enumerable.Range(540, 90).Any(y => Enumerable.Range(55, 240)

@@ -165,7 +165,9 @@ tenant/object IDs, and remain until replaced/deleted. The worker reads the snaps
 an opted-in scan; removing it mid-scan produces explicit unknown ownership, not invented zeros.
 When collection comparison is enabled, missing exact printings get red overlay backgrounds;
 all cards show exact-printing and all-sets quantities, including zero. With comparison disabled,
-neither ownership line is printed. Genuine lookup failures show `unavailable`, not amber or a question mark.
+neither ownership line is printed and the overlay is shortened to remove that space, with the
+confidence dot moved to its new lower-right corner. Genuine lookup failures show `unavailable`,
+not amber or a question mark.
 Double-faced cards still require two copies. Existing rendered images are
 unchanged by later snapshot replacement/deletion. Desktop scans keep their local ownership path.
 Older MTG Studio rows can have legacy set codes and no collector number (for example `VI` rather

@@ -40,7 +40,7 @@ public static class PricedScanRenderer
                 var padding = panelWidth * 0.04f;
                 var radius = panelWidth * 0.035f;
                 var priceHeight = panelWidth * 0.24f;
-                var panelHeight = panelWidth * 0.90f;
+                var panelHeight = panelWidth * (card.Ownership is null ? 0.58f : 0.90f);
                 var textWidth = panelWidth - padding * 3 - radius * 2;
                 var textHeight = priceHeight - padding * 2;
                 var priceFont = FitOverlayFont(family, panel, textWidth, textHeight);
