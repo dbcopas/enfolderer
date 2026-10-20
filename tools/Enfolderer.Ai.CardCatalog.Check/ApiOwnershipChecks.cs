@@ -88,7 +88,8 @@ internal static class ApiOwnershipChecks
             foreach (var (method, suffix) in new[]
             {
                 (HttpMethod.Get, ""), (HttpMethod.Put, "/content"),
-                (HttpMethod.Post, "/submit"), (HttpMethod.Get, "/annotated-image"), (HttpMethod.Get, "/cards.csv")
+                (HttpMethod.Post, "/submit"), (HttpMethod.Get, "/annotated-image"), (HttpMethod.Get, "/cards.csv"),
+                (HttpMethod.Get, "/crops/0")
             })
             {
                 using var request = new HttpRequestMessage(method, $"/jobs/{job.JobId}{suffix}");
@@ -109,10 +110,17 @@ internal static class ApiOwnershipChecks
         check(upload.StatusCode == HttpStatusCode.Accepted && submit.StatusCode == HttpStatusCode.Accepted
             && status.StatusCode == HttpStatusCode.OK && images.Writes == 1 && queue.Messages == 1,
             "owner retains normal upload, submission and polling behavior");
+        using var pendingCrop = await client.GetAsync($"/jobs/{job.JobId}/crops/0");
+        check(pendingCrop.StatusCode == HttpStatusCode.NotFound && images.Reads == 0,
+            "crop evidence is not exposed before a result completes");
         await store.UpsertAsync(job with
         {
             Status = ScanJobStatus.Completed,
-            Result = new ScanResultDocument { AnnotatedImagePath = ScanBlobPaths.BuildAnnotatedBlobPath(job.JobId) }
+            Result = new ScanResultDocument
+            {
+                AnnotatedImagePath = ScanBlobPaths.BuildAnnotatedBlobPath(job.JobId),
+                Cards = [new IdentifiedCard { Index = 0 }, new IdentifiedCard { Index = 2 }]
+            }
         });
         using var download = await client.GetAsync($"/jobs/{job.JobId}/annotated-image");
         check(download.StatusCode == HttpStatusCode.OK && images.Reads == 1,
@@ -123,8 +131,28 @@ internal static class ApiOwnershipChecks
         using var stolenResults = await client.GetAsync($"/jobs/{job.JobId}");
         check(stolenImage.StatusCode == HttpStatusCode.NotFound && stolenResults.StatusCode == HttpStatusCode.NotFound
             && images.Reads == 1, "non-owner cannot download an existing completed image or results");
+        using var stolenCrop = await client.GetAsync($"/jobs/{job.JobId}/crops/0");
+        check(stolenCrop.StatusCode == HttpStatusCode.NotFound && images.Reads == 1,
+            "non-owner cannot read existing card evidence crops");
         client.DefaultRequestHeaders.Remove("X-Test-User");
         client.DefaultRequestHeaders.Add("X-Test-User", UserA);
+        using var crop = await client.GetAsync($"/jobs/{job.JobId}/crops/2");
+        check(crop.StatusCode == HttpStatusCode.OK && images.Reads == 2
+            && images.LastRead == $"{ScanBlobPaths.CropsContainer}/{ScanBlobPaths.BuildCropBlobName(job.JobId, 2)}"
+            && crop.Content.Headers.ContentType?.MediaType == "image/png"
+            && crop.Headers.CacheControl?.NoStore == true,
+            "owner crop route uses the recorded card index, canonical blob path and private no-store response");
+        foreach (var index in new[] { -1, 1, 3, int.MaxValue })
+        {
+            using var invalidCrop = await client.GetAsync($"/jobs/{job.JobId}/crops/{index}");
+            check(invalidCrop.StatusCode == HttpStatusCode.NotFound && images.Reads == 2,
+                $"unrecorded crop index {index} is denied without reading storage");
+        }
+        images.Exists = false;
+        using var purgedCrop = await client.GetAsync($"/jobs/{job.JobId}/crops/0");
+        check(purgedCrop.StatusCode == HttpStatusCode.NotFound && images.Reads == 2,
+            "purged crop returns 404 instead of breaking recorded evidence");
+        images.Exists = true;
         await store.CreateAsync(new ScanJobDocument { Id = "legacy", JobId = "legacy" });
         using var legacy = await client.GetAsync("/jobs/legacy");
         check(legacy.StatusCode == HttpStatusCode.NotFound, "actual API denies legacy ownerless jobs");
@@ -486,9 +514,11 @@ internal static class ApiOwnershipChecks
         public bool Exists { get; set; } = true;
         public int Writes { get; private set; }
         public int Reads { get; private set; }
+        public string? LastRead { get; private set; }
         public Task<Stream> OpenReadAsync(string path, CancellationToken ct = default)
         {
             Reads++;
+            LastRead = path;
             return Task.FromResult<Stream>(new MemoryStream([1, 2, 3]));
         }
         public Task WriteAsync(string path, Stream content, string contentType, CancellationToken ct = default)

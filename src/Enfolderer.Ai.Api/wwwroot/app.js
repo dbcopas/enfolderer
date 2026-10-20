@@ -113,6 +113,7 @@ async function choosePhoto(event) {
     $("previewWrap").hidden = false;
     $("photoInfo").textContent = `${canvas.width} x ${canvas.height} pixels | ${(photo.size / 1024 / 1024).toFixed(1)} MB | location metadata removed`;
     $("results").hidden = true;
+    ScanEvidence.reset();
     $("progressPanel").hidden = true;
     setBusy(false);
   } finally { URL.revokeObjectURL(originalUrl); }
@@ -148,6 +149,7 @@ async function showResults(result) {
   $("results").hidden = false;
   $("summary").textContent = `${result.cards.length} cards detected. Download the overlay and price-ranked CSV below.`;
   $("cardList").replaceChildren();
+  ScanEvidence.show(result, activeJob.id, api);
   const amount = value => value == null ? "unavailable" : new Intl.NumberFormat(undefined, { style: "currency", currency: "EUR" }).format(value);
   for (const card of result.cards) {
     const row = document.createElement("article");
@@ -165,9 +167,7 @@ async function showResults(result) {
       owned.className = o.error ? "warning" : o.quantity < o.requiredQuantity ? "missing" : "";
       row.append(owned);
     }
-    const printingPlaced = card.set && card.collectorNumber && (card.artVerdict === "moved"
-      || card.artVerdict === "agrees" && card.artMargin > 0
-      || ["confirmed", "corrected", "named", "relocated", "fuzzy"].includes(card.resolution));
+    const printingPlaced = ScanEvidence.printingPlaced(card);
     if (card.error || card.prices?.error || !printingPlaced) {
       const warning = document.createElement("p");
       warning.className = "warning";
@@ -230,6 +230,7 @@ async function startScan() {
   await loadAllowance();
   if (!scansAvailable) return;
   $("results").hidden = true;
+  ScanEvidence.reset();
   $("retry").hidden = true;
   $("progressPanel").hidden = false;
   $("stage").textContent = "Uploading your photo";

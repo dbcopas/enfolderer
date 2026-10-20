@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/site.css">
   <script defer src="/lib/msal-browser.min.js"
     integrity="sha384-TlDXht2cVvKBRAwDJrpYYtb+vUcYNxMgTELqFTRcnu0SP//KlFc7eE8so0+lJ03E" crossorigin="anonymous"></script>
+  <script defer src="/evidence.js"></script>
   <script defer src="/app.js"></script>
 </head>
 <body>
@@ -70,7 +71,15 @@
           <a id="imageDownload" class="button primary" hidden>Save overlay</a>
           <a id="csvDownload" class="button secondary" hidden>Download price-ranked CSV</a>
         </div>
-        <p class="small muted">Both prices are shown: nonfoil, then foil. The gold trophy marks the highest-value printing you still need, using nonfoil or foil when nonfoil is unavailable. Pink panels mean a missing exact printing; amber means ownership is unknown. A double-faced card needs two copies. No trophy is shown when no known shortage has a price.</p>
+        <p class="small muted">Both prices are shown: nonfoil, then foil. One gold trophy marks the highest-value identified card, regardless of ownership, using nonfoil or foil when nonfoil is unavailable. Other identified cards show their price rank. Pink panels mean a missing exact printing; amber means ownership is unknown. A double-faced card needs two copies. No trophy is shown when no identified card has a price.</p>
+        <details id="scanEvidence" class="scan-evidence" hidden>
+          <summary>Explain this scan <span class="badge">Recorded evidence</span></summary>
+          <p id="evidenceSummary" class="small muted"></p>
+          <p class="small muted">Follow the photograph reading, catalogue resolution, independent artwork check, and price source. These are saved pipeline outputs, not an AI-generated rationale or a full tool trace. Missing fields mean evidence was not recorded.</p>
+          <label for="evidenceCard">Inspect a card</label>
+          <select id="evidenceCard"></select>
+          <div id="evidenceBody" aria-live="polite"></div>
+        </details>
         <div id="cardList" class="card-list"></div>
         <p class="small muted">Daily Cardmarket reference prices via Scryfall, not live offers. The CSV is a ranked report, not an import file. Confidence circles: green = placed, yellow = review, red = unidentified or low confidence.</p>
       </section>

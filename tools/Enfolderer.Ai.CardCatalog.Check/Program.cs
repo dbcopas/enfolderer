@@ -32,6 +32,11 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--api-ownership")
+        {
+            ApiOwnershipChecks.RunAsync(Check).GetAwaiter().GetResult();
+            return _failures == 0 ? 0 : 1;
+        }
         if (args.Length == 2 && args[0] == "--legacy-printing")
             return LegacyPrintingChecks.RunAsync(args[1]).GetAwaiter().GetResult();
         if (args.Length == 3 && args[0] == "--measure-cards")
@@ -62,7 +67,7 @@ internal static class Program
         if (args.Length > 0 && (args[0] is not ("--photo-art" or "--photo-multilingual" or "--photo-boundaries") || args.Length > 2))
         {
             Console.Error.WriteLine("Usage: Enfolderer.Ai.CardCatalog.Check [--photo-art|--photo-multilingual|--photo-boundaries [training-directory]] "
-                + "or --measure-cards <photo-path> <crop-directory> or --legacy-printing <mana-crypt-crop> "
+                + "or --api-ownership or --measure-cards <photo-path> <crop-directory> or --legacy-printing <mana-crypt-crop> "
                 + "or --price-render-check <synthetic-preview.png> "
                 + "or --live-reading <project-endpoint> <agent-id> <page-directory> <comma-separated-indices> "
                 + "or --live-boundary <project-endpoint> <agent-id> <page-directory> <blob-path> [crop-directory]");

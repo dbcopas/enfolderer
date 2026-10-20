@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Scan evidence browser checks</title></head>
+<body>
+  <h1>Scan evidence browser checks</h1>
+  <pre id="checks" role="status">Running...</pre>
+  <details id="scanEvidence" hidden>
+    <summary>Explain this scan</summary>
+    <p id="evidenceSummary"></p>
+    <label for="evidenceCard">Card</label><select id="evidenceCard"></select>
+    <div id="evidenceBody"></div>
+  </details>
+  <script src="../../src/Enfolderer.Ai.Api/wwwroot/evidence.js"></script>
+  <script>
+    "use strict";
+    (async () => {
+      const output = document.getElementById("checks"), checks = [];
+      const check = (condition, name) => {
+        if (!condition) throw new Error(name);
+        checks.push("PASS " + name);
+        output.textContent = checks.join("\n");
+      };
+      const tick = () => new Promise(resolve => setTimeout(resolve, 20));
+      const waitFor = async condition => {
+        const deadline = Date.now() + 3000;
+        while (!condition()) {
+          if (Date.now() > deadline) throw new Error("Timed out waiting for crop state");
+          await tick();
+        }
+      };
+      const panel = document.getElementById("scanEvidence");
+      const select = document.getElementById("evidenceCard");
+      const body = document.getElementById("evidenceBody");
+      const img = () => body.querySelector("img");
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const blob = await new Promise(resolve => canvas.toBlob(resolve));
+      const cards = [
+        { index: 0, name: "Naked Singularity", set: "ice", collectorNumber: "330",
+          readName: "Naked Singularity", resolution: "unplaced", confidence: .94,
+          artVerdict: "inconclusive", artReason: "Shared artwork", artMargin: 0,
+          prices: { nonfoil: 0, foil: 20, source: "Fixture", retrievedAt: "0001-01-01T00:00:00Z" } },
+        { index: 4, name: "<img src=x onerror=alert(1)>", set: "tmc", collectorNumber: "136",
+          readSet: "mh2", readCollectorNumber: "238", resolution: "relocated", artVerdict: "moved",
+          artMovedFrom: "mh2 238", ownership: { quantity: 0, allQuantity: 2, requiredQuantity: 1 } },
+        { index: 5, error: "Footer unreadable" }
+      ];
+      const calls = [];
+      const request = async path => { calls.push(path); return { blob: async () => blob }; };
+      ScanEvidence.show({ cards }, "fixture", request);
+      await tick();
+      check(calls.length === 0, "Closed panel does not fetch crops");
+      check(document.getElementById("evidenceSummary").textContent ===
+        "3 detected | 2 named | 1 printings placed | 2 need review", "Named and placed counts differ");
+      check(body.textContent.includes("Printing needs review"), "High confidence does not confirm an unplaced printing");
+      check(!body.textContent.includes("Collection comparison"), "No ownership lines without comparison");
+      const rank = [...body.querySelectorAll("dt")].find(node => node.textContent.startsWith("Ranking value"));
+      check(rank.nextElementSibling.textContent === new Intl.NumberFormat(undefined,
+        { style: "currency", currency: "EUR" }).format(0), "Zero nonfoil wins over foil fallback");
+      check(body.textContent.includes("Not recorded"), "Legacy and absent fields are explicit");
+      panel.open = true;
+      await waitFor(() => img() && !img().hidden);
+      check(calls.join() === "/jobs/fixture/crops/0", "Opening loads only the selected private crop");
+      select.value = "1"; select.dispatchEvent(new Event("change"));
+      await waitFor(() => img() && !img().hidden);
+      check(calls.at(-1) === "/jobs/fixture/crops/4", "Selection uses recorded index, not list position");
+      check(!body.querySelector("h3 img") && body.querySelector("h3").textContent.startsWith("<img"),
+        "Card text cannot inject markup");
+      check(body.textContent.includes("mh2 238") && body.textContent.includes("Collection comparison"),
+        "Artwork correction and ownership evidence are shown");
+      select.value = "2"; select.dispatchEvent(new Event("change"));
+      check(body.textContent.includes("Unidentified") && body.textContent.includes("Footer unreadable"),
+        "Unidentified card retains its failure evidence");
+      ScanEvidence.reset();
+      check(panel.hidden && !panel.open && !body.childElementCount, "Reset clears the previous scan");
+      let fail = true;
+      ScanEvidence.show({ cards: [cards[0]] }, "purged", async () => {
+        if (fail) throw new Error("404 Not Found");
+        return { blob: async () => blob };
+      });
+      panel.open = true;
+      await waitFor(() => !body.querySelector("button").hidden);
+      check(body.textContent.includes("purged or expired") && body.textContent.includes("Naked Singularity"),
+        "Missing crop has retry and keeps text evidence");
+      fail = false; body.querySelector("button").click();
+      await waitFor(() => !img().hidden);
+      check(true, "Retry loads the crop successfully");
+      let finishOld;
+      ScanEvidence.show({ cards: cards.slice(0, 2) }, "race", path => path.endsWith("/0")
+        ? new Promise(resolve => { finishOld = () => resolve({ blob: async () => blob }); })
+        : Promise.resolve({ blob: async () => blob }));
+      panel.open = true;
+      await waitFor(() => finishOld);
+      select.value = "1"; select.dispatchEvent(new Event("change"));
+      await waitFor(() => !img().hidden);
+      const selectedUrl = img().src;
+      finishOld(); await tick();
+      check(img().src === selectedUrl, "Late response cannot overwrite another card");
+      let finishReset;
+      ScanEvidence.show({ cards: [cards[0]] }, "reset", () =>
+        new Promise(resolve => { finishReset = () => resolve({ blob: async () => blob }); }));
+      panel.open = true;
+      await waitFor(() => finishReset);
+      ScanEvidence.reset(); finishReset(); await tick();
+      check(panel.hidden && !body.childElementCount, "Late response cannot resurrect a previous scan");
+      ScanEvidence.show({ cards: [cards[0]] }, "invalid", async () =>
+        ({ blob: async () => new Blob(["invalid"], { type: "image/png" }) }));
+      panel.open = true;
+      await waitFor(() => !body.querySelector("button").hidden);
+      check(img().hidden && body.textContent.includes("Crop unavailable"), "Invalid image reports a visible error");
+      check(!ScanEvidence.printingPlaced({ ...cards[0], artVerdict: "agrees", artMargin: 0 }),
+        "Tied artwork agreement does not confirm a printing");
+      check(ScanEvidence.printingPlaced({ ...cards[0], artVerdict: "agrees", artMargin: .1 }),
+        "Separated artwork agreement places a printing");
+      ScanEvidence.show({ cards: [] }, "empty", request);
+      check(select.disabled && body.textContent.includes("No card evidence"), "Empty result is explicit");
+      ScanEvidence.reset();
+      output.textContent += "\n\nAll " + checks.length + " checks passed.";
+    })().catch(error => {
+      document.getElementById("checks").textContent += "\nFAIL " + error.message;
+      console.error(error);
+    });
+  </script>
+</body>
+</html>

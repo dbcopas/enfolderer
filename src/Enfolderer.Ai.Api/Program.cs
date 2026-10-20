@@ -356,6 +356,19 @@ jobs.MapGet("/{jobId}/cards.csv", async (string jobId, IJobStore store, Cancella
         "text/csv; charset=utf-8", $"scan-{job.JobId}.csv");
 });
 
+jobs.MapGet("/{jobId}/crops/{index:int}", async (
+    string jobId, int index, IJobStore store, IScanImageStore images, CancellationToken ct) =>
+{
+    var job = await store.GetAsync(jobId, ct);
+    if (job?.Status != ScanJobStatus.Completed || job.Result is null
+        || !job.Result.Cards.Any(card => card.Index == index) || index < 0)
+        return Results.NotFound();
+    var path = $"{ScanBlobPaths.CropsContainer}/{ScanBlobPaths.BuildCropBlobName(job.JobId, index)}";
+    return await images.ExistsAsync(path, ct)
+        ? Results.File(await images.OpenReadAsync(path, ct), "image/png")
+        : Results.NotFound();
+});
+
 app.Run();
 
 /// <summary>Exposed so integration tests can construct the API host.</summary>

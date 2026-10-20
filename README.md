@@ -155,6 +155,21 @@ Unpriced cards sort last and ties retain scan order. This mobile report replaces
 five-column download and is not import-compatible. Desktop import CSVs remain unchanged.
 Spreadsheet formula prefixes are escaped.
 
+Completed mobile results include **Explain this scan**. Select a card to compare its photographed
+title/footer readings with the resolved catalogue identity, resolution status, artwork verdict
+and measured separation, identification agent/score, and price source/languages/retrieval time.
+Collection evidence appears only when an ownership result exists. Missing fields are labelled
+as not recorded; model scores are not probabilities, and artwork ambiguity is not confirmation.
+The panel displays stored evidence, not generated reasoning or a full tool-call trace, and makes
+no extra model calls. Card crops load only when the panel is opened and use the same authenticated,
+owner-only, no-store job routes as result downloads; no diagnostic-operator access is required.
+Purged/expired crops show an explicit message and retry action without hiding the remaining evidence.
+Run `dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --api-ownership` for the API
+ownership, crop access and missing-image regressions.
+Open [the browser checks](tools/Enfolderer.Ai.CardCatalog.Check/scan-evidence-check.html) in a
+browser for dependency-free UI regressions using synthetic results and image bytes; no sign-in
+or live scans are needed.
+
 For ownership, use **Scan > Export Mobile Collection Snapshot...** in the desktop app, then
 upload that JSON under **My collection** on the website (a computer signed into the same account
 can upload it too). The export reads the same local database pair used by desktop scans.
