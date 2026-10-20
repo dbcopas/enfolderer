@@ -36,9 +36,15 @@ internal static class ConcurrencyChecks
         foreach (var concurrency in new[] { 1, 2, 3 })
         {
             var store = new RecordingStore();
-            await store.CreateAsync(new ScanJobDocument { Id = "parallel", JobId = "parallel", BlobPath = "scan.png" });
+            var blobPrefix = concurrency == 1 ? null
+                : ScanBlobPaths.BuildJobPrefix("parallel", new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero));
+            await store.CreateAsync(new ScanJobDocument
+            {
+                Id = "parallel", JobId = "parallel", BlobPrefix = blobPrefix, BlobPath = "scan.png"
+            });
             var agent = new IdentificationAgent();
-            var processor = new ScanJobProcessor(store, new Images(), new Boundaries(), [agent],
+            var images = new Images();
+            var processor = new ScanJobProcessor(store, images, new Boundaries(), [agent],
                 new ScanPipelineOptions { CropHeight = 140, MaxConcurrentCards = concurrency },
                 new Credential(), new ScanPlatformOptions(), NullLogger<ScanJobProcessor>.Instance);
             await processor.ProcessAsync(new ScanJobMessage("parallel", "scan.png", null), default);
@@ -53,6 +59,9 @@ internal static class ConcurrencyChecks
                 "results remain in reading order even when later cards finish first");
             check(store.Progress.SequenceEqual([0, 1, 2, 3, 4, 4]),
                 "persisted progress is monotonic and no concurrent update loses a completed card");
+            check(images.WrittenPaths.Count == 4 && Enumerable.Range(0, 4).All(index =>
+                    images.WrittenPaths.Contains($"crops/{blobPrefix ?? "parallel"}/card-{index:D3}.png")),
+                "parallel workers keep every crop in the persisted dated or legacy job folder");
             await processor.ProcessAsync(new ScanJobMessage("parallel", "scan.png", null), default);
             check(agent.Completed.Count == 3 && store.Progress.Count == 6,
                 "duplicate queue delivery never reruns a completed scan");
@@ -145,6 +154,7 @@ internal static class ConcurrencyChecks
     private sealed class Images : IScanImageStore
     {
         public int Reads { get; private set; }
+        public System.Collections.Concurrent.ConcurrentQueue<string> WrittenPaths { get; } = new();
         public Task<Stream> OpenReadAsync(string path, CancellationToken ct = default)
         {
             Reads++;
@@ -154,8 +164,11 @@ internal static class ConcurrencyChecks
             stream.Position = 0;
             return Task.FromResult<Stream>(stream);
         }
-        public Task WriteAsync(string path, Stream content, string contentType, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task WriteAsync(string path, Stream content, string contentType, CancellationToken ct = default)
+        {
+            WrittenPaths.Enqueue(path);
+            return Task.CompletedTask;
+        }
         public Task<bool> ExistsAsync(string path, CancellationToken ct = default) => Task.FromResult(true);
     }
 

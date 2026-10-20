@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Enfolderer.Ai.Contracts;
@@ -15,8 +16,17 @@ public static class ScanBlobPaths
     public const string CropsContainer = "crops";
     public const string OutputsContainer = "outputs";
 
+    public static string BuildJobPrefix(string jobId, DateTimeOffset createdAt)
+    {
+        if (string.IsNullOrWhiteSpace(jobId)) throw new ArgumentException("jobId is required.", nameof(jobId));
+        return $"{createdAt.UtcDateTime.ToString("yyyyMMdd'T'HHmmssfff'Z'", CultureInfo.InvariantCulture)}-{SanitizeSegment(jobId)}";
+    }
+
     public static string BuildAnnotatedBlobPath(string jobId) =>
         $"{OutputsContainer}/{SanitizeSegment(jobId)}/priced.png";
+
+    public static string BuildAnnotatedBlobPath(ScanJobDocument job) =>
+        BuildAnnotatedBlobPath(job.BlobPrefix ?? job.JobId);
 
     private const int MaxStemLength = 64;
 
@@ -30,6 +40,9 @@ public static class ScanBlobPaths
     /// <summary>Builds the blob name (within <see cref="CropsContainer"/>) for one card crop.</summary>
     public static string BuildCropBlobName(string jobId, int cardIndex) =>
         $"{SanitizeSegment(jobId)}/card-{cardIndex:D3}.png";
+
+    public static string BuildCropBlobName(ScanJobDocument job, int cardIndex) =>
+        BuildCropBlobName(job.BlobPrefix ?? job.JobId, cardIndex);
 
     /// <summary>
     /// Reduces a caller-supplied file name to a safe <c>stem.ext</c> form. Path separators, traversal

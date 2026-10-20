@@ -123,8 +123,10 @@ jobs.MapPost("/", async (
     // The storage account has no public endpoint, so there is no URL that would let the client
     // write the blob itself. The path is derived here only so that the job document and the worker
     // agree on where the image will land once PUT /jobs/{id}/content relays it.
-    var blobPath = $"{ScanBlobPaths.ScansContainer}/{ScanBlobPaths.BuildScanBlobName(jobId, request.FileName)}";
-    var uploadExpiresAt = DateTimeOffset.UtcNow.Add(platform.UploadWindow);
+    var createdAt = DateTimeOffset.UtcNow;
+    var blobPrefix = ScanBlobPaths.BuildJobPrefix(jobId, createdAt);
+    var blobPath = $"{ScanBlobPaths.ScansContainer}/{ScanBlobPaths.BuildScanBlobName(blobPrefix, request.FileName)}";
+    var uploadExpiresAt = createdAt.Add(platform.UploadWindow);
 
     try
     {
@@ -136,7 +138,10 @@ jobs.MapPost("/", async (
             OwnerObjectId = owner.ObjectId,
             UseCollection = request.UseCollection,
             Status = ScanJobStatus.Pending,
+            BlobPrefix = blobPrefix,
             BlobPath = blobPath,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
             UploadExpiresAt = uploadExpiresAt,
             GameHint = CardGames.Magic
         };
@@ -354,7 +359,7 @@ jobs.MapGet("/{jobId}/annotated-image", async (
     var job = await store.GetAsync(jobId, ct);
     if (job?.Status != ScanJobStatus.Completed || job.Result?.AnnotatedImagePath is null)
         return Results.NotFound();
-    var stream = await images.OpenReadAsync(ScanBlobPaths.BuildAnnotatedBlobPath(job.JobId), ct);
+    var stream = await images.OpenReadAsync(ScanBlobPaths.BuildAnnotatedBlobPath(job), ct);
     return Results.File(stream, "image/png", $"scan-{job.JobId}-priced.png");
 });
 

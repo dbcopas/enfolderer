@@ -150,7 +150,7 @@ public sealed class ScanJobProcessor
                         ownershipError = "Collection could not be loaded. Ownership is unknown; replace the snapshot and scan again.";
                     }
                 }
-                result = await _annotation.CreateAsync(result, source, ct, snapshot, ownershipError);
+                result = await _annotation.CreateAsync(result, source, ct, snapshot, ownershipError, job.BlobPrefix);
             }
 
             await _jobs.UpsertAsync(
@@ -177,7 +177,7 @@ public sealed class ScanJobProcessor
                     "Job {JobId} identified none of its {Detected} card(s). The crops handed to the "
                     + "identification agents are in the '{Container}' container under '{Prefix}/'; "
                     + "open them to tell a bad crop from a refused identification.",
-                    job.JobId, boundaries.Count, ScanBlobPaths.CropsContainer, job.JobId);
+                    job.JobId, boundaries.Count, ScanBlobPaths.CropsContainer, job.BlobPrefix ?? job.JobId);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -393,7 +393,7 @@ public sealed class ScanJobProcessor
 
             try
             {
-                var cropPath = $"{ScanBlobPaths.CropsContainer}/{ScanBlobPaths.BuildCropBlobName(job.JobId, index)}";
+                var cropPath = $"{ScanBlobPaths.CropsContainer}/{ScanBlobPaths.BuildCropBlobName(job, index)}";
                 // Written to storage for the audit trail — you can open the container mid-demo and
                 // see the rectified faces — and handed to the agent as bytes, because Team B cannot
                 // reach the container either.

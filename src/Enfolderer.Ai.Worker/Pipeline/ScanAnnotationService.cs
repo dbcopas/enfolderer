@@ -11,7 +11,7 @@ public sealed class ScanAnnotationService(
     ScryfallPriceClient prices, IScanImageStore images, ILogger<ScanAnnotationService> log)
 {
     public async Task<ScanResultDocument> CreateAsync(ScanResultDocument result, Stream source, CancellationToken ct,
-        CollectionSnapshot? snapshot = null, string? ownershipError = null)
+        CollectionSnapshot? snapshot = null, string? ownershipError = null, string? blobPrefix = null)
     {
         var timer = Stopwatch.StartNew();
         var enriched = new List<IdentifiedCard>();
@@ -90,7 +90,7 @@ public sealed class ScanAnnotationService(
             log.LogInformation("Job {JobId}: timing rendering, elapsed {ElapsedMs} ms.", result.JobId, timer.ElapsedMilliseconds);
             png.Position = 0;
             timer.Restart();
-            await images.WriteAsync(ScanBlobPaths.BuildAnnotatedBlobPath(result.JobId), png, "image/png", ct);
+            await images.WriteAsync(ScanBlobPaths.BuildAnnotatedBlobPath(blobPrefix ?? result.JobId), png, "image/png", ct);
             log.LogInformation("Job {JobId}: timing image_store, elapsed {ElapsedMs} ms.", result.JobId, timer.ElapsedMilliseconds);
             return result with { AnnotatedImagePath = $"jobs/{Uri.EscapeDataString(result.JobId)}/annotated-image" };
         }

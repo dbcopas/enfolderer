@@ -54,11 +54,11 @@ public static class ScanDiagnosticsEndpoints
         routes.MapGet("/{jobId}/original", (HttpContext http, IScanImageStore images, CancellationToken ct) =>
             FileAsync(images, Job(http).BlobPath, ScanBlobPaths.ContentTypeFor(Job(http).BlobPath), ct));
         routes.MapGet("/{jobId}/annotated-image", (HttpContext http, IScanImageStore images, CancellationToken ct) =>
-            FileAsync(images, ScanBlobPaths.BuildAnnotatedBlobPath(Job(http).JobId), "image/png", ct));
+            FileAsync(images, ScanBlobPaths.BuildAnnotatedBlobPath(Job(http)), "image/png", ct));
         routes.MapGet("/{jobId}/crops/{index:int}", (int index, HttpContext http, IScanImageStore images, CancellationToken ct) =>
             index < 0 || index >= Job(http).CardsDetected
                 ? Task.FromResult<IResult>(Results.NotFound())
-                : FileAsync(images, $"{ScanBlobPaths.CropsContainer}/{ScanBlobPaths.BuildCropBlobName(Job(http).JobId, index)}", "image/png", ct));
+                : FileAsync(images, $"{ScanBlobPaths.CropsContainer}/{ScanBlobPaths.BuildCropBlobName(Job(http), index)}", "image/png", ct));
         routes.MapGet("/{jobId}/cards.csv", (HttpContext http) => Job(http).Result is { } result
             ? Results.File(System.Text.Encoding.UTF8.GetBytes(MobileWebEndpoints.Csv(result)), "text/csv; charset=utf-8")
             : Results.NotFound());

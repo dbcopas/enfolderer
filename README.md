@@ -379,6 +379,14 @@ The [security-boundary walkthrough](docs/foundry-demo.md) describes `main`, not 
 Existing client defaults are intentionally unchanged until the new deployment passes real scan
 validation; use a separate config to test it.
 
+### Blob folder ordering
+
+New scan blobs use a shared UTC date-stamped folder in the `scans`, `crops` and `outputs`
+containers, for example `20261020T120921995Z-<job-id>`. Sort blob folder names ascending for
+oldest first or descending for newest first. The prefix is fixed at job creation and reused
+on retries. Existing undated folders and their download links remain accessible; they are not
+renamed, and public job IDs and download URLs do not change.
+
 ### Guest scan allowances
 
 Approved users also need an explicit scan-credit grant. An invitation or pilot assignment does

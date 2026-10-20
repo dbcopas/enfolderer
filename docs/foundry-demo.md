@@ -55,7 +55,9 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
 2. The API creates the job document in Cosmos and returns the relative URL
    `jobs/{jobId}/content` to upload to.
 3. The app PUTs the image to the API with its bearer token, and the API writes it to
-   `scans/{jobId}/{filename}`. The storage account has no public endpoint, so the API is the only
+   `scans/{blobPrefix}/{filename}`. New jobs persist a UTC creation-time prefix such as
+   `20261020T120921995Z-{jobId}`, so sorting folder names sorts scans by age. Existing jobs keep
+   their original `{jobId}` folder; no blobs are renamed. The storage account has no public endpoint, so the API is the only
    thing the client can reach — which is what lets the client run anywhere.
 4. `POST /jobs/{id}/submit` enqueues the job; the worker picks it up.
 5. Worker → `DetectingBoundaries`: calls Team A's named `CardBoundaryAgent` Responses endpoint
@@ -75,11 +77,11 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
    No measured regions triggers an explicitly logged fallback to agent estimates; failures to
    invoke or parse the agent still fail the job rather than masquerading as a successful scan.
 6. Worker crops each quadrilateral itself (perspective-correct warp) and writes the crops to
-   `crops/{jobId}/`. Team A never gets blob write access.
+   `crops/{blobPrefix}/`, reusing the original job prefix even on retries. Team A never gets blob write access.
 7. Worker → `Identifying`: sends each crop to the `cardid` agent endpoints and fans them out to the
    per-game agents. Team B receives one card at a time and never the whole page.
 8. Worker retrieves exact-printing EUR nonfoil/foil prices after art verification, renders the
-   priced photo, and writes it to private `outputs/{jobId}/priced.png`. Missing foreign-language
+   priced photo, and writes it to private `outputs/{blobPrefix}/priced.png`. Missing foreign-language
    prices fall back independently to English for that same printing. No image-generation model
    is involved. Pricing/rendering failures are explicit optional-output warnings, not lost scans.
    Worker → `Completed`, writing the versioned result document to Cosmos.

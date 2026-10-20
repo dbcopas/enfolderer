@@ -335,7 +335,10 @@ public sealed record ScanJobDocument
 
     [JsonPropertyName("status")] public ScanJobStatus Status { get; init; } = ScanJobStatus.Pending;
 
-    /// <summary>Blob path of the uploaded image, e.g. <c>scans/{jobId}/page1.jpg</c>.</summary>
+    /// <summary>UTC creation timestamp and job ID used as the folder in each blob container; null for legacy jobs.</summary>
+    [JsonPropertyName("blobPrefix")] public string? BlobPrefix { get; init; }
+
+    /// <summary>Blob path of the uploaded image, e.g. <c>scans/{blobPrefix}/page1.jpg</c>.</summary>
     [JsonPropertyName("blobPath")] public string BlobPath { get; init; } = string.Empty;
 
     /// <summary>Optional caller hint. Only MTG and its aliases are accepted; omission defaults to MTG.</summary>

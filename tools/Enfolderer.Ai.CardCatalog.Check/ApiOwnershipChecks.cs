@@ -30,6 +30,25 @@ internal static class ApiOwnershipChecks
 
     public static async Task RunAsync(Action<bool, string> check)
     {
+        var timestamp = new DateTimeOffset(2026, 10, 20, 14, 9, 21, 995, TimeSpan.FromHours(2));
+        var prefix = ScanBlobPaths.BuildJobPrefix("job", timestamp);
+        check(prefix == "20261020T120921995Z-job"
+            && prefix == ScanBlobPaths.BuildJobPrefix("job", timestamp.ToUniversalTime())
+            && string.CompareOrdinal(prefix, ScanBlobPaths.BuildJobPrefix("job", timestamp.AddMilliseconds(1))) < 0,
+            "blob prefixes use fixed-width UTC creation time and sort chronologically");
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("ar-SA");
+            check(ScanBlobPaths.BuildJobPrefix("job", timestamp) == prefix,
+                "blob date prefixes are independent of the machine's culture and calendar");
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = culture; }
+        var oldDocument = System.Text.Json.JsonSerializer.Deserialize<ScanJobDocument>("""{"jobId":"legacy"}""")!;
+        check(oldDocument.BlobPrefix is null
+            && ScanBlobPaths.BuildAnnotatedBlobPath(oldDocument) == "outputs/legacy/priced.png"
+            && ScanBlobPaths.BuildCropBlobName(oldDocument, 0) == "legacy/card-000.png",
+            "persisted legacy jobs without a blob prefix retain their original output and crop paths");
         Console.WriteLine("\nReal API routes: two-user ownership isolation");
         var store = new InMemoryJobStore();
         var images = new Images();
@@ -110,6 +129,15 @@ internal static class ApiOwnershipChecks
         check(job.OwnerTenantId == Tenant && job.OwnerObjectId == UserA,
             "job creation persists the authenticated caller, not request-body ownership");
         check(job.GameHint == CardGames.Magic, "jobs without a hint default explicitly to MTG");
+        check(Guid.TryParseExact(job.JobId, "N", out _)
+            && job.BlobPrefix == ScanBlobPaths.BuildJobPrefix(job.JobId, job.CreatedAt)
+            && job.BlobPath == $"scans/{job.BlobPrefix}/scan.jpg",
+            "new jobs persist one sortable blob prefix without changing the public job ID");
+        var roundTrip = System.Text.Json.JsonSerializer.Deserialize<ScanJobDocument>(
+            System.Text.Json.JsonSerializer.Serialize(job))!;
+        check(roundTrip.BlobPrefix == job.BlobPrefix
+            && ScanBlobPaths.BuildAnnotatedBlobPath(roundTrip) == $"outputs/{job.BlobPrefix}/priced.png",
+            "the exact blob prefix survives job persistence rather than being recomputed on retries");
         foreach (var hint in new[] { " MTG ", "magic", "magic-the-gathering", "" })
         {
             using var accepted = await client.PostAsJsonAsync("/jobs/",
@@ -146,16 +174,19 @@ internal static class ApiOwnershipChecks
         using var submit = await client.PostAsync($"/jobs/{job.JobId}/submit", null);
         using var status = await client.GetAsync($"/jobs/{job.JobId}");
         check(upload.StatusCode == HttpStatusCode.Accepted && submit.StatusCode == HttpStatusCode.Accepted
-            && status.StatusCode == HttpStatusCode.OK && images.Writes == 1 && queue.Messages == 1,
+            && status.StatusCode == HttpStatusCode.OK && images.Writes == 1 && queue.Messages == 1
+            && images.LastWritePath == job.BlobPath,
             "owner retains normal upload, submission and polling behavior");
         await store.UpsertAsync(job with
         {
             Status = ScanJobStatus.Completed,
-            Result = new ScanResultDocument { AnnotatedImagePath = ScanBlobPaths.BuildAnnotatedBlobPath(job.JobId) }
+            CardsDetected = 1,
+            Result = new ScanResultDocument { AnnotatedImagePath = $"jobs/{job.JobId}/annotated-image" }
         });
         using var download = await client.GetAsync($"/jobs/{job.JobId}/annotated-image");
-        check(download.StatusCode == HttpStatusCode.OK && images.Reads == 1,
-            "owner can download the completed annotated image");
+        check(download.StatusCode == HttpStatusCode.OK && images.Reads == 1
+            && images.LastReadPath == $"outputs/{job.BlobPrefix}/priced.png",
+            "owner can download the completed annotated image from its dated folder");
         client.DefaultRequestHeaders.Remove("X-Test-User");
         client.DefaultRequestHeaders.Add("X-Test-User", UserB);
         using var stolenImage = await client.GetAsync($"/jobs/{job.JobId}/annotated-image");
@@ -164,6 +195,17 @@ internal static class ApiOwnershipChecks
             && images.Reads == 1, "non-owner cannot download an existing completed image or results");
         client.DefaultRequestHeaders.Remove("X-Test-User");
         client.DefaultRequestHeaders.Add("X-Test-User", UserA);
+        var legacyId = Guid.NewGuid().ToString("N");
+        var legacyOwned = job with
+        {
+            Id = legacyId, JobId = legacyId, BlobPrefix = null, BlobPath = $"scans/{legacyId}/scan.jpg",
+            CreatedAt = DateTimeOffset.UtcNow.AddDays(-1), Status = ScanJobStatus.Completed, CardsDetected = 1,
+            Result = new ScanResultDocument { AnnotatedImagePath = $"jobs/{legacyId}/annotated-image" }
+        };
+        await store.CreateAsync(legacyOwned);
+        using var legacyImage = await client.GetAsync($"/jobs/{legacyId}/annotated-image");
+        check(legacyImage.IsSuccessStatusCode && images.LastReadPath == $"outputs/{legacyId}/priced.png",
+            "owned historical scans still download from undated folders");
         await store.CreateAsync(new ScanJobDocument { Id = "legacy", JobId = "legacy" });
         using var legacy = await client.GetAsync("/jobs/legacy");
         check(legacy.StatusCode == HttpStatusCode.NotFound, "actual API denies legacy ownerless jobs");
@@ -215,6 +257,15 @@ internal static class ApiOwnershipChecks
                 using var evidence = await diagnostics.GetAsync(path);
                 check(evidence.IsSuccessStatusCode && evidence.Headers.CacheControl?.NoStore == true,
                     $"operator can read pilot evidence with no-store: {path}");
+            }
+            foreach (var (document, folder) in new[] { (job, job.BlobPrefix!), (legacyOwned, legacyId) })
+            {
+                using var crop = await diagnostics.GetAsync($"/diagnostics/scans/{document.JobId}/crops/0");
+                check(crop.IsSuccessStatusCode && images.LastReadPath == $"crops/{folder}/card-000.png",
+                    "diagnostics reads crops from the persisted dated folder or legacy undated folder");
+                using var annotated = await diagnostics.GetAsync($"/diagnostics/scans/{document.JobId}/annotated-image");
+                check(annotated.IsSuccessStatusCode && images.LastReadPath == $"outputs/{folder}/priced.png",
+                    "diagnostics reads annotations from the persisted dated folder or legacy undated folder");
             }
             foreach (var path in new[] { "/diagnostics/scans/?hours=169", "/diagnostics/scans/?limit=0" })
             {
@@ -525,14 +576,18 @@ internal static class ApiOwnershipChecks
         public bool Exists { get; set; } = true;
         public int Writes { get; private set; }
         public int Reads { get; private set; }
+        public string? LastReadPath { get; private set; }
+        public string? LastWritePath { get; private set; }
         public Task<Stream> OpenReadAsync(string path, CancellationToken ct = default)
         {
             Reads++;
+            LastReadPath = path;
             return Task.FromResult<Stream>(new MemoryStream([1, 2, 3]));
         }
         public Task WriteAsync(string path, Stream content, string contentType, CancellationToken ct = default)
         {
             Writes++;
+            LastWritePath = path;
             return Task.CompletedTask;
         }
         public Task<bool> ExistsAsync(string path, CancellationToken ct = default) => Task.FromResult(Exists);

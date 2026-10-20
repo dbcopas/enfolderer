@@ -306,6 +306,13 @@ internal static class PriceAnnotationChecks
             }
             check(store.Path == "outputs/price-test/priced.png" && store.ContentType == "image/png",
                 "output uses a job-scoped private container path and PNG content type");
+            source.Position = 0;
+            var datedPrefix = ScanBlobPaths.BuildJobPrefix("dated", new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero));
+            var datedResult = await service.CreateAsync(new ScanResultDocument { JobId = "dated", Cards = [] },
+                source, default, blobPrefix: datedPrefix);
+            check(store.Path == $"outputs/{datedPrefix}/priced.png"
+                && datedResult.AnnotatedImagePath == "jobs/dated/annotated-image",
+                "annotation stores dated blobs without changing public result download URLs");
             var roundTrip = JsonSerializer.Deserialize<ScanResultDocument>(JsonSerializer.Serialize(result, ScanJson.Options), ScanJson.Options);
             check(roundTrip?.Cards[0].Prices?.Nonfoil == 1m && roundTrip.AnnotatedImagePath == result.AnnotatedImagePath
                 && roundTrip.Cards[0].Prices?.Layout == "normal" && roundTrip.Cards[0].Prices?.CardName == "Majestic Genesis",
