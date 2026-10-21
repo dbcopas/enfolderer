@@ -48,7 +48,9 @@ async function api(path, options = {}) {
     } catch (error) { console.warn("The API error response was not JSON.", error); }
     if (response.status === 403 && !detail.includes("scan allowance")) detail = "This account is not approved for the private pilot. Ask the administrator to invite and approve your account.";
     if (response.status === 413) detail = "This file is too large. Use a smaller photo or export a smaller collection snapshot.";
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = response.status;
+    throw error;
   }
   return response;
 }
@@ -114,6 +116,7 @@ async function choosePhoto(event) {
     $("photoInfo").textContent = `${canvas.width} x ${canvas.height} pixels | ${(photo.size / 1024 / 1024).toFixed(1)} MB | location metadata removed`;
     $("results").hidden = true;
     ScanEvidence.reset();
+    ScanQuestions.reset();
     $("progressPanel").hidden = true;
     setBusy(false);
   } finally { URL.revokeObjectURL(originalUrl); }
@@ -150,6 +153,7 @@ async function showResults(result) {
   $("summary").textContent = `${result.cards.length} cards detected. Download the overlay and price-ranked CSV below.`;
   $("cardList").replaceChildren();
   ScanEvidence.show(result, activeJob.id, api);
+  ScanQuestions.show(activeJob.id, config.scanQuestionsEnabled === true, api, result);
   const amount = value => value == null ? "unavailable" : new Intl.NumberFormat(undefined, { style: "currency", currency: "EUR" }).format(value);
   for (const card of result.cards) {
     const row = document.createElement("article");
@@ -231,6 +235,7 @@ async function startScan() {
   if (!scansAvailable) return;
   $("results").hidden = true;
   ScanEvidence.reset();
+  ScanQuestions.reset();
   $("retry").hidden = true;
   $("progressPanel").hidden = false;
   $("stage").textContent = "Uploading your photo";

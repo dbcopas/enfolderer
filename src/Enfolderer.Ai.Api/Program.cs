@@ -14,6 +14,9 @@ using Microsoft.AspNetCore.Mvc;
 using System.Net;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Identity.Web;
+using System.Text.Json;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
 
 // 64 MB: comfortably above a phone photograph, well below anything that would exhaust the
 // container's 1Gi memory limit while being relayed to blob storage.
@@ -42,6 +45,23 @@ builder.Services
     .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 builder.Services.AddAuthorization();
 builder.Services.AddProblemDetails();
+var knowledge = new ScanKnowledgeOptions();
+builder.Configuration.GetSection("ScanKnowledge").Bind(knowledge);
+if (knowledge.Enabled && !knowledge.IsValid)
+    throw new InvalidOperationException("Enabled ScanKnowledge requires a valid Azure Search HTTPS endpoint and knowledge base/source/index names.");
+builder.Services.AddSingleton(knowledge);
+builder.Services.AddHttpClient<IScanQuestions, FoundryIqScanQuestions>(http =>
+{
+    http.Timeout = TimeSpan.FromSeconds(80);
+    http.MaxResponseContentBufferSize = 1024 * 1024;
+});
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("scan-questions", context => RateLimitPartition.GetFixedWindowLimiter(
+        JobOwnerFilter.ReadOwner(context.User)?.ToString() ?? "anonymous",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 4, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+});
 var webClientId = builder.Configuration["MobileWeb:ClientId"];
 var pilotUsers = (builder.Configuration["MobileWeb:AllowedUserObjectIds"] ?? "")
     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -83,6 +103,7 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 app.MapMobileWeb();
 app.MapScanDiagnostics();
 app.MapScanAllowances();
@@ -368,6 +389,29 @@ jobs.MapGet("/{jobId}/crops/{index:int}", async (
         ? Results.File(await images.OpenReadAsync(path, ct), "image/png")
         : Results.NotFound();
 });
+
+jobs.MapPost("/{jobId}/questions", async (string jobId, ScanQuestionRequest request, IJobStore store,
+    IScanQuestions questions, ScanKnowledgeOptions settings, ILoggerFactory logs, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Question) || request.Question.Length > 1000)
+        return Results.BadRequest(new { error = "Enter a question between 1 and 1000 characters." });
+    if (!settings.Enabled)
+        return Results.Json(new { error = "Ask about this scan is not configured for this deployment." }, statusCode: 503);
+    var job = await store.GetAsync(jobId, ct);
+    if (job?.Status != ScanJobStatus.Completed || job.Result is null)
+        return Results.Conflict(new { error = "Questions require a completed scan." });
+    try
+    {
+        return Results.Ok(await questions.AskAsync(job.Result, request.Question.Trim(), ct));
+    }
+    catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or JsonException or AuthenticationFailedException
+        || ex is OperationCanceledException && !ct.IsCancellationRequested)
+    {
+        logs.CreateLogger("ScanQuestions").LogError(ex, "Knowledge retrieval failed for job {JobId}.", jobId);
+        return Results.Problem(title: "Card knowledge is temporarily unavailable.",
+            detail: "No grounded answer could be verified. Please retry later.", statusCode: 502);
+    }
+}).RequireRateLimiting("scan-questions");
 
 app.Run();
 

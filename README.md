@@ -170,6 +170,143 @@ Open [the browser checks](tools/Enfolderer.Ai.CardCatalog.Check/scan-evidence-ch
 browser for dependency-free UI regressions using synthetic results and image bytes; no sign-in
 or live scans are needed.
 
+#### Ask about this scan (opt-in Foundry IQ)
+
+The completed-results page can answer independent natural-language questions about the scanned
+Magic cards through a real Azure AI Search knowledge base (the retrieval engine behind Foundry IQ),
+using `2026-08-01-preview` answer synthesis. Inline citations and a source list link to public
+Scryfall pages. This is separate from **Explain this scan**, which only displays recorded evidence.
+It is disabled by default and makes no model calls until a user submits a knowledge question.
+Older completed scans use the same endpoint; no rescan is required.
+
+The API loads the completed job under its existing owner/tenant/scope checks. It sends only public
+card names, games and identification uncertainty plus the user's question, not photos, blob paths, owner IDs, stored prices or
+collection quantities. Those facts are request context, not documents added to the shared index.
+Questions can still contain whatever a user types, so don't enter secrets. The app does not persist
+question history; Azure's service-side logging/data processing policies still apply.
+Unplaced identities are explicitly uncertain. Every published answer needs valid retrieved
+citations, verified against the configured index with HTTPS Scryfall-only links. Uncited output
+becomes an explicit insufficient-evidence response, never a plausible-looking ungrounded answer.
+This verifies source provenance, not the truth of every generated statement: users should read
+the sources. Answers are not live prices or official tournament rulings. Pokemon knowledge is
+not included in the corpus. The Oracle catalogue describes gameplay identities, not every
+printing, prices, or official interaction rulings.
+
+English questions containing ownership/collection, price/value, or identification/evidence
+terms are routed to deterministic **recorded scan facts**, not the model. Named cards or
+one-based `card N` selectors narrow these answers. The response explicitly shows this
+interpretation rather than pretending to understand arbitrary compound questions.
+Ownership quantities are from the snapshot used for that scan, never a claim about the current
+collection; a disabled/missing comparison is unavailable, not zero. Price answers include
+recorded source/timestamp and use the existing nonfoil-then-foil ranking. Identification answers
+show the recorded reading, resolution, confidence and artwork verdict, linking the user
+conceptually to **Explain this scan** for full evidence. None of these private facts are sent to
+Search. Other questions use Foundry IQ. The UI suggests questions from actual scan names.
+
+Setup is deliberately separate and requires approval of the additional running costs:
+
+1. Choose an agentic-retrieval-capable Search region and an existing **supported** synthesis model
+   deployment with capacity. Search may be in a different region from the app and Foundry account;
+   review cross-region data processing/latency. Do not assume the scanner's model is supported.
+   See [knowledge-base prerequisites](https://learn.microsoft.com/azure/search/agentic-retrieval-how-to-create-knowledge-base)
+   and [regional support](https://learn.microsoft.com/azure/search/search-region-support).
+2. Deploy [infra/scan-knowledge.bicep](infra/scan-knowledge.bicep) into the Foundry account's
+   resource group, specifying `namePrefix`, `searchName`, `location`, `foundryAccountName`, `apiPrincipalId` and
+   `setupPrincipalId`. This creates a separately billed Basic Search service with one replica/
+   partition, managed identity, RBAC-only authentication, public authenticated endpoint, API
+   read-only access, setup index-management/data-write roles and Search-to-model access.
+   Allow for RBAC propagation. This template is not a private-endpoint deployment.
+3. Create the public knowledge source and import the public Oracle catalogue:
+
+   ```powershell
+   .\scripts\configure-scan-knowledge.ps1 `
+     -SearchEndpoint https://YOUR-SEARCH.search.windows.net `
+     -ModelEndpoint https://YOUR-FOUNDRY.openai.azure.com `
+     -ModelDeployment YOUR-SUPPORTED-DEPLOYMENT -ModelName YOUR-MODEL `
+     -OracleBulk -SubscriptionId YOUR-SUBSCRIPTION-GUID -WhatIf
+   ```
+
+   Remove `-WhatIf` after reviewing. The script discovers Scryfall's current Oracle export,
+   streams compressed JSONL (or accepts the legacy JSON array format), and imports only public
+   name/type/mana/Oracle/face facts with source URL and retrieval date. Keys are stable Oracle
+   GUIDs; filterable normalized full/face names support explicit coverage checks. It checks every
+   indexing result in batches of at most 100, rejects unexpectedly small exports, and removes
+   stale records only after all uploads succeed. A failed refresh is reported, not labelled
+   successful; uploaded batches can remain and rerunning reconciles them.
+   One representative per Oracle identity is **not** a complete printing catalogue.
+   `-CardNames 'Solemnity','Naked Singularity'` is an alternative for small targeted imports;
+   it never prunes the remaining catalogue. No images, prices, collection data or rulings are
+   imported. Repeat the bulk command weekly and after set releases; it always discovers the
+   latest export. There is no always-running refresh scheduler or extra hosting charge.
+   Preserve [Scryfall attribution and bulk-data guidance](https://scryfall.com/docs/api/bulk-data).
+4. Smoke-test the knowledge base using the
+   [retrieve API](https://learn.microsoft.com/azure/search/agentic-retrieval-how-to-retrieve),
+   then enable the API via the normal deployment script:
+
+   ```powershell
+   .\scripts\deploy-images.ps1 -ScanKnowledgeEndpoint https://YOUR-SEARCH.search.windows.net
+   ```
+
+   Optional `-ScanKnowledgeBase`, `-ScanKnowledgeSource` and `-ScanKnowledgeIndex` override
+   the defaults `scan-cards`, `scryfall`, `scryfall`. Deployment parameters persist across normal
+   image deployments. Pass `-ScanKnowledgeEndpoint ''` to disable without deleting the service.
+   Changing a Container App environment variable alone is not durable across an ARM redeploy.
+
+Questions use model/retrieval capacity but do not submit a scan or consume scan credits. A
+per-owner limit of four requests/minute per API process and a 75-second retrieval deadline bound
+the initial demo; this is not a distributed billing quota. Search still bills while idle.
+Uncited answers trigger exact-name coverage checks: the UI distinguishes missing catalogue
+knowledge, unsupported scan games, insufficient cited evidence, service errors and rate limits.
+The index's semantic free allowance is finite; monitor it before demos.
+
+The owner-scoped stop/restore scripts now include the explicitly configured **dedicated** Search
+service: ownership tags, deployment group/name, known RBAC consumers and data-plane objects are
+validated before deletion. Stop saves its configuration and removes exact old Search-to-model
+grants. Restore recreates Search/RBAC and rebuilds the public Oracle corpus, retaining the shared
+model deployment. Unsafe/shared configurations block shutdown rather than being silently skipped.
+Legacy manifests without a Search snapshot remain supported but cannot recreate Search.
+Turning off the UI does not stop Search charges. Image cleanup alone does not delete Search.
+
+Read actual configuration, index size and time-bounded usage (and optionally billing data):
+
+```powershell
+.\scripts\measure-scan-knowledge.ps1 -SubscriptionId YOUR-SUBSCRIPTION-GUID `
+  -DeploymentName enfolderer-scan -StartTime 2026-10-01T00:00:00Z `
+  -EndTime 2026-10-20T00:00:00Z -IncludeActualCost
+```
+
+`-BudgetAmount` and `-BudgetContact` together optionally create a monthly, Search-resource-filtered
+budget notification at the explicitly chosen amount in the billing currency. Review with `-WhatIf`.
+No threshold/contact is assumed and no budget is created by default. Metrics are not invoices;
+billing data can lag, and **budget alerts are not spending caps**. Model token charges and
+retained infrastructure bill separately. Budget/cost operations require billing permissions.
+Run `.\scripts\test-demo-lifecycle.ps1` for owner/scope, Search recovery, monitoring/budget
+and destructive image-cleanup regression checks; these use mocks, not live deletion.
+
+Offline checks: `dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- --scan-questions`
+tests the real API with fake retrieval plus the IQ request/citation adapter without paid calls.
+Run `.\scripts\test-scan-knowledge.ps1` for mocked corpus/setup regressions.
+Open [scan-questions-check.html](tools/Enfolderer.Ai.CardCatalog.Check/scan-questions-check.html)
+in a foreground browser tab for UI, error, safe-link and stale-response regressions.
+These offline checks are not a live IQ/model evaluation. After provisioning and seeding
+Solemnity and Naked Singularity, run the explicit paid smoke test with an authenticated Azure CLI:
+
+```powershell
+dotnet run --project tools\Enfolderer.Ai.CardCatalog.Check -- `
+  --live-scan-questions https://YOUR-SEARCH.search.windows.net YOUR-TENANT-GUID
+```
+
+Select the matching default Azure CLI subscription first; the tenant GUID alone does not select
+the correct cached CLI account. It calls the real application client, verifies canonical sources,
+and exercises a single-card explanation, cards from the originally reported historical scan,
+a comparison and a two-card interaction. It also checks an unrelated weather question isn't
+published as grounded. It uses public scan identities, not a user's stored scan, so it does not
+replace a signed-in browser check of a persisted old/new scan. Generated wording is nondeterministic;
+citations prove provenance, not correctness or completeness of an interaction explanation.
+The live preview response can omit the answer-message role; the client accepts that and explicit
+`assistant` roles, but rejects other roles. Retrieval requires an output budget above 5,000;
+the client requests 6,000 and asks the model for concise answers.
+
 For ownership, use **Scan > Export Mobile Collection Snapshot...** in the desktop app, then
 upload that JSON under **My collection** on the website (a computer signed into the same account
 can upload it too). The export reads the same local database pair used by desktop scans.

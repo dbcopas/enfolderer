@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Scan questions browser checks</title></head>
+<body>
+  <h1>Scan questions browser checks</h1>
+  <pre id="checks" role="status">Running...</pre>
+  <details id="scanQuestions" hidden>
+    <summary>Ask about this scan</summary>
+    <div id="questionSuggestions"></div>
+    <form id="questionForm">
+      <label for="scanQuestion">Question</label>
+      <textarea id="scanQuestion" maxlength="1000"></textarea>
+      <button id="askQuestion">Ask</button>
+    </form>
+    <p id="questionStatus" role="status"></p>
+    <div id="scanAnswer"></div>
+  </details>
+  <script src="../../src/Enfolderer.Ai.Api/wwwroot/questions.js"></script>
+  <script>
+    "use strict";
+    (async () => {
+      const get = id => document.getElementById(id), checks = [];
+      const check = (condition, name) => {
+        if (!condition) throw new Error(name);
+        checks.push("PASS " + name); get("checks").textContent = checks.join("\n");
+      };
+      const wait = async () => {
+        const deadline = Date.now() + 3000;
+        while (get("askQuestion").disabled) {
+          if (Date.now() > deadline) throw new Error("Question did not finish");
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+      };
+      const submit = () => get("questionForm").dispatchEvent(new Event("submit", { cancelable: true }));
+      const answer = { answer: "<img src=x> Card facts [ref_id:0].", grounded: true,
+        sources: [{ id: "0", title: "<b>Solemnity</b>", url: "https://scryfall.com/card/hou/22/solemnity" }] };
+      const calls = [];
+      const api = async (path, options) => {
+        calls.push({ path, options }); return { json: async () => answer };
+      };
+      ScanQuestions.show("private-job", false, api);
+      check(get("scanQuestions").hidden && !calls.length, "Unconfigured feature stays hidden with no requests");
+      ScanQuestions.show("private-job", true, api, { cards: [{ game: "mtg", name: "Solemnity" }] });
+      check(!get("scanQuestions").hidden, "Configured feature is visible");
+      get("questionSuggestions").querySelector("button").click();
+      check(get("scanQuestion").value === "What does Solemnity do?", "Suggestions use the actual scan card names");
+      get("scanQuestion").value = "  ";
+      submit(); await wait();
+      check(!calls.length && get("questionStatus").textContent.includes("between 1 and 1000"), "Blank input is rejected locally");
+      get("scanQuestion").value = "How does card 1 work?";
+      submit(); await wait();
+      check(calls[0].path === "/jobs/private-job/questions" && calls[0].options.method === "POST"
+        && JSON.parse(calls[0].options.body).question === "How does card 1 work?",
+        "Question goes through the owner-scoped authenticated API");
+      check(get("scanAnswer").querySelectorAll("a").length === 2, "Inline citation and source list are clickable");
+      check(get("scanAnswer").querySelector("a").href === answer.sources[0].url
+        && get("scanAnswer").querySelector("a").rel.includes("noopener"), "Source opens safely on Scryfall");
+      check(!get("scanAnswer").querySelector("img,b"), "Model and source text cannot inject HTML");
+      answer.sources[0].url = "javascript:alert(1)";
+      submit(); await wait();
+      check(get("questionStatus").textContent.includes("invalid source") && !get("scanAnswer").childElementCount,
+        "Unsafe citation fails explicitly and clears the answer");
+      ScanQuestions.show("job", true, async () => { throw new Error("429 Too Many Requests"); });
+      get("scanQuestion").value = "Question"; submit(); await wait();
+      check(get("questionStatus").textContent.includes("429") && !get("askQuestion").disabled,
+        "Rate-limit failure is visible and permits retry");
+      ScanQuestions.show("job", true, async () => ({ json: async () =>
+        ({ answer: "Insufficient evidence.", grounded: false, sources: [] }) }));
+      get("scanQuestion").value = "Question"; submit(); await wait();
+      check(get("questionStatus").textContent === "Insufficient cited evidence." && !get("scanAnswer").querySelector("a"),
+        "No-evidence answers are clearly distinguished");
+      for (const [kind, status] of [["scanEvidence", "Private collection"], ["missingKnowledge", "Missing card knowledge"], ["unsupported", "no supported Magic"]]) {
+        ScanQuestions.show("job", true, async () => ({ json: async () => ({ answer: "Recorded or missing facts", kind, grounded: kind === "scanEvidence", sources: [] }) }));
+        get("scanQuestion").value = "Question"; submit(); await wait();
+        check(get("questionStatus").textContent.includes(status), `Distinct status for ${kind}`);
+      }
+      ScanQuestions.show("job", true, async () => { const error = new Error("Too many requests"); error.status = 429; throw error; });
+      get("scanQuestion").value = "Question"; submit(); await wait();
+      check(get("questionStatus").textContent.includes("Wait one minute"), "Rate limits provide an actionable retry interval");
+      let finish;
+      ScanQuestions.show("old-job", true, () => new Promise(resolve => {
+        finish = () => resolve({ json: async () => ({ answer: "Old answer", sources: [], grounded: false }) });
+      }));
+      get("scanQuestion").value = "Question"; submit(); submit();
+      check(get("askQuestion").disabled, "Pending request disables duplicate submission");
+      ScanQuestions.reset(); finish();
+      await new Promise(resolve => setTimeout(resolve, 40));
+      check(get("scanQuestions").hidden && !get("scanAnswer").childElementCount,
+        "Late answer cannot restore a previous scan");
+      get("checks").textContent += "\n\nAll " + checks.length + " checks passed.";
+    })().catch(error => {
+      document.getElementById("checks").textContent += "\nFAIL " + error.message;
+      console.error(error);
+    });
+  </script>
+</body>
+</html>

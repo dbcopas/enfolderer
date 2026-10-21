@@ -13,10 +13,11 @@ public static class MobileWebEndpoints
 
     public static void MapMobileWeb(this WebApplication app)
     {
-        app.MapGet("/web-config", (IConfiguration config) => Results.Ok(new
+        app.MapGet("/web-config", (IConfiguration config, ScanKnowledgeOptions knowledge) => Results.Ok(new
         {
             enabled = !string.IsNullOrWhiteSpace(config["MobileWeb:ClientId"]),
             clientId = config["MobileWeb:ClientId"],
+            scanQuestionsEnabled = knowledge.Enabled,
             tenantId = config["AzureAd:TenantId"],
             scope = $"api://{config["AzureAd:ClientId"]}/Scan.Submit"
         }));

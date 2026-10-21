@@ -59,6 +59,10 @@
     Deploy from infra/main.parameters.json instead of the previous deployment's parameters. Only
     correct if that file holds your real values.
 
+.PARAMETER ScanKnowledgeEndpoint
+    Optional Foundry IQ Search HTTPS origin. Omit to preserve; pass an empty string to disable.
+    Configure the Search index/knowledge base and API reader role before enabling.
+
 .PARAMETER SkipBuild
     Skip the image build and only redeploy. Use with -Tag to point the apps at a tag that already
     exists in the registry, for example to roll back.
@@ -138,6 +142,10 @@ param(
     [string] $ScanAllowedUserObjectIds,
     [string] $ScanDiagnosticUserObjectIds,
     [string] $ScanAllowanceAdminUserObjectIds,
+    [string] $ScanKnowledgeEndpoint,
+    [string] $ScanKnowledgeBase,
+    [string] $ScanKnowledgeSource,
+    [string] $ScanKnowledgeIndex,
     [bool] $GrantGeometryAccess
 )
 
@@ -416,6 +424,12 @@ List what the registry holds with:
     }
     if ($PSBoundParameters.ContainsKey('ScanAllowanceAdminUserObjectIds')) {
         $overrides['scanAllowanceAdminUserObjectIds'] = $ScanAllowanceAdminUserObjectIds
+    }
+    foreach ($key in 'ScanKnowledgeEndpoint', 'ScanKnowledgeBase', 'ScanKnowledgeSource', 'ScanKnowledgeIndex') {
+        if ($PSBoundParameters.ContainsKey($key)) {
+            $parameterName = [char]::ToLowerInvariant($key[0]) + $key.Substring(1)
+            $overrides[$parameterName] = $PSBoundParameters[$key]
+        }
     }
     $effective = if ($UseParametersFile) { $onFile } else { $parameters }
     $webId = if ($MobileWebClientId) { $MobileWebClientId }

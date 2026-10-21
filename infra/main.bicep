@@ -48,6 +48,11 @@ param scanDiagnosticUserObjectIds string = ''
 param scanAllowanceAdminUserObjectIds string = ''
 @description('API custom-domain bindings. deploy-images.ps1 preserves current bindings; use destination certificate IDs when moving environments.')
 param apiCustomDomains array = []
+@description('Optional Foundry IQ Search endpoint. Empty disables Ask about this scan. Provision separately with scan-knowledge.bicep.')
+param scanKnowledgeEndpoint string = ''
+param scanKnowledgeBase string = 'scan-cards'
+param scanKnowledgeSource string = 'scryfall'
+param scanKnowledgeIndex string = 'scryfall'
 
 @description('Set to false to run the "revoke Team B\'s access to Team A\'s agent" demo scenario.')
 param grantIdentificationAccessToGeometry bool = true
@@ -309,6 +314,10 @@ module hosting 'modules/hosting.bicep' = {
     scanDiagnosticUserObjectIds: scanDiagnosticUserObjectIds
     scanAllowanceAdminUserObjectIds: scanAllowanceAdminUserObjectIds
     apiCustomDomains: apiCustomDomains
+    scanKnowledgeEndpoint: scanKnowledgeEndpoint
+    scanKnowledgeBase: scanKnowledgeBase
+    scanKnowledgeSource: scanKnowledgeSource
+    scanKnowledgeIndex: scanKnowledgeIndex
     apiIdentityId: apiIdentity.outputs.id
     apiIdentityClientId: apiIdentity.outputs.clientId
     workerIdentityId: workerIdentity.outputs.id

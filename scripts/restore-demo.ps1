@@ -1,10 +1,13 @@
 <#
 .SYNOPSIS
-    Restores the signed-in owner's hibernated demo from its saved deployment template.
+    Restores the signed-in owner's hibernated demo and captured dedicated Search.
 .DESCRIPTION
     Recreates infrastructure without rebuilding images or restoring deleted photos.
     Reports DNS, certificate, client and Foundry reconnection work; health is not proof of
     complete agent connectivity. Never claims demo readiness before those steps are verified.
+    When captured, restores dedicated Search and its exact model access, then rebuilds the
+    public Oracle corpus with configure-scan-knowledge.ps1 -OracleBulk. Requires Search data
+    permissions, public Scryfall access, and the retained synthesis model deployment.
 .EXAMPLE
     .\scripts\restore-demo.ps1 -WhatIf
 .EXAMPLE
@@ -14,7 +17,14 @@
 param([string] $ManifestPath)
 #Requires -Version 7.0
 . (Join-Path $PSScriptRoot 'demo-lifecycle.ps1')
-$identity = Get-DemoIdentity
+$subscriptionHint = $null
+if ($ManifestPath) {
+    $hint = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json -Depth 100
+    if (-not [guid]::TryParse($hint.subscriptionId, [ref]([guid]::Empty))) { throw 'Invalid manifest subscription hint.' }
+    $subscriptionHint = [string]$hint.subscriptionId
+    $hint = $null
+}
+$identity = Get-DemoIdentity -SubscriptionId $subscriptionHint
 if (-not $ManifestPath) {
     $directory = Get-DemoStateDirectory $identity
     $files = @(Get-ChildItem -LiteralPath $directory -Filter '*.json' -ErrorAction Stop | Where-Object {
@@ -31,8 +41,10 @@ if ($manifest.status -notin @('Prepared', 'Stopped', 'StopFailed', 'RestoreFaile
 }
 $subscription = $manifest.subscriptionId
 $prefix = $manifest.prefix
+$search = Get-DemoProperty $manifest 'search'
+if ($search) { Assert-DemoSearchManifest $search $subscription $prefix }
 if (-not $PSCmdlet.ShouldProcess("$subscription / $prefix", 'Restore saved deployment (custom domains require new certificate binding)')) { return }
-$work = Join-Path ([IO.Path]::GetTempPath()) "enfolderer-restore-$([guid]::NewGuid())"
+$work = Join-Path $PSScriptRoot ".demo-restore-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $work | Out-Null
 try {
     $templatePath = Join-Path $work 'template.json'
@@ -43,6 +55,13 @@ try {
     $null = Invoke-DemoAz @('deployment', 'sub', 'create', '--subscription', $subscription,
         '-n', $manifest.deploymentName, '-l', $manifest.location, '--template-file', $templatePath,
         '--parameters', "@$parametersPath")
+    if ($search) {
+        Restore-DemoSearch $search $subscription $work
+        Write-Output 'Dedicated Search restored and public Oracle corpus rebuilt; synthesis model account/deployment retained.'
+    }
+    elseif ((Get-DemoProperty $manifest.parameters 'scanKnowledgeEndpoint')) {
+        Write-Warning 'Legacy manifest has no Search recovery snapshot; configured Search was not deleted/restored by this workflow. Verify it manually.'
+    }
     $apps = @(Get-DemoApps $subscription $prefix)
     foreach ($app in $apps) {
         if ($app.properties.configuration.PSObject.Properties['ingress'] -and
@@ -75,7 +94,7 @@ catch {
     throw
 }
 finally {
-    foreach ($file in 'template.json', 'parameters.json') {
+    foreach ($file in 'template.json', 'parameters.json', 'search.json', 'search-model.json') {
         $path = Join-Path $work $file
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     }

@@ -9,6 +9,7 @@
   <script defer src="/lib/msal-browser.min.js"
     integrity="sha384-TlDXht2cVvKBRAwDJrpYYtb+vUcYNxMgTELqFTRcnu0SP//KlFc7eE8so0+lJ03E" crossorigin="anonymous"></script>
   <script defer src="/evidence.js"></script>
+  <script defer src="/questions.js"></script>
   <script defer src="/app.js"></script>
 </head>
 <body>
@@ -81,6 +82,19 @@
           <div id="evidenceBody" aria-live="polite"></div>
         </details>
         <div id="cardList" class="card-list"></div>
+        <details id="scanQuestions" class="scan-evidence" hidden>
+          <summary>Ask about this scan <span class="badge">Foundry IQ</span></summary>
+          <p class="small muted">Ask what the Magic cards do or compare their abilities using public Oracle text and clickable sources. Price, collection and identification questions show private facts recorded with this scan, not live data. Exact printing differences and official interaction rulings are not covered by the Oracle catalogue.</p>
+          <div id="questionSuggestions" class="question-suggestions" aria-label="Suggested questions"></div>
+          <form id="questionForm">
+            <label for="scanQuestion">Your question</label>
+            <textarea id="scanQuestion" rows="3" maxlength="1000" required placeholder="How do the cards in this scan interact?"></textarea>
+            <button id="askQuestion" type="submit" class="secondary">Ask Foundry IQ</button>
+          </form>
+          <p id="questionStatus" class="small muted" role="status" aria-live="polite"></p>
+          <div id="scanAnswer"></div>
+          <p class="small muted">Each question is independent. AI answers are not official tournament rulings. Questions and public card identities are sent to the configured knowledge service; photos and collection quantities are not.</p>
+        </details>
         <p class="small muted">Daily Cardmarket reference prices via Scryfall, not live offers. The CSV is a ranked report, not an import file. Confidence circles: green = placed, yellow = review, red = unidentified or low confidence.</p>
       </section>
       <details class="panel collection-panel">

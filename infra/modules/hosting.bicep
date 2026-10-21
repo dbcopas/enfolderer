@@ -39,6 +39,10 @@ param scanAllowedUserObjectIds string = ''
 param scanDiagnosticUserObjectIds string = ''
 param scanAllowanceAdminUserObjectIds string = ''
 param apiCustomDomains array = []
+param scanKnowledgeEndpoint string = ''
+param scanKnowledgeBase string = 'scan-cards'
+param scanKnowledgeSource string = 'scryfall'
+param scanKnowledgeIndex string = 'scryfall'
 
 @description('Endpoint of Team A\'s geometry project.')
 param geometryProjectEndpoint string
@@ -158,6 +162,26 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             memory: '1Gi'
           }
           env: concat(sharedSettings, [
+            {
+              name: 'ScanKnowledge__Enabled'
+              value: empty(scanKnowledgeEndpoint) ? 'false' : 'true'
+            }
+            {
+              name: 'ScanKnowledge__Endpoint'
+              value: scanKnowledgeEndpoint
+            }
+            {
+              name: 'ScanKnowledge__KnowledgeBase'
+              value: scanKnowledgeBase
+            }
+            {
+              name: 'ScanKnowledge__KnowledgeSource'
+              value: scanKnowledgeSource
+            }
+            {
+              name: 'ScanKnowledge__Index'
+              value: scanKnowledgeIndex
+            }
             // An app can hold several user-assigned identities, so the credential must be told
             // which one to present. Without this, token acquisition is ambiguous and fails at
             // runtime.

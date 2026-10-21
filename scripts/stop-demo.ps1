@@ -3,13 +3,18 @@
     Discovers an owned Enfolderer deployment and hibernates its recreatable infrastructure.
 .DESCRIPTION
     Deletes ALL active scans, crops and generated outputs, cancels work, removes the job queue,
-    container apps, their exclusive environments and the data private endpoints. Preserves
+    container apps, their exclusive environments, data private endpoints and validated
+    dedicated Search when configured. Preserves
     collections, Cosmos (including credit balances), images, identities, Foundry and security.
     Storage soft-delete/version retention can delay physical reclamation and billing savings.
     Does not open private storage to the internet or use account keys.
     Requires effective Owner on all three deployment groups, Azure CLI and PowerShell 7.
     Discovery is confined to the signed-in tenant; multiple deployments require explicit selectors.
     Save the manifest on durable private storage: it contains the exact deployed template/config.
+    Only tagged, prefix-named, RBAC-only Search explicitly configured by scanKnowledgeEndpoint
+    in an owned deployment group is eligible. Shared consumers/indexes cause a safe refusal.
+    KnowledgeConfigPath optionally supplies ModelEndpoint/ModelDeployment/ModelName as JSON
+    if the knowledge-base model settings are unavailable. Restore rebuilds the public corpus.
 .EXAMPLE
     .\scripts\stop-demo.ps1 -WhatIf
 .EXAMPLE
@@ -19,11 +24,13 @@
 param(
     [string] $SubscriptionId,
     [string] $DeploymentName,
-    [string] $ManifestPath
+    [string] $ManifestPath,
+    # Optional recovery configuration: ModelEndpoint, ModelDeployment and ModelName.
+    [string] $KnowledgeConfigPath
 )
 #Requires -Version 7.0
 . (Join-Path $PSScriptRoot 'demo-lifecycle.ps1')
-$identity = Get-DemoIdentity
+$identity = Get-DemoIdentity -SubscriptionId $SubscriptionId
 $target = Find-DemoDeployment $identity $SubscriptionId $DeploymentName
 $subscription = $target.Subscription
 $prefix = $target.Prefix
@@ -68,6 +75,9 @@ if ($api.properties.configuration.ingress.PSObject.Properties['customDomains']) 
 }
 # Certificates belong to the deleted environment. Never replay their old IDs.
 $parameters['apiCustomDomains'] = @{ value = @() }
+$knowledgeConfig = $null
+if ($KnowledgeConfigPath) { $knowledgeConfig = Get-Content -LiteralPath $KnowledgeConfigPath -Raw | ConvertFrom-Json -Depth 100 }
+$search = Get-DemoSearchRecovery $identity $subscription $prefix $parameters $apps $knowledgeConfig
 $environments = @($apps | ForEach-Object { $_.properties.environmentId } | Select-Object -Unique)
 if ($environments.Count -ne 3) { throw 'Expected three dedicated environments. Shared/consolidated layouts need a dedicated plan.' }
 foreach ($environment in $environments) {
@@ -113,13 +123,18 @@ $manifest = [ordered]@{
     location = $target.Deployment.location; status = 'Prepared'; savedUtc = [DateTimeOffset]::UtcNow.ToString('o')
     template = $template; parameters = $parameters; apps = $apps; environments = $environments
     privateEndpoints = $endpoints; storageId = $storage[0].id; customDomains = $domains
+    search = $search
 }
 Write-Host "Selected owned deployment: $subscription / $($target.Deployment.name) / $prefix"
 Write-Host 'Deletion plan:'
 foreach ($id in @($apps.id) + $environments + $endpoints) { Write-Host "  $id" }
+if ($search) {
+    Write-Host "  $($search.id): dedicated public knowledge corpus (rebuild on restore)"
+    foreach ($grant in $search.modelRoles) { Write-Host "  Exact old Search-to-model role: $($grant.id)" }
+}
 Write-Host "  $($storage[0].id): ALL scans, crops, outputs and queued work"
 Write-Host 'Preserved/billable: collection snapshots, Cosmos/credits, registry, Foundry, logs, DNS and security settings.'
-$action = 'IRREVERSIBLY delete all scans/crops/outputs and queued work; delete apps, exclusive environments and private endpoints'
+$action = 'IRREVERSIBLY delete all scans/crops/outputs and queued work; delete apps, exclusive environments, private endpoints and validated dedicated Search (if configured)'
 if (-not $PSCmdlet.ShouldProcess("$subscription / $prefix; recovery manifest $ManifestPath", $action)) { return }
 New-Item -ItemType Directory -Path (Split-Path -Parent $ManifestPath) -Force | Out-Null
 Save-DemoManifest $manifest $ManifestPath
@@ -143,8 +158,15 @@ try {
         $null = Invoke-DemoAz @('resource', 'delete', '--subscription', $subscription,
             '--ids', $endpoint, '--api-version', '2023-11-01')
     }
+    if ($search) {
+        foreach ($grant in $search.modelRoles) {
+            $null = Invoke-DemoAz @('role', 'assignment', 'delete', '--subscription', $subscription, '--ids', $grant.id)
+        }
+        $null = Invoke-DemoAz @('resource', 'delete', '--subscription', $subscription,
+            '--ids', $search.id, '--api-version', '2025-05-01')
+    }
     $remaining = @(Invoke-DemoAz @('resource', 'list', '--subscription', $subscription) |
-        Where-Object { $_.id -in @($apps.id) + $environments + $endpoints })
+        Where-Object { $_.id -in @($apps.id) + $environments + $endpoints + $(if ($search) { $search.id }) })
     if ($remaining.Count) { throw 'Some selected compute/network resources still exist; shutdown is incomplete.' }
     $manifest.status = 'Stopped'
     Save-DemoManifest $manifest $ManifestPath

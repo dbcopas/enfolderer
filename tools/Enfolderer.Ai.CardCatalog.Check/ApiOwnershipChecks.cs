@@ -153,6 +153,47 @@ internal static class ApiOwnershipChecks
         check(purgedCrop.StatusCode == HttpStatusCode.NotFound && images.Reads == 2,
             "purged crop returns 404 instead of breaking recorded evidence");
         images.Exists = true;
+        using var disabledQuestion = await client.PostAsJsonAsync($"/jobs/{job.JobId}/questions", new { question = "What is this card?" });
+        check(disabledQuestion.StatusCode == HttpStatusCode.ServiceUnavailable,
+            "unconfigured knowledge fails explicitly rather than answering without grounding");
+        var questionService = new Questions();
+        await store.CreateAsync(job with { Id = "question-pending", JobId = "question-pending" });
+        await using (var questionFactory = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<ScanKnowledgeOptions>();
+            services.AddSingleton(new ScanKnowledgeOptions { Enabled = true });
+            services.RemoveAll<IScanQuestions>();
+            services.AddSingleton<IScanQuestions>(questionService);
+        })))
+        {
+            using var questionClient = questionFactory.CreateClient();
+            questionClient.DefaultRequestHeaders.Add("X-Test-User", UserB);
+            using var denied = await questionClient.PostAsJsonAsync($"/jobs/{job.JobId}/questions", new { question = "Steal another scan" });
+            check(denied.StatusCode == HttpStatusCode.NotFound && questionService.Calls == 0,
+                "another user's scan never reaches the knowledge service");
+            questionClient.DefaultRequestHeaders.Remove("X-Test-User");
+            using var unauthenticated = await questionClient.PostAsJsonAsync($"/jobs/{job.JobId}/questions", new { question = "Question" });
+            check(unauthenticated.StatusCode == HttpStatusCode.Unauthorized && questionService.Calls == 0,
+                "anonymous scan questions are rejected");
+            questionClient.DefaultRequestHeaders.Add("X-Test-User", UserA);
+            using var invalidQuestion = await questionClient.PostAsJsonAsync($"/jobs/{job.JobId}/questions", new { question = new string('x', 1001) });
+            check(invalidQuestion.StatusCode == HttpStatusCode.BadRequest && questionService.Calls == 0,
+                "oversized questions are rejected before paid retrieval");
+            using var grounded = await questionClient.PostAsJsonAsync($"/jobs/{job.JobId}/questions", new { question = "What does card 1 do?" });
+            check(grounded.StatusCode == HttpStatusCode.OK && questionService.Calls == 1
+                && grounded.Headers.CacheControl?.NoStore == true,
+                "owner gets grounded answer via no-store response without submitting a scan");
+            questionService.Fail = true;
+            using var outage = await questionClient.PostAsJsonAsync($"/jobs/{job.JobId}/questions", new { question = "Question" });
+            check(outage.StatusCode == HttpStatusCode.BadGateway,
+                "knowledge failures return explicit 502 rather than a fabricated answer");
+            using var missingResult = await questionClient.PostAsJsonAsync("/jobs/question-pending/questions", new { question = "Question" });
+            check(missingResult.StatusCode == HttpStatusCode.Conflict,
+                "incomplete scans cannot invoke paid knowledge retrieval");
+            using var limited = await questionClient.PostAsJsonAsync($"/jobs/{job.JobId}/questions", new { question = "Question" });
+            check(limited.StatusCode == HttpStatusCode.TooManyRequests,
+                "per-owner knowledge questions are bounded to four requests per minute");
+        }
         await store.CreateAsync(new ScanJobDocument { Id = "legacy", JobId = "legacy" });
         using var legacy = await client.GetAsync("/jobs/legacy");
         check(legacy.StatusCode == HttpStatusCode.NotFound, "actual API denies legacy ownerless jobs");
@@ -521,6 +562,7 @@ internal static class ApiOwnershipChecks
             LastRead = path;
             return Task.FromResult<Stream>(new MemoryStream([1, 2, 3]));
         }
+
         public Task WriteAsync(string path, Stream content, string contentType, CancellationToken ct = default)
         {
             Writes++;
@@ -539,6 +581,19 @@ internal static class ApiOwnershipChecks
             if (Fail) throw new IOException("Simulated queue outage");
             Interlocked.Increment(ref _messages);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class Questions : IScanQuestions
+    {
+        public int Calls { get; private set; }
+        public bool Fail { get; set; }
+        public Task<ScanAnswer> AskAsync(ScanResultDocument result, string question, CancellationToken ct)
+        {
+            Calls++;
+            if (Fail) throw new HttpRequestException("Simulated knowledge outage.");
+            return Task.FromResult(new ScanAnswer("Grounded answer [ref_id:0]",
+                [new("0", "Test card", "https://scryfall.com/card/hou/22")], true));
         }
     }
 }
