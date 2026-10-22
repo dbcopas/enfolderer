@@ -282,6 +282,7 @@ public sealed record ScanResultDocument
     [JsonPropertyName("annotatedImagePath")] public string? AnnotatedImagePath { get; init; }
 
     [JsonPropertyName("annotationError")] public string? AnnotationError { get; init; }
+    [JsonPropertyName("collectionAddError")] public string? CollectionAddError { get; init; }
 }
 
 /// <summary>Independent EUR values and source languages; missing values are not zero.</summary>
@@ -320,6 +321,7 @@ public sealed record CardPrices
 /// <summary>Job state persisted in Cosmos DB. Partition key is <c>/jobId</c>.</summary>
 public sealed record ScanJobDocument
 {
+    [JsonPropertyName("autoAddToCollection")] public bool AutoAddToCollection { get; init; }
     [JsonPropertyName("useCollection")] public bool UseCollection { get; init; }
     [JsonPropertyName("id")] public string Id { get; init; } = string.Empty;
 
@@ -381,6 +383,7 @@ public sealed record ScanJobDocument
 /// <summary>Request body for <c>POST /jobs</c>.</summary>
 public sealed record CreateJobRequest
 {
+    [JsonPropertyName("autoAddToCollection")] public bool AutoAddToCollection { get; init; }
     [JsonPropertyName("useCollection")] public bool UseCollection { get; init; }
     /// <summary>Original file name; only the extension and a sanitized stem are used.</summary>
     [JsonPropertyName("fileName")] public string FileName { get; init; } = "scan.jpg";

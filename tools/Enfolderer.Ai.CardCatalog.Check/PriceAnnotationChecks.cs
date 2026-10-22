@@ -448,6 +448,22 @@ internal static class PriceAnnotationChecks
             new CardPrintingReference("ltr", "329", []), new CardPrintingReference("ltr", "224", []) };
         var modern = card with { Set = "hoc", CollectorNumber = "36", Prices = new CardPrices {
             Layout = "normal", OracleId = oracle, RelatedPrintings = related } };
+        ScannedCollectionPrinting[] scanned =
+        [
+            new("hoc", "036", "en", "Sauron, the Dark Lord", 2),
+            new("HOC", "36", "ja", "Sauron, the Dark Lord", 1),
+            new("ltr", "224", "en", "Sauron, the Dark Lord", 5),
+            new("ltr", "329", "en", "Sauron, the Dark Lord", 3),
+            new("zzz", "1", "en", "Sauron, the Dark Lord", 100)
+        ];
+        check(new CombinedCollectionOwnership(old, scanned).Resolve(modern) is { Quantity: 3, AllQuantity: 17 },
+            "combined ownership adds scanned copies across languages and canonical printings without summing imported all-set totals twice");
+        check(new CombinedCollectionOwnership(null, scanned).Resolve(modern) is { Quantity: 3, AllQuantity: 11 },
+            "scanned-only ownership counts related printing keys, not matching names from unrelated printings");
+        check(new CombinedCollectionOwnership(old, scanned).Resolve(modern with
+            { Set = "wwk", CollectorNumber = "136", Prices = modern.Prices with { GathererIds = [197881], RelatedPrintings = [] } })
+            is { Quantity: 2, AllQuantity: 2 },
+            "combined ownership preserves uploaded legacy Gatherer quantities without borrowing scanned quantities from other printings");
         check(CollectionSnapshot.Resolve(modern, lookup) is { Quantity: 0, AllQuantity: 6, IsMissing: true },
             "new printing uses canonical siblings for the all-sets total without borrowing their exact quantity or double-counting totals");
         check(CollectionSnapshot.Resolve(modern with { Prices = modern.Prices with {
@@ -466,6 +482,7 @@ internal static class PriceAnnotationChecks
         foreach (var failure in new[] { "", "http", "wrong-card", "unsafe-page", "repeated-page", "malformed" })
         {
             var searches = 0;
+            var multilingual = false;
             using var handler = new RelatedHandler(request =>
             {
                 if (request.RequestUri!.AbsolutePath != "/cards/search")
@@ -473,6 +490,7 @@ internal static class PriceAnnotationChecks
                         oracle_id = oracle, layout = "normal", name = "Sauron, the Dark Lord",
                         prices = new { eur = "3.00", eur_foil = "4.00" } });
                 searches++;
+                multilingual |= request.RequestUri.Query.Contains("include_multilingual=true");
                 if (failure == "http") throw new HttpRequestException("Test catalogue unavailable");
                 if (failure == "malformed") return "{\"data\":{},\"has_more\":false}";
                 if (failure == "wrong-card") return Page(Printing("ltr", "224", Guid.NewGuid()));
@@ -494,6 +512,17 @@ internal static class PriceAnnotationChecks
             else
                 check(result.Cards.All(c => c.Ownership?.Error is not null) && result.AnnotatedImagePath is not null,
                     $"canonical ownership {failure} failure remains explicit and cannot endorse an invented zero total");
+            searches = 0;
+            var combined = await service.CreateAsync(new ScanResultDocument
+            {
+                JobId = "combined-ownership", Cards = [modern with { Language = "en" }, modern with { Index = 1, Language = "en" }]
+            }, source, default, old with { Printings = [new("hoc", "36", 2, 6)] }, scanned: scanned);
+            if (failure.Length == 0)
+                check(multilingual && searches == 2 && combined.Cards.All(c => c.Ownership is { Quantity: 5, AllQuantity: 14, Error: null }),
+                    "annotation resolves combined all-sets ownership even with a nonzero imported total, caching multilingual catalogue pagination per identity");
+            else
+                check(combined.Cards.All(c => c.Ownership?.Error is not null) && combined.AnnotatedImagePath is not null,
+                    $"combined ownership {failure} failure stays unknown rather than showing a partial uploaded-only total");
         }
     }
 

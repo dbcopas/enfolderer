@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/site.css">
   <script defer src="/lib/msal-browser.min.js"
     integrity="sha384-TlDXht2cVvKBRAwDJrpYYtb+vUcYNxMgTELqFTRcnu0SP//KlFc7eE8so0+lJ03E" crossorigin="anonymous"></script>
-  <script defer src="/app.js?v=3"></script>
+  <script defer src="/app.js?v=4"></script>
 </head>
 <body>
   <header class="topbar">
@@ -63,7 +63,9 @@
         <p id="photoInfo" class="small muted"></p>
         <div class="scan-options">
           <label class="check"><input id="useCollection" type="checkbox" disabled> Check my collection</label>
+          <label class="check auto-add"><input id="autoAddToCollection" type="checkbox" role="switch"> Automatically add identified cards to scanned collection</label>
         </div>
+        <p class="small muted">Collection checks combine your uploaded snapshot and saved scanned cards. Copies present in both sources are counted twice. Auto-add applies to new scans and runs after ownership is calculated, even if you close this page.</p>
         <button id="scan" class="primary full" disabled>Identify my cards</button>
       </section>
       <section id="progressPanel" class="panel" hidden aria-label="Scan progress">
@@ -86,7 +88,7 @@
           <button id="addToScannedCollection" class="secondary" disabled>Add identified cards to collection</button>
         </div>
         <p id="scanCollectionInfo" class="small muted" role="status" aria-live="polite"></p>
-        <p class="small muted">Review uncertain printings before adding. Each identified card with a set and collector number adds one copy. Each scan can be added once; another scan adds more copies. This does not change your uploaded snapshot or existing overlays.</p>
+        <p class="small muted">Review uncertain printings before adding manually, or leave auto-add off when you want to review first. Each identified card with a set and collector number adds one copy. Each scan can be added once; another scan adds more copies. Uploaded quantities stay unchanged; saved cards contribute to future ownership checks, not existing overlays.</p>
         <p class="small muted">Both prices are shown: nonfoil, then foil. The gold trophy marks the highest-value printing you still need, using nonfoil or foil when nonfoil is unavailable. Pink panels mean a missing exact printing; amber means ownership is unknown. A double-faced card needs two copies. No trophy is shown when no known shortage has a price.</p>
         <div id="cardList" class="card-list"></div>
         <p class="small muted">Daily Cardmarket reference prices via Scryfall, not live offers. The CSV is a ranked report, not an import file. Confidence circles: green = placed, yellow = review, red = unidentified or low confidence.</p>

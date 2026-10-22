@@ -108,6 +108,7 @@ jobs.MapPost("/", async (
     HttpContext context,
     IJobStore store,
     ICollectionSnapshotStore collections,
+    IScannedCollectionStore scannedCollections,
     ILoggerFactory loggerFactory,
     TokenCredential credential,
     ScanPlatformOptions platform,
@@ -119,8 +120,9 @@ jobs.MapPost("/", async (
     var jobId = Guid.NewGuid().ToString("n");
     var owner = JobOwnerFilter.ReadOwner(context.User)
         ?? throw new InvalidOperationException("The job ownership filter must validate the caller before job creation.");
-    if (request.UseCollection && await collections.ReadAsync(owner.TenantId, owner.ObjectId, ct) is null)
-        return Results.BadRequest(new { error = "Upload a collection snapshot before enabling ownership." });
+    if (request.UseCollection && await collections.ReadAsync(owner.TenantId, owner.ObjectId, ct) is null
+        && (await scannedCollections.ReadAsync(owner.TenantId, owner.ObjectId, ct)).Count == 0)
+        return Results.BadRequest(new { error = "Upload a collection snapshot or add scanned cards before enabling ownership." });
 
     // The storage account has no public endpoint, so there is no URL that would let the client
     // write the blob itself. The path is derived here only so that the job document and the worker
@@ -139,6 +141,7 @@ jobs.MapPost("/", async (
             OwnerTenantId = owner.TenantId,
             OwnerObjectId = owner.ObjectId,
             UseCollection = request.UseCollection,
+            AutoAddToCollection = request.AutoAddToCollection,
             Status = ScanJobStatus.Pending,
             BlobPrefix = blobPrefix,
             BlobPath = blobPath,

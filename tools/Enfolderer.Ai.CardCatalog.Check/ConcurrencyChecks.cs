@@ -1,6 +1,7 @@
 using Azure.Core;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Infrastructure;
+using Enfolderer.Ai.Infrastructure.Catalogue;
 using Enfolderer.Ai.Infrastructure.Queueing;
 using Enfolderer.Ai.Infrastructure.Storage;
 using Enfolderer.Ai.Worker.Agents;
@@ -94,6 +95,83 @@ internal static class ConcurrencyChecks
         {
             check((await cancelledStore.GetAsync("parallel"))?.Status != ScanJobStatus.Completed,
                 "parallel cancellation propagates without publishing a successful result");
+        }
+        await AutoAddChecksAsync(check);
+    }
+
+    private static async Task AutoAddChecksAsync(Action<bool, string> check)
+    {
+        const string tenant = "11111111-1111-1111-1111-111111111111";
+        const string user = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        foreach (var mode in new[] { "off", "on", "retry", "add-failure", "read-failure" })
+        {
+            var jobId = Guid.NewGuid().ToString("N");
+            var jobs = new RecordingStore();
+            await jobs.CreateAsync(new ScanJobDocument
+            {
+                Id = jobId, JobId = jobId, BlobPath = "scan.png", OwnerTenantId = tenant, OwnerObjectId = user,
+                UseCollection = true, AutoAddToCollection = mode is "on" or "retry" or "add-failure"
+            });
+            var snapshots = new InMemoryCollectionSnapshotStore();
+            await snapshots.WriteAsync(tenant, user, new CollectionSnapshot { Printings = [new("test", "0", 4, 7)] });
+            var saved = new InMemoryScannedCollectionStore();
+            await saved.AddAsync(tenant, user, new ScannedCollectionAddition
+            {
+                JobId = Guid.NewGuid().ToString("N"),
+                Printings = [new("test", "0", "en", "Card 0", 1), new("test", "0", "ja", "Card 0", 1),
+                    new("other", "1", "en", "Card 0", 3)]
+            });
+            if (mode == "retry")
+                await saved.AddAsync(tenant, user, new ScannedCollectionAddition
+                    { JobId = jobId, Printings = [new("test", "0", "", "Card 0", 1)] });
+            var scanned = new FaultingScannedStore(saved, mode);
+            var images = new Images();
+            using var http = new HttpClient(new OwnershipPrices());
+            var annotations = new ScanAnnotationService(new ScryfallPriceClient(http), images,
+                NullLogger<ScanAnnotationService>.Instance);
+            var processor = new ScanJobProcessor(jobs, images, new Boundaries(1), [new IdentificationAgent()],
+                new ScanPipelineOptions { CropHeight = 140 }, new Credential(), new ScanPlatformOptions(),
+                NullLogger<ScanJobProcessor>.Instance, annotation: annotations, collections: snapshots, scannedCollections: scanned);
+            await processor.ProcessAsync(new ScanJobMessage(jobId, "scan.png", null), default);
+            var job = (await jobs.GetAsync(jobId))!;
+            check(job.Status == ScanJobStatus.Completed && job.Result?.AnnotatedImagePath is not null,
+                $"auto-add {mode}: collection outcomes do not discard a completed scan or overlay");
+            if (mode == "read-failure")
+                check(job.Result!.Cards.Single().Ownership?.Error is not null,
+                    "failure of either ownership source is explicit, not a success-shaped uploaded-only count");
+            else
+                check(job.Result!.Cards.Single().Ownership is { Quantity: 6, AllQuantity: 12, Error: null },
+                    $"auto-add {mode}: combined ownership is calculated before this scan's contribution, including on retry");
+            check((await saved.ReadAsync(tenant, user)).Sum(p => p.Quantity) == (mode is "on" or "retry" ? 6 : 5),
+                $"auto-add {mode}: saved quantities reflect the opt-in setting and never duplicate a scan");
+            check((job.Result!.CollectionAddError is not null) == (mode == "add-failure"),
+                $"auto-add {mode}: failed saves expose a manual-retry error without marking other outcomes as failed");
+            await processor.ProcessAsync(new ScanJobMessage(jobId, "scan.png", null), default);
+            check((await saved.ReadAsync(tenant, user)).Sum(p => p.Quantity) == (mode is "on" or "retry" ? 6 : 5),
+                $"auto-add {mode}: a duplicate queue message cannot add another copy");
+        }
+    }
+
+    private sealed class FaultingScannedStore(InMemoryScannedCollectionStore inner, string mode) : IScannedCollectionStore
+    {
+        public Task<bool> AddAsync(string tenantId, string objectId, ScannedCollectionAddition addition, CancellationToken ct = default) =>
+            mode == "add-failure" ? throw new IOException("Test scanned collection write failure") : inner.AddAsync(tenantId, objectId, addition, ct);
+        public Task<bool> ContainsAsync(string tenantId, string objectId, string jobId, CancellationToken ct = default) =>
+            inner.ContainsAsync(tenantId, objectId, jobId, ct);
+        public Task<IReadOnlyList<ScannedCollectionPrinting>> ReadAsync(string tenantId, string objectId, CancellationToken ct = default,
+            string? excludingJobId = null) => mode == "read-failure" ? throw new IOException("Test scanned collection read failure")
+                : inner.ReadAsync(tenantId, objectId, ct, excludingJobId);
+    }
+
+    private sealed class OwnershipPrices : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var body = request.RequestUri!.AbsolutePath == "/cards/search"
+                ? """{"data":[{"set":"test","collector_number":"0","oracle_id":"11111111-1111-1111-1111-111111111111"},{"set":"other","collector_number":"1","oracle_id":"11111111-1111-1111-1111-111111111111"}],"has_more":false}"""
+                : """{"set":"test","collector_number":"0","lang":"en","name":"Card 0","layout":"normal","oracle_id":"11111111-1111-1111-1111-111111111111","prices":{"eur":"1.00","eur_foil":"2.00"}}""";
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") });
         }
     }
 

@@ -17,6 +17,7 @@ const run = task => async event => {
   try { await task(event); } catch (error) { report(error); }
 };
 const jobKey = () => "enfolderer.scan." + account.localAccountId;
+const autoAddKey = () => jobKey() + ".autoAdd";
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function token() {
@@ -58,7 +59,7 @@ async function api(path, options = {}) {
 function setBusy(value) {
   busy = value;
   $("scan").disabled = value || addingToCollection || !photo || !scansAvailable;
-  for (const id of ["camera", "photo", "snapshot", "deleteCollection"]) $(id).disabled = value || addingToCollection;
+  for (const id of ["camera", "photo", "snapshot", "deleteCollection", "autoAddToCollection"]) $(id).disabled = value || addingToCollection;
   $("useCollection").disabled = value || !collectionAvailable;
   $("previewWrap").classList.toggle("scanning", value);
   $("scanSweep").hidden = !value;
@@ -139,6 +140,7 @@ async function addScanToCollection() {
     $("scanCollectionInfo").textContent = result.added
       ? `Added ${result.quantity} copies across ${result.printings} printings. ${result.skipped} unidentified or incomplete cards skipped.`
       : "This scan is already in your scanned collection. Quantities were not changed.";
+    await loadCollection(true);
     if (!$("scannedCollection").hidden) await loadScannedCollection();
   } catch (error) {
     if (!scanAdded) $("scanCollectionInfo").textContent = "Could not confirm the addition. Try again; the same scan will not be counted twice.";
@@ -160,15 +162,17 @@ async function loadAllowance() {
   setBusy(busy);
 }
 
-async function loadCollection() {
+async function loadCollection(preserveChoice = false) {
   const state = await (await api("/collection/")).json();
-  collectionAvailable = state.available;
+  const wasAvailable = collectionAvailable;
+  collectionAvailable = state.available || state.scannedPrintings > 0;
   $("collectionBadge").textContent = state.available ? "Ready" : "Not uploaded";
   $("collectionInfo").textContent = state.available
     ? `${state.printings.toLocaleString()} printings. Exported ${new Date(state.exportedAt).toLocaleString()}.`
-    : "No collection snapshot. You can still scan for printings and prices.";
+    : "No uploaded snapshot. Saved scanned cards still contribute to collection checks.";
   $("deleteCollection").hidden = !state.available;
-  $("useCollection").checked = state.available;
+  if (!collectionAvailable) $("useCollection").checked = false;
+  else if (!preserveChoice || !wasAvailable) $("useCollection").checked = true;
   setBusy(busy);
 }
 
@@ -245,7 +249,12 @@ async function showResults(result) {
     if (resultJobId === collectionJobId) {
       scanAdded = state.added;
       if (scanAdded) $("scanCollectionInfo").textContent = "This scan is already in your scanned collection.";
+      else if (result.collectionAddError) $("scanCollectionInfo").textContent = result.collectionAddError;
       updateCollectionButton();
+      if (scanAdded) {
+        await loadCollection(true);
+        if (!$("scannedCollection").hidden) await loadScannedCollection();
+      }
     }
   } catch (error) { report(error); }
   $("results").hidden = false;
@@ -344,7 +353,7 @@ async function startScan() {
     const job = await (await api("/jobs/", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ fileName: "mobile-photo.jpg", gameHint: "mtg",
-        useCollection: $("useCollection").checked })
+        useCollection: $("useCollection").checked, autoAddToCollection: $("autoAddToCollection").checked })
     })).json();
     await api(`/jobs/${job.jobId}/content`, { method: "PUT", headers: { "Content-Type": "image/jpeg" }, body: photo });
     await api(`/jobs/${job.jobId}/submit`, { method: "POST" });
@@ -379,6 +388,7 @@ async function initialize() {
   $("workspace").hidden = false;
   $("signOut").hidden = false;
   $("account").textContent = `Signed in as ${account.username}`;
+  $("autoAddToCollection").checked = sessionStorage.getItem(autoAddKey()) === "true";
   try { await loadAllowance(); } catch (error) { report(error); }
   await loadCollection();
   const saved = sessionStorage.getItem(jobKey());
@@ -396,6 +406,9 @@ $("photo").onchange = run(choosePhoto);
 $("scan").onclick = run(startScan);
 $("retry").onclick = run(pollJob);
 $("addToScannedCollection").onclick = run(addScanToCollection);
+$("autoAddToCollection").onchange = run(() => {
+  sessionStorage.setItem(autoAddKey(), String($("autoAddToCollection").checked));
+});
 $("viewScannedCollection").onclick = run(async () => {
   const showing = $("scannedCollection").hidden;
   $("scannedCollection").hidden = !showing;

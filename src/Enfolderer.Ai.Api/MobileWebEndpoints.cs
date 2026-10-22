@@ -23,11 +23,14 @@ public static class MobileWebEndpoints
 
         var collection = app.MapGroup("/collection").RequireAuthorization();
         collection.AddEndpointFilter<JobOwnerFilter>();
-        collection.MapGet("/", async (HttpContext context, ICollectionSnapshotStore store, CancellationToken ct) =>
+        collection.MapGet("/", async (HttpContext context, ICollectionSnapshotStore store,
+            IScannedCollectionStore scannedStore, CancellationToken ct) =>
         {
             var owner = JobOwnerFilter.ReadOwner(context.User)!.Value;
             var snapshot = await store.ReadAsync(owner.TenantId, owner.ObjectId, ct);
+            var scanned = await scannedStore.ReadAsync(owner.TenantId, owner.ObjectId, ct);
             return Results.Ok(new { available = snapshot is not null, exportedAt = snapshot?.ExportedAt,
+                scannedPrintings = scanned.Count, scannedQuantity = scanned.Sum(p => (long)p.Quantity),
                 printings = (snapshot?.Printings.Count ?? 0) + (snapshot?.GathererPrintings.Count ?? 0) });
         });
         collection.MapPut("/", async (HttpContext context, ICollectionSnapshotStore store,

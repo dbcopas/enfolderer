@@ -11,7 +11,8 @@ public interface IScannedCollectionStore
 {
     Task<bool> AddAsync(string tenantId, string objectId, ScannedCollectionAddition addition, CancellationToken ct = default);
     Task<bool> ContainsAsync(string tenantId, string objectId, string jobId, CancellationToken ct = default);
-    Task<IReadOnlyList<ScannedCollectionPrinting>> ReadAsync(string tenantId, string objectId, CancellationToken ct = default);
+    Task<IReadOnlyList<ScannedCollectionPrinting>> ReadAsync(string tenantId, string objectId, CancellationToken ct = default,
+        string? excludingJobId = null);
 }
 
 public sealed class BlobScannedCollectionStore(BlobServiceClient blobs) : IScannedCollectionStore
@@ -48,13 +49,16 @@ public sealed class BlobScannedCollectionStore(BlobServiceClient blobs) : IScann
     public async Task<bool> ContainsAsync(string tenantId, string objectId, string jobId, CancellationToken ct = default) =>
         await blobs.GetBlobContainerClient("collections").GetBlobClient(BlobName(tenantId, objectId, jobId)).ExistsAsync(ct);
 
-    public async Task<IReadOnlyList<ScannedCollectionPrinting>> ReadAsync(string tenantId, string objectId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<ScannedCollectionPrinting>> ReadAsync(string tenantId, string objectId, CancellationToken ct = default,
+        string? excludingJobId = null)
     {
         var container = blobs.GetBlobContainerClient("collections");
+        var excluded = excludingJobId is null ? null : BlobName(tenantId, objectId, excludingJobId);
         var printings = new List<ScannedCollectionPrinting>();
         await foreach (var blob in container.GetBlobsAsync(BlobTraits.None, BlobStates.None,
             Prefix(tenantId, objectId), ct))
         {
+            if (blob.Name == excluded) continue;
             using var stream = await container.GetBlobClient(blob.Name).OpenReadAsync(cancellationToken: ct);
             var addition = await JsonSerializer.DeserializeAsync<ScannedCollectionAddition>(stream, Json, ct)
                 ?? throw new InvalidDataException("Stored scanned collection addition is empty.");
@@ -82,11 +86,14 @@ public sealed class InMemoryScannedCollectionStore : IScannedCollectionStore
         return Task.FromResult(_additions.ContainsKey(BlobScannedCollectionStore.BlobName(tenantId, objectId, jobId)));
     }
 
-    public Task<IReadOnlyList<ScannedCollectionPrinting>> ReadAsync(string tenantId, string objectId, CancellationToken ct = default)
+    public Task<IReadOnlyList<ScannedCollectionPrinting>> ReadAsync(string tenantId, string objectId, CancellationToken ct = default,
+        string? excludingJobId = null)
     {
         ct.ThrowIfCancellationRequested();
         var prefix = BlobScannedCollectionStore.Prefix(tenantId, objectId);
+        var excluded = excludingJobId is null ? null : BlobScannedCollectionStore.BlobName(tenantId, objectId, excludingJobId);
         return Task.FromResult(ScannedCollectionAddition.Combine(
-            _additions.Where(p => p.Key.StartsWith(prefix, StringComparison.Ordinal)).SelectMany(p => p.Value.Printings)));
+            _additions.Where(p => p.Key != excluded && p.Key.StartsWith(prefix, StringComparison.Ordinal))
+                .SelectMany(p => p.Value.Printings)));
     }
 }

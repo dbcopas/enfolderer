@@ -93,10 +93,10 @@ internal static class ApiOwnershipChecks
             && website.Contains("Sign-in may use your existing account or a code sent to your email")
             && !website.Contains("invited Microsoft account") && !website.Contains("Outlook.com users"),
             "mobile welcome explains invited-email sign-in without requiring a Microsoft account");
-        using var scriptResponse = await client.GetAsync("/app.js?v=3");
+        using var scriptResponse = await client.GetAsync("/app.js?v=4");
         scriptResponse.EnsureSuccessStatusCode();
         var mobileScript = await scriptResponse.Content.ReadAsStringAsync();
-        check(website.Contains("src=\"/app.js?v=3\"")
+        check(website.Contains("src=\"/app.js?v=4\"")
             && scriptResponse.Headers.CacheControl?.NoCache == true,
             "mobile script bypasses the old cached URL and requires revalidation on subsequent visits");
         check(mobileScript.Contains("gameHint: \"mtg\"") && !mobileScript.Contains("$(\"game\")"),

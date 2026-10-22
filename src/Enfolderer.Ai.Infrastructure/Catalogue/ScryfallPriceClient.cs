@@ -51,7 +51,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
     public async Task<IReadOnlyList<CardPrintingReference>> GetRelatedPrintingsAsync(Guid oracleId, CancellationToken ct)
     {
         if (oracleId == Guid.Empty) throw new ArgumentException("A canonical card ID is required.", nameof(oracleId));
-        var url = $"https://api.scryfall.com/cards/search?unique=prints&q={Uri.EscapeDataString($"oracleid:{oracleId:D} game:paper")}";
+        var url = $"https://api.scryfall.com/cards/search?unique=prints&include_multilingual=true&q={Uri.EscapeDataString($"oracleid:{oracleId:D} game:paper")}";
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var result = new List<CardPrintingReference>();
         while (true)

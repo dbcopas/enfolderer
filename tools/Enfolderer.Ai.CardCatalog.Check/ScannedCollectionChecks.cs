@@ -120,6 +120,20 @@ internal static class ScannedCollectionChecks
         await snapshots.DeleteAsync(tenant, userA);
         check((await View()).GetProperty("totalQuantity").GetInt64() == 7,
             "deleting an uploaded snapshot preserves scanned additions");
+        var collectionState = await client.GetFromJsonAsync<JsonElement>("/collection/");
+        check(!collectionState.GetProperty("available").GetBoolean()
+            && collectionState.GetProperty("scannedPrintings").GetInt32() == 4
+            && collectionState.GetProperty("scannedQuantity").GetInt64() == 7,
+            "collection metadata exposes scanned-only ownership without pretending an uploaded snapshot exists");
+        using var scannedOnly = await client.PostAsJsonAsync("/jobs/", new CreateJobRequest
+        {
+            UseCollection = true, AutoAddToCollection = true
+        });
+        scannedOnly.EnsureSuccessStatusCode();
+        var created = await scannedOnly.Content.ReadFromJsonAsync<CreateJobResponse>();
+        var stored = await jobs.GetAsync(created!.JobId);
+        check(stored is { UseCollection: true, AutoAddToCollection: true },
+            "scanned-only users can enable ownership and persist auto-add independently on a new scan");
         var balanceAfter = await client.GetFromJsonAsync<JsonElement>("/allowance/");
         check(balanceBefore.GetProperty("remaining").GetInt64() == balanceAfter.GetProperty("remaining").GetInt64(),
             "saving and browsing a collection do not consume scan credits");
@@ -174,6 +188,8 @@ internal static class ScannedCollectionChecks
         var persisted = await new BlobScannedCollectionStore(service).ReadAsync(tenant, userA);
         check(persisted.Count == 4 && persisted.Sum(p => p.Quantity) == 6,
             "a fresh Blob-backed store lists and reads durable scan receipts with exact quantities");
+        check((await firstReplica.ReadAsync(tenant, userA, excludingJobId: job.JobId)).Count == 0,
+            "Blob-backed ownership reads exclude a retried scan's own already-saved contribution");
         await secondReplica.AddAsync(tenant, userB, addition);
         var isolated = await firstReplica.ReadAsync(tenant, userA);
         check(isolated.Count == 4 && isolated.Sum(p => p.Quantity) == 6

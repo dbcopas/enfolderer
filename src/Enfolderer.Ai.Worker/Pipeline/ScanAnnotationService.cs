@@ -11,12 +11,14 @@ public sealed class ScanAnnotationService(
     ScryfallPriceClient prices, IScanImageStore images, ILogger<ScanAnnotationService> log)
 {
     public async Task<ScanResultDocument> CreateAsync(ScanResultDocument result, Stream source, CancellationToken ct,
-        CollectionSnapshot? snapshot = null, string? ownershipError = null, string? blobPrefix = null)
+        CollectionSnapshot? snapshot = null, string? ownershipError = null, string? blobPrefix = null,
+        IReadOnlyList<ScannedCollectionPrinting>? scanned = null)
     {
         var timer = Stopwatch.StartNew();
         var enriched = new List<IdentifiedCard>();
         var cache = new Dictionary<(string Set, string Number, string Language), CardPrices>();
-        var ownershipIndex = snapshot?.BuildIndex();
+        var ownership = ownershipError is null && (snapshot is not null || scanned is not null)
+            ? new CombinedCollectionOwnership(snapshot, scanned) : null;
         var relatedCache = new Dictionary<Guid, IReadOnlyList<CardPrintingReference>>();
         foreach (var card in result.Cards)
         {
@@ -45,12 +47,14 @@ public sealed class ScanAnnotationService(
                     card.Index, result.JobId, value.Nonfoil, value.NonfoilLanguage, value.Foil,
                     value.FoilLanguage, value.Source, value.RetrievedAt, value.Error);
             }
-            if ((ownershipIndex is not null || ownershipError is not null) && card.Game == CardGames.Magic)
+            if ((ownership is not null || ownershipError is not null) && card.Game == CardGames.Magic)
             {
                 try
                 {
-                    if (ownershipIndex is not null && updated.Prices?.OracleId is { } oracleId
-                        && CollectionSnapshot.Resolve(updated, ownershipIndex).AllQuantity == 0)
+                    if (ownership?.HasScanned == true && updated.Prices?.OracleId is null)
+                        throw new InvalidOperationException("All-sets ownership requires an available catalogue card identity.");
+                    if (ownership is not null && updated.Prices?.OracleId is { } oracleId
+                        && (ownership.HasScanned || ownership.Resolve(updated).AllQuantity == 0))
                     {
                         try
                         {
@@ -67,9 +71,9 @@ public sealed class ScanAnnotationService(
                             throw new InvalidOperationException("All-sets ownership lookup failed; see scan logs.", ex);
                         }
                     }
-                    updated = updated with { Ownership = ownershipIndex is null
+                    updated = updated with { Ownership = ownership is null
                         ? new CardOwnership(0, 0, 1, ownershipError)
-                        : CollectionSnapshot.Resolve(updated, ownershipIndex) };
+                        : ownership.Resolve(updated) };
                 }
                 catch (InvalidOperationException ex)
                 {

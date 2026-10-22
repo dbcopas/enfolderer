@@ -30,6 +30,7 @@ public sealed class ScanJobProcessor
     private readonly CardArtVerifier? _artVerifier;
     private readonly ScanAnnotationService? _annotation;
     private readonly ICollectionSnapshotStore? _collections;
+    private readonly IScannedCollectionStore? _scannedCollections;
     private readonly ILogger<ScanJobProcessor> _log;
     private readonly IJobExecutionGate _executionGate;
 
@@ -45,7 +46,8 @@ public sealed class ScanJobProcessor
         CardArtVerifier? artVerifier = null,
         ScanAnnotationService? annotation = null,
         ICollectionSnapshotStore? collections = null,
-        IJobExecutionGate? executionGate = null)
+        IJobExecutionGate? executionGate = null,
+        IScannedCollectionStore? scannedCollections = null)
     {
         _jobs = jobs;
         _images = images;
@@ -59,6 +61,7 @@ public sealed class ScanJobProcessor
         _artVerifier = artVerifier;
         _annotation = annotation;
         _collections = collections;
+        _scannedCollections = scannedCollections;
         _log = log;
         _executionGate = executionGate ?? new LocalJobExecutionGate();
     }
@@ -133,24 +136,42 @@ public sealed class ScanJobProcessor
                     ProgressMessage = "Fetching EUR prices and rendering the annotated image..."
                 }, ct);
                 CollectionSnapshot? snapshot = null;
+                IReadOnlyList<ScannedCollectionPrinting>? scanned = null;
                 string? ownershipError = null;
                 if (job.UseCollection)
                 {
                     try
                     {
-                        if (_collections is null || job.OwnerTenantId is null || job.OwnerObjectId is null)
+                        if (_collections is null || _scannedCollections is null || job.OwnerTenantId is null || job.OwnerObjectId is null)
                             throw new InvalidOperationException("Collection storage or job ownership is unavailable.");
                         snapshot = await _collections.ReadAsync(job.OwnerTenantId, job.OwnerObjectId, ct);
-                        if (snapshot is null)
-                            throw new InvalidOperationException("Collection snapshot was removed before this scan completed.");
+                        scanned = await _scannedCollections.ReadAsync(job.OwnerTenantId, job.OwnerObjectId, ct, job.JobId);
+                        if (snapshot is null && scanned.Count == 0)
+                            throw new InvalidOperationException("No uploaded or previously scanned collection remains available.");
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _log.LogWarning(ex, "Job {JobId}: ownership unavailable; preserving scan results.", job.JobId);
-                        ownershipError = "Collection could not be loaded. Ownership is unknown; replace the snapshot and scan again.";
+                        ownershipError = "Collections could not be loaded. Ownership is unknown; check your collections and scan again.";
                     }
                 }
-                result = await _annotation.CreateAsync(result, source, ct, snapshot, ownershipError, job.BlobPrefix);
+                result = await _annotation.CreateAsync(result, source, ct, snapshot, ownershipError, job.BlobPrefix, scanned);
+            }
+
+            if (job.AutoAddToCollection && result.Cards.Any(ScannedCollectionAddition.CanAdd))
+            {
+                try
+                {
+                    if (_scannedCollections is null || job.OwnerTenantId is null || job.OwnerObjectId is null)
+                        throw new InvalidOperationException("Scanned collection storage or job ownership is unavailable.");
+                    await _scannedCollections.AddAsync(job.OwnerTenantId, job.OwnerObjectId,
+                        ScannedCollectionAddition.FromResult(job.JobId, result), ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _log.LogWarning(ex, "Job {JobId}: automatic collection addition failed; preserving scan results.", job.JobId);
+                    result = result with { CollectionAddError = "Automatic collection addition failed. Use Add identified cards to collection to retry." };
+                }
             }
 
             await _jobs.UpsertAsync(

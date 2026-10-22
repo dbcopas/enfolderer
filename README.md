@@ -169,10 +169,22 @@ by card name: two Swords to Plowshares printings stay separate. Foil finish is n
 Each scan can be added once, including after a page reload or a retry; a separate scan increases
 the corresponding quantities. Adding or browsing cards does not consume scan credits.
 
+Alternatively, enable **Automatically add identified cards to scanned collection** before
+starting a scan. This switch is off by default and remembers your choice for your signed-in
+account in the current browser tab. It applies to new scans only. The worker saves eligible
+cards after calculating ownership, even if you close the page, so a scan does not count its own
+addition in its ownership overlay. A failed automatic save leaves the scan and downloads
+available, with an explicit message and the manual add button to retry safely.
+
 Select **View scanned collection** to browse your added printings, see quantities, and filter by
-set. This collection is separate from desktop ownership snapshots: adding cards does not update
-desktop databases, uploaded snapshot quantities, ownership comparisons or previously rendered
-overlays. Replacing/deleting a snapshot does not remove scanned additions.
+set. This collection is stored separately from desktop ownership snapshots: adding cards does not
+update desktop databases, uploaded snapshot quantities or previously rendered overlays.
+Replacing/deleting a snapshot does not remove scanned additions. New mobile ownership comparisons
+add uploaded snapshot quantities and saved scanned quantities together; either source can be used
+alone. Ownership combines languages for the same set/collector number, while collection browsing
+keeps languages separate. All-sets scanned quantities use canonical catalogue printing identities,
+not card-name matching. If the same physical copies are represented in both sources, they will
+be counted twice; keep the sources non-overlapping when you want physical inventory totals.
 
 Scanned additions are durable, owner-scoped, immutable receipts in the existing private
 `collections` blob container. Atomic create-if-absent writes prevent duplicate additions across
@@ -182,14 +194,15 @@ while `POST /jobs/{jobId}/collection` saves only that user's stored completed sc
 `GET /jobs/{jobId}/collection` restores the already-added button state. All three routes enforce
 the same tenant, delegated permission, pilot allowlist and ownership policy as scans.
 
-For ownership, use **Scan > Export Mobile Collection Snapshot...** in the desktop app, then
+To include your desktop inventory in ownership, use **Scan > Export Mobile Collection Snapshot...** in the desktop app, then
 upload that JSON under **Desktop ownership snapshot** on the website (a computer signed into the same account
 can upload it too). The export reads the same local database pair used by desktop scans.
 Only printing keys (set/number and public Gatherer IDs), exact quantities and locally computed all-printing totals leave
 the desktop; original databases, card names and personal notes are not uploaded. Replace it
 after inventory changes or delete it on the website. Snapshots are private, isolated by validated
-tenant/object IDs, and remain until replaced/deleted. The worker reads the snapshot when rendering
-an opted-in scan; removing it mid-scan produces explicit unknown ownership, not invented zeros.
+tenant/object IDs, and remain until replaced/deleted. The worker reads both collection sources
+when rendering an opted-in scan. A source read failure, or removal of the only available source
+mid-scan, produces explicit unknown ownership, not partial totals or invented zeros.
 When collection comparison is enabled, missing exact printings get red overlay backgrounds;
 all cards show exact-printing and all-sets quantities, including zero. With comparison disabled,
 neither ownership line is printed and the overlay is shortened to remove that space, with the
@@ -210,9 +223,9 @@ than `VIS`). The snapshot now also exports Gatherer printing IDs, which the exac
 response supplies for matching without card-name guesses. Set/number remains the preferred key.
 Re-export and upload a fresh snapshot to include these rows; older snapshots remain readable but
 cannot recover quantities they omitted. If neither the exact set/number nor a Gatherer printing
-ID is present in an available snapshot, ownership is assumed to be zero. These cards use the
+ID is present in an available snapshot and no exact scanned printing is saved, exact ownership is zero. These cards use the
 normal red missing-card panel with `Owned: 0` and an independently resolved all-sets total.
-An unavailable snapshot, conflicting identifiers or unsupported
+Unavailable collection sources, conflicting identifiers or unsupported
 layout still produces an explicit warning and `unavailable` quantities, not invented zeros.
 Missing entries count as zero in the scan lookup; scans do not modify the uploaded snapshot or source databases.
 When a printing has no all-sets total, the worker uses Scryfall's canonical Oracle ID to find

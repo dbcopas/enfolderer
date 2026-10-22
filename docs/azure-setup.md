@@ -270,20 +270,31 @@ it does not assign users, grant or consume credits, or change authentication pol
 ## 6. Verification and cutover gate
 
 The `collection-add-and-browse` branch adds a mobile-only scanned collection, separate from
-uploaded desktop snapshots. It needs no new Azure resources or permissions: the API uses its
-existing Entra access to the `collections` container. Each accepted scan is saved once at
+uploaded desktop snapshots. It needs no new Azure resources or permissions: the API and worker use
+their existing Entra access to the `collections` container. Each added scan is saved once at
 `{tenantId}/{objectId}/scanned/{jobId}.json`, using conditional creation to make retries safe
 across API replicas. Existing `{tenantId}/{objectId}/collection.json` snapshots remain unchanged.
 Include the `scanned/` receipts in any collection retention/backup policy; deleting scan images
 does not remove these saved quantities. Without Azure Storage, the explicitly logged local
 development fallback is in-memory and does not survive an API restart.
 
-After deploying this feature's API image, check **Add identified cards to collection** and
+Deploy both the API and worker images for the automatic-add and combined-ownership changes.
+The default-off **Automatically add identified cards to scanned collection** switch is captured
+on each new job; the worker saves after rendering ownership, even if the browser closes.
+Ownership excludes the current scan's receipt on a retry. Automatic save failures preserve
+completed results and expose an explicit manual-retry message.
+
+After deploying this feature's images, check **Add identified cards to collection** and
 **View scanned collection** with two users. Verify that a scan is counted once, separate scans
 increase only the matching set/collector-number/language quantity, set filtering works, and
 neither additions nor snapshot replacement/deletion changes the other collection. Browse/save
-must still work with no scan credits; existing ownership overlays continue to use the uploaded
-snapshot only. Authenticated collection responses must remain `no-store`.
+must still work with no scan credits. New mobile ownership overlays add uploaded and scanned
+quantities, and work with either source alone; existing overlays remain unchanged. Ownership
+combines languages by set/number, while browsing retains language-specific rows. Copies present
+in both sources are counted twice, so do not upload overlapping inventory if that is unwanted.
+Verify the switch defaults off, auto-saving does not count the current scan in its own overlay,
+retrying cannot duplicate a receipt, and a read failure in either source shows unknown ownership
+rather than partial totals. Authenticated collection responses must remain `no-store`.
 
 ```powershell
 .\scripts\test-cost-infrastructure.ps1
@@ -333,7 +344,7 @@ Deployed on 2026-10-19 into tenant `6a32cdb1-b813-4447-96d9-4f42e9cd37e3`,
 subscription `e3e0cdb6-dda9-477e-8d06-656c824ea765`, Sweden Central:
 
 - Subscription deployment: `enfolderer-cost`; current MTG-only image tag:
-  `v20261022-collection` (all four apps, scanned-collection release).
+  `v20261022-auto-add` (all four apps, automatic scanned-collection additions and combined ownership).
 - New resource groups: `enf-cost-platform`, `enf-cost-cardgeo`, `enf-cost-cardid`.
 - Shared ACA environment: `enf-cost-platform-env`; Foundry account: `enf-cost-ai`.
 - API/mobile website: <https://enf-cost-api.purplefield-875302b1.swedencentral.azurecontainerapps.io>.
