@@ -128,6 +128,41 @@ internal static class FoundryResponseChecks
                     "MCP failure cannot become a success-shaped model-only identification");
             }
         }
+        foreach (var failedStatus in new[] { false, true })
+        {
+            using var handler = new FlowHandler(toolFailure: "catalogue_transient_failure: timed out", failedStatus: failedStatus);
+            using var http = new HttpClient(handler);
+            var reply = await Client(http).RunAsync("CardAgent", "identify", null, "catalogue", default);
+            check(reply == "identified" && handler.Creates == 3 && handler.Deletes == 3,
+                $"explicit transient catalogue failure recovers on its own card history (failed status: {failedStatus})");
+        }
+        using (var handler = new FlowHandler(toolFailure: "catalogue_transient_failure: timed out", toolFailures: 10))
+        using (var http = new HttpClient(handler))
+        {
+            try
+            {
+                await Client(http).RunAsync("CardAgent", "identify", null, "catalogue", default);
+                check(false, "persistent catalogue failure must remain explicit");
+            }
+            catch (InvalidOperationException ex)
+            {
+                check(ex.Message.Contains("catalogue_transient_failure") && handler.Creates == 4 && handler.Deletes == 4,
+                    "catalogue retries stop after two independent attempts and retain the failure");
+            }
+        }
+        using (var handler = new FlowHandler())
+        using (var http = new HttpClient(handler))
+        {
+            var validations = 0;
+            var reply = await Client(http).RunAsync("CardAgent", "identify", null, "catalogue", default,
+                validateReplyAsync: async (_, ct) =>
+                {
+                    await Task.Delay(1, ct);
+                    if (++validations == 1) throw new InvalidOperationException("Title proof did not agree.");
+                });
+            check(reply == "identified" && validations == 2 && handler.Creates == 3,
+                "asynchronous catalogue title verification retains the existing one-reread safety guard");
+        }
         foreach (var failure in new[] { HttpStatusCode.TooManyRequests, HttpStatusCode.RequestTimeout,
             HttpStatusCode.ServiceUnavailable })
         {
@@ -260,7 +295,7 @@ internal static class FoundryResponseChecks
     private sealed class FlowHandler(string label = "catalogue", bool malformed = false,
         HttpStatusCode? failure = null, bool toolError = false, bool pending = false,
         TimeSpan pollDelay = default, HttpStatusCode? pollFailure = null, int pollFailures = 1,
-        TimeSpan? retryAfter = null) : HttpMessageHandler
+        TimeSpan? retryAfter = null, string? toolFailure = null, bool failedStatus = false, int toolFailures = 1) : HttpMessageHandler
     {
         public int Creates { get; private set; }
         public int Deletes { get; private set; }
@@ -325,6 +360,11 @@ internal static class FoundryResponseChecks
                         new { type = "mcp_approval_request", id = "approval-1", server_label = label, name = "lookup" } } });
                 else if (toolError)
                     json = """{"status":"completed","output":[{"type":"mcp_call","error":{"code":"unauthorized"}}]}""";
+                else if (toolFailure is not null && _responses < 2 + toolFailures)
+                    json = failedStatus
+                        ? JsonSerializer.Serialize(new { status = "failed", error = new { code = "mcp_error", message = toolFailure } })
+                        : JsonSerializer.Serialize(new { status = "completed", output = new[] {
+                            new { type = "mcp_call", error = new { code = "tool_error", message = toolFailure } } } });
                 else
                 {
                     var text = malformed ? (_responses == 2 ? "{" : "{}") : "identified";

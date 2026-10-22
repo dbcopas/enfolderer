@@ -11,34 +11,67 @@ public sealed class PoliteRateLimitHandler : DelegatingHandler
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly TimeSpan _minimumInterval;
+    private readonly TimeSpan _requestTimeout;
+    private readonly TimeSpan _operationTimeout;
     private DateTimeOffset _lastRequest = DateTimeOffset.MinValue;
     private DateTimeOffset _notBefore = DateTimeOffset.MinValue;
 
-    public PoliteRateLimitHandler(TimeSpan minimumInterval) => _minimumInterval = minimumInterval;
+    public PoliteRateLimitHandler(TimeSpan minimumInterval, TimeSpan? requestTimeout = null, TimeSpan? operationTimeout = null)
+    {
+        _minimumInterval = minimumInterval;
+        _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(30);
+        _operationTimeout = operationTimeout ?? TimeSpan.FromMinutes(2);
+    }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        var response = await SendThrottledAsync(request, cancellationToken);
-        for (var attempt = 0; attempt < 2 && request.Method == HttpMethod.Get && IsTransient(response.StatusCode); attempt++)
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(_operationTimeout);
+        try
         {
-            var delay = response.Headers.RetryAfter?.Delta
-                ?? (response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow)
-                ?? TimeSpan.FromSeconds(2 * (1 << attempt));
-            response.Dispose();
-            await _gate.WaitAsync(cancellationToken);
-            try
+            for (var attempt = 0; ; attempt++)
             {
-                var next = DateTimeOffset.UtcNow + (delay > TimeSpan.Zero ? delay : TimeSpan.Zero);
-                if (next > _notBefore) _notBefore = next;
+                using var retry = attempt == 0 ? null : await CloneAsync(request, budget.Token);
+                HttpResponseMessage response;
+                try
+                {
+                    response = await SendThrottledAsync(retry ?? request, budget.Token);
+                }
+                catch (HttpRequestException ex) when (request.Method == HttpMethod.Get && attempt < 2
+                    && (ex.StatusCode is null || IsTransient(ex.StatusCode.Value)))
+                {
+                    await DeferAsync(TimeSpan.FromSeconds(2 * (1 << attempt)), budget.Token);
+                    continue;
+                }
+                if (request.Method != HttpMethod.Get || !IsTransient(response.StatusCode)) return response;
+                var delay = response.Headers.RetryAfter?.Delta
+                    ?? (response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow)
+                    ?? TimeSpan.FromSeconds(2 * (1 << attempt));
+                try { await DeferAsync(delay, budget.Token); }
+                catch
+                {
+                    response.Dispose();
+                    throw;
+                }
+                if (attempt == 2) return response;
+                response.Dispose();
             }
-            finally
-            {
-                _gate.Release();
-            }
-            using var retry = await CloneAsync(request, cancellationToken);
-            response = await SendThrottledAsync(retry, cancellationToken);
         }
-        return response;
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new HttpRequestException("Catalogue request exhausted its cooldown/retry budget.", ex, HttpStatusCode.RequestTimeout);
+        }
+    }
+
+    private async Task DeferAsync(TimeSpan delay, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var next = DateTimeOffset.UtcNow + (delay > TimeSpan.Zero ? delay : TimeSpan.Zero);
+            if (next > _notBefore) _notBefore = next;
+        }
+        finally { _gate.Release(); }
     }
 
     private static bool IsTransient(HttpStatusCode status) => status is
@@ -62,7 +95,13 @@ public sealed class PoliteRateLimitHandler : DelegatingHandler
             _gate.Release();
         }
 
-        return await base.SendAsync(request, ct);
+        using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        attempt.CancelAfter(_requestTimeout);
+        try { return await base.SendAsync(request, attempt.Token); }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            throw new HttpRequestException("Catalogue network request timed out.", ex, HttpStatusCode.RequestTimeout);
+        }
     }
 
     private static async Task<HttpRequestMessage> CloneAsync(HttpRequestMessage request, CancellationToken ct)
@@ -107,6 +146,6 @@ public static class CatalogueHttp
     {
         client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        client.Timeout = TimeSpan.FromSeconds(30);
+        client.Timeout = Timeout.InfiniteTimeSpan;
     }
 }

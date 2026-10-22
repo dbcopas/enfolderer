@@ -26,7 +26,8 @@ public sealed record CataloguePrinting(
     string Name,
     string Language,
     string PrintedName = "",
-    string ImageUrl = "");
+    string ImageUrl = "",
+    string FlavorName = "");
 
 /// <summary>
 /// How a reading was settled. Every answer carries one, so a scan can be diagnosed from the log
@@ -487,6 +488,17 @@ public sealed class ScryfallCatalogue
         // for having been read *too* well. One fuzzy lookup answers with a single card instead.
         if (!hasSet) return await ResolveWithoutSetAsync(name!, collectorNumber, language, ct);
 
+        if (hasNumber)
+        {
+            var numbered = await LookupBySetAndNumberAsync(setCode, NormalizeNumber(collectorNumber!), language, ct);
+            if (numbered is not null && string.Equals(numbered.Set, setCode.Trim(), StringComparison.OrdinalIgnoreCase)
+                && NumbersMatch(collectorNumber!, numbered.CollectorNumber)
+                && Simplify(name!).Length > 0
+                && new[] { numbered.Name, numbered.PrintedName, numbered.FlavorName }.Any(title =>
+                    title.Split("//", StringSplitOptions.TrimEntries).Any(face => Simplify(face) == Simplify(name!))))
+                return new ResolvedPrinting(numbered, Resolutions.Confirmed, collectorNumber);
+        }
+
         var candidates = await SearchPrintingsAsync(name!, setCode, language, ct);
 
         if (candidates.Count == 0)
@@ -739,7 +751,8 @@ public sealed class ScryfallCatalogue
         if (string.IsNullOrWhiteSpace(value)) return string.Empty;
 
         // "438/462" is the number and the set total; only the part before the slash is the number.
-        var number = value.Split('/')[0];
+        var number = System.Text.RegularExpressions.Regex.Replace(value.Trim(), @"^[CURM]\s+", "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase).Split('/')[0];
 
         var builder = new StringBuilder(number.Length);
         foreach (var character in number)
@@ -763,7 +776,7 @@ public sealed class ScryfallCatalogue
         var candidate = Simplify(read);
         if (candidate.Length == 0) return false;
 
-        foreach (var known in new[] { printing.Name, printing.PrintedName })
+        foreach (var known in new[] { printing.Name, printing.PrintedName, printing.FlavorName })
         {
             if (string.IsNullOrEmpty(known)) continue;
             foreach (var face in known.Split("//", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -824,7 +837,8 @@ public sealed class ScryfallCatalogue
             name,
             string.IsNullOrEmpty(language) ? "en" : language,
             Read("printed_name"),
-            ReadImageUrl(root));
+            ReadImageUrl(root),
+            Read("flavor_name"));
     }
 
     /// <summary>

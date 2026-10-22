@@ -75,7 +75,8 @@ foreach (var profile in GameAgentProfile.Live)
 
         var client = CreateFoundryClient(sp, pipeline.IdentificationProjectEndpoint!);
         return new FoundryCardIdentificationAgent(
-            client, captured, agentId, sp.GetRequiredService<ILogger<FoundryCardIdentificationAgent>>());
+            client, captured, agentId, sp.GetRequiredService<ILogger<FoundryCardIdentificationAgent>>(),
+            sp.GetRequiredService<Enfolderer.Ai.Infrastructure.Catalogue.ScryfallPriceClient>());
     });
 }
 

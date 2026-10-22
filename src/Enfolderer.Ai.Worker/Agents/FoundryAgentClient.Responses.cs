@@ -8,7 +8,8 @@ public sealed partial class FoundryAgentClient
 {
     private async Task<string> RunResponseAsync(
         string agentName, string prompt, AgentImage? image, string? approvedServerLabel,
-        CancellationToken ct, AgentImage? detailImage, Action<string>? validateReply)
+        CancellationToken ct, AgentImage? detailImage, Action<string>? validateReply,
+        Func<string, CancellationToken, Task>? validateReplyAsync)
     {
         if (string.IsNullOrWhiteSpace(agentName) || agentName.StartsWith("asst_", StringComparison.Ordinal))
             throw new InvalidOperationException(
@@ -40,6 +41,7 @@ public sealed partial class FoundryAgentClient
         var approvals = 0;
         var throttles = 0;
         var serverErrors = 0;
+        var catalogueRetries = 0;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(_runTimeout);
         try
@@ -69,6 +71,11 @@ public sealed partial class FoundryAgentClient
                         ? c.GetString() : null;
                     var message = error.ValueKind == JsonValueKind.Object && error.TryGetProperty("message", out var m)
                         ? m.GetString() : null;
+                    if (await RetryCatalogueAsync(message))
+                    {
+                        previousId = parentId;
+                        continue;
+                    }
                     if (IsThrottled(code, message) && throttles < _throttleRetries)
                     {
                         previousId = parentId;
@@ -109,11 +116,20 @@ public sealed partial class FoundryAgentClient
                 }
 
                 var output = root.GetProperty("output");
+                var retryCatalogue = false;
                 foreach (var item in output.EnumerateArray())
                     if (item.TryGetProperty("type", out var type) && type.GetString() == "mcp_call"
                         && item.TryGetProperty("error", out var toolError)
                         && toolError.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+                    {
+                        if (await RetryCatalogueAsync(toolError.GetRawText())) { retryCatalogue = true; break; }
                         throw new InvalidOperationException($"Foundry MCP call failed: {toolError.GetRawText()}");
+                    }
+                if (retryCatalogue)
+                {
+                    previousId = parentId;
+                    continue;
+                }
 
                 var reply = string.Concat(output.EnumerateArray()
                     .Where(i => i.TryGetProperty("type", out var type) && type.GetString() == "message"
@@ -126,11 +142,13 @@ public sealed partial class FoundryAgentClient
                 try
                 {
                     validateReply?.Invoke(reply);
+                    if (validateReplyAsync is not null) await validateReplyAsync(reply, timeout.Token);
                     _log.LogInformation("Agent {AgentId}: timing responses_and_reply, response {ResponseId}, elapsed {ElapsedMs} ms.",
                         agentName, previousId, timer.ElapsedMilliseconds);
                     return reply;
                 }
-                catch (Exception ex) when (validateReply is not null && ex is InvalidOperationException or JsonException)
+                catch (Exception ex) when ((validateReply is not null || validateReplyAsync is not null)
+                    && ex is InvalidOperationException or JsonException)
                 {
                     _log.LogWarning(ex, "Agent {Agent} response {Response} returned an invalid reply.", agentName, previousId);
                     if (regenerations++ > 0)
@@ -147,9 +165,9 @@ public sealed partial class FoundryAgentClient
         finally
         {
             _log.LogInformation(
-                "Agent {AgentId}: response_summary elapsed_ms={ElapsedMs} responses={Responses} approvals={Approvals} corrections={Corrections} throttle_retries={ThrottleRetries} service_retries={ServiceRetries}.",
+                "Agent {AgentId}: response_summary elapsed_ms={ElapsedMs} responses={Responses} approvals={Approvals} corrections={Corrections} throttle_retries={ThrottleRetries} service_retries={ServiceRetries} catalogue_retries={CatalogueRetries}.",
                 agentName, timer.ElapsedMilliseconds, responseIds.Count, approvals, regenerations,
-                throttles, serverErrors);
+                throttles, serverErrors, catalogueRetries);
             foreach (var id in responseIds)
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -207,6 +225,16 @@ public sealed partial class FoundryAgentClient
                 agentName, previousId, throttled ? "throttle" : "service/transport", attempt,
                 throttled ? _throttleRetries : MaxServerErrorRetries, delay, AgentJson.Summarize(message));
             await Task.Delay(delay, timeout.Token);
+        }
+
+        async Task<bool> RetryCatalogueAsync(string? error)
+        {
+            if (error?.Contains("catalogue_transient_failure:", StringComparison.Ordinal) != true
+                || catalogueRetries >= 2) return false;
+            _log.LogWarning("Agent {Agent} response {Response}: transient catalogue tool failure; retry {Retry}/2.",
+                agentName, previousId, catalogueRetries + 1);
+            await DelayAsync("Catalogue lookup temporarily unavailable.", ++catalogueRetries, throttled: false);
+            return true;
         }
 
         async Task<JsonDocument> WaitForResponseAsync(string id)

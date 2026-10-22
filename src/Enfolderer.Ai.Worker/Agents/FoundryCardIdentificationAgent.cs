@@ -55,17 +55,20 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
     private readonly GameAgentProfile _profile;
     private readonly string _agentId;
     private readonly ILogger<FoundryCardIdentificationAgent> _log;
+    private readonly Enfolderer.Ai.Infrastructure.Catalogue.ScryfallPriceClient? _prices;
 
     public FoundryCardIdentificationAgent(
         FoundryAgentClient client,
         GameAgentProfile profile,
         string agentId,
-        ILogger<FoundryCardIdentificationAgent> log)
+        ILogger<FoundryCardIdentificationAgent> log,
+        Enfolderer.Ai.Infrastructure.Catalogue.ScryfallPriceClient? prices = null)
     {
         _client = client;
         _profile = profile;
         _agentId = agentId;
         _log = log;
+        _prices = prices;
     }
 
     public string Game => _profile.Game;
@@ -109,11 +112,11 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
             }
         }
         var reply = await _client.RunAsync(_agentId, prompt, crop.Image, CatalogueServerLabel, ct, footer,
-            text =>
+            validateReplyAsync: async (text, validationCt) =>
             {
                 var parsed = ParseIdentification(text, crop, Game, AgentId);
                 ValidateLanguage(parsed);
-                ValidateTitle(parsed);
+                await ValidateTitleAsync(parsed, validationCt);
                 if ((parsed.Resolution == "unresolved" || parsed.Resolution == "assumed")
                     && uncertainReadings++ == 0)
                 {
@@ -182,8 +185,17 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
                never with the number you read, and copy its "resolution", "readCollectorNumber" and
                "readSet" into your reply.
 
+               Alternate-title cards may print a large character name and the canonical Magic name
+               underneath. Keep the large photographed title as readName and use the catalogue's
+               canonical name as name; a catalogue flavor_name can corroborate this difference.
+               Read the actual set code beside the language in the footer: in "FCA * EN", FCA is
+               the set. FFV, FFVII, FFIX and FFXI beside the rarity/number are franchise labels,
+               not set codes. Do not infer FCA unless it is visible. Strip a separated rarity
+               letter from the collector number: "R 0017" means number "17".
+
                For an English card, "name" must agree with "readName" (or its named face), unless
-               the catalogue explicitly returned a fuzzy name match. If they disagree, call
+               the exact printing's catalogue flavorName corroborates the photographed alternate
+               title, or the catalogue explicitly returned a fuzzy name match. Otherwise call
                resolve_printing with the photographed title, not the unrelated name from a number
                lookup. Older cards may have no printed collector number: leave readCollectorNumber
                empty rather than inventing digits to match a catalogue entry.
@@ -311,19 +323,31 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
 
     internal static void ValidateTitle(IdentifiedCard card)
     {
-        if (card.Game != CardGames.Magic || !card.IsIdentified || card.Language != "en"
-            || card.ReadName is null || card.Resolution != "confirmed") return;
-        static string Letters(string text) => new(text.Where(char.IsLetterOrDigit).ToArray());
-        var read = Letters(card.ReadName);
-        var names = card.Name!.Split("//", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Prepend(card.Name);
-        if (read.Length > 0 && names.Any(name =>
-            string.Equals(read, Letters(name), StringComparison.OrdinalIgnoreCase))) return;
+        if (!RequiresTitleCheck(card)) return;
         throw new InvalidOperationException(
             $"The photographed English title '{card.ReadName}' contradicts the confirmed catalogue name '{card.Name}'. "
             + "Call resolve_printing with the photographed title, not the unrelated name found by number. "
             + "Leave the read collector number empty if none is printed; never invent digits or change the title "
             + "to make a number lookup agree.");
+    }
+
+    internal async Task ValidateTitleAsync(IdentifiedCard card, CancellationToken ct)
+    {
+        if (RequiresTitleCheck(card) && _prices is not null && await _prices.MatchesFlavorNameAsync(card, ct)) return;
+        ValidateTitle(card);
+    }
+
+    private static bool RequiresTitleCheck(IdentifiedCard card)
+    {
+        if (card.Game != CardGames.Magic || !card.IsIdentified || card.Language != "en"
+            || card.ReadName is null || card.Resolution != "confirmed") return false;
+        static string Letters(string text) => new(text.Where(char.IsLetterOrDigit).ToArray());
+        var read = Letters(card.ReadName);
+        var names = card.Name!.Split("//", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Prepend(card.Name);
+        if (read.Length > 0 && names.Any(name =>
+            string.Equals(read, Letters(name), StringComparison.OrdinalIgnoreCase))) return false;
+        return true;
     }
 
     private static string? NormalizeLanguage(string? language) => language?.Trim().ToLowerInvariant() switch

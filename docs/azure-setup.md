@@ -344,7 +344,7 @@ Deployed on 2026-10-19 into tenant `6a32cdb1-b813-4447-96d9-4f42e9cd37e3`,
 subscription `e3e0cdb6-dda9-477e-8d06-656c824ea765`, Sweden Central:
 
 - Subscription deployment: `enfolderer-cost`; current MTG-only image tag:
-  `v20261022-auto-add` (all four apps, automatic scanned-collection additions and combined ownership).
+  `v20261022-id-recovery` (all four apps, alternate-title identification and bounded catalogue recovery).
 - New resource groups: `enf-cost-platform`, `enf-cost-cardgeo`, `enf-cost-cardid`.
 - Shared ACA environment: `enf-cost-platform-env`; Foundry account: `enf-cost-ai`.
 - API/mobile website: <https://enf-cost-api.purplefield-875302b1.swedencentral.azurecontainerapps.io>.
@@ -381,8 +381,19 @@ do not send a per-request `reasoning` override with a named agent (the endpoint 
 Full-resolution card/footer images, complete art candidates and original reasoning are retained.
 Instead, the accepted tool optimization reuses successful/404 printing searches for one minute
 within a bounded catalogue cache and shares pacing between identification and price lookups.
-Four requests/second per replica stays below Scryfall's approximate ten/second ceiling with the
-configured two replicas. Keep that aggregate limit in mind before increasing replicas.
+Catalogue and worker Scryfall traffic can share an outbound IP. Each now allows two requests/second
+per instance, leaving headroom below Scryfall's approximate ten/second ceiling even with two replicas
+of each. Keep the aggregate limit in mind before increasing replicas.
+
+The identification-recovery release separates the catalogue's 30-second network timeout from its
+two-minute queue/cooldown/retry budget. GET retries respect `Retry-After` and cancellation; only
+explicit `catalogue_transient_failure` MCP errors trigger additional bounded per-card agent retries.
+Permanent authorization and unclassified tool errors are not retried or hidden.
+Exact-printing catalogue `flavor_name` data supports alternate-title cards without disabling the
+English wrong-card guard: the worker independently verifies an alias before accepting a confirmed
+canonical/photographed title difference. The prompt treats Final Fantasy franchise markers as
+distinct from the visible FCA set code. Agent definitions, principals, model SKU and capacity do
+not change; deploy the worker and catalogue images together.
 
 Inspect worker `token_usage`, `response_summary` and `timing` logs when evaluating a new setting;
 missing metrics are warnings, not zero usage. Keep a candidate only after exact-printing and

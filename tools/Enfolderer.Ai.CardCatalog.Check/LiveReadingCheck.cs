@@ -78,8 +78,10 @@ internal static class LiveReadingCheck
         using var logs = LoggerFactory.Create(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
         var client = new FoundryAgentClient(http, new AzureCliCredential(), logs.CreateLogger<FoundryAgentClient>(),
             endpoint, "2025-11-15-preview", TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2), useResponses: true);
+        using var pricingHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         var agent = new FoundryCardIdentificationAgent(client, GameAgentProfile.Mtg, agentId,
-            logs.CreateLogger<FoundryCardIdentificationAgent>());
+            logs.CreateLogger<FoundryCardIdentificationAgent>(),
+            new Enfolderer.Ai.Infrastructure.Catalogue.ScryfallPriceClient(pricingHttp));
         var verifier = new CardArtVerifier(http, logs.CreateLogger<CardArtVerifier>());
         var failures = 0;
         foreach (var index in selected.Order())

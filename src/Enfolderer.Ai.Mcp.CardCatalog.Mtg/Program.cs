@@ -6,8 +6,8 @@ using Enfolderer.Ai.Infrastructure.Catalogue;
 var app = McpServerHost.Create(args, "mcp-cardcatalog-mtg", (services, _) =>
     services
         .AddHttpClient("scryfall", CatalogueHttp.ApplyDefaults)
-        // Four requests/second per replica keeps the two-replica limit below Scryfall's ceiling.
-        .AddHttpMessageHandler(() => new PoliteRateLimitHandler(TimeSpan.FromMilliseconds(250)))
+        // Catalogue and worker replicas can share an outbound IP: budget two requests/second each.
+        .AddHttpMessageHandler(() => new PoliteRateLimitHandler(TimeSpan.FromMilliseconds(500)))
         .AddTypedClient<ScryfallCatalogue>()
         .AddTypedClient<ScryfallPriceClient>());
 

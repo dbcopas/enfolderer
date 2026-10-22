@@ -260,15 +260,29 @@ GPT-5 mini remains Global Standard, now allocated 300,000 TPM and 300 RPM rather
 100,000 TPM and 100 RPM. This raises throughput limits, not individual model generation speed.
 No provisioned-throughput reservation or premium processing tier is used.
 
-Identification and pricing share one paced Scryfall HTTP pipeline: four requests/second per
-replica (at most two catalogue replicas). GETs retry transient HTTP failures twice, honor both
-forms of `Retry-After`, and apply the cooldown to queued calls too. Permanent errors are not
-retried or disguised as missing printings. Successful/404 printing searches are reused for up to
-one minute in a bounded per-catalogue cache; partial pages and failures are never cached.
+Catalogue identification and tool pricing share one paced Scryfall HTTP pipeline. Both that
+pipeline and the worker's pricing/title-proof client allow two requests/second per instance,
+accounting for their shared outbound IP and up to two replicas of each service. Catalogue GETs
+retry transient HTTP/network failures twice, honor both forms of `Retry-After`, and apply the
+cooldown to queued calls too. A network attempt has a 30-second timeout; queue/cooldown time uses
+a separate two-minute total request budget. Caller cancellation still interrupts both.
+Explicitly classified transient catalogue tool errors receive at most two further per-card
+retries within the existing agent deadline. Authorization, malformed data and unknown tool
+failures remain failures, never model-only successes.
+Successful/404 printing searches are reused for up to one minute in a bounded per-catalogue cache;
+partial pages and failures are never cached.
+
+Alternate-title cards (for example Final Fantasy FCA printings) retain the photographed character
+title and the canonical Magic name separately. A number lookup is confirmed only when its
+catalogue name, printed name or `flavor_name` corroborates the read title. Before accepting an
+English title mismatch, the worker independently verifies the exact printing's canonical name
+and `flavor_name`; a model-supplied alias alone cannot bypass the wrong-card guard. The prompt
+distinguishes visible set/language text such as `FCA EN` from franchise labels such as `FFIX`
+and `FFXI`, without guessing an unreadable set code.
 
 Worker logs include `token_usage` events for input/output, cached input and reasoning tokens,
 plus `response_summary` events with elapsed time, response/approval/correction counts and isolated
-throttle/service retries. Missing usage is explicitly logged rather than reported as zero.
+throttle/service/catalogue retries. Missing usage is explicitly logged rather than reported as zero.
 Worker logs also include `timing` events in milliseconds for source download, boundaries, each card's
 crop/store, identification and art verification, all cards, pricing, rendering, image storage,
 and total worker processing. Foundry logs time background Responses/tool approval/reply retrieval.

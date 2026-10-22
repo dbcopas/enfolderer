@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using System.Net;
 using ModelContextProtocol.Server;
 using Enfolderer.Ai.Infrastructure.Catalogue;
 using Microsoft.AspNetCore.Mvc;
@@ -52,6 +53,10 @@ public sealed class MtgCatalogueTools
         two named parts is catalogued under both, so the name in the reply carries "//" when it
         belongs there. Answer with the name in the reply, not with the one you sent.
 
+        Alternate-title printings can have a character name above a smaller canonical Magic name.
+        The returned flavorName is catalogue evidence for that alternate title, not a different
+        card. Retain the photographed title as readName and answer with the canonical name.
+
         Pass only what you actually read off the card. Leave the set code empty when you could not
         read one: it must never be filled in from knowing the card, because that answer always
         looks right and is wrong for every alternate-art reprint. Without a set code the number
@@ -87,7 +92,27 @@ public sealed class MtgCatalogueTools
         [Description("Set code as printed on the card, e.g. 'mh3' or 'sld'. Leave empty if you cannot read one — never supply a set because you recognise the card.")] string set,
         [Description("Collector number as read, e.g. '438' or '5J-b'. Omit when it cannot be read with confidence.")] string? collectorNumber = null,
         [Description("Two-letter language code of the printing, e.g. 'en', 'ja', 'de'. Omit when unsure.")] string? language = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        await WithTransientErrorsAsync(() => ResolveCoreAsync(name, set, collectorNumber, language, ct), ct);
+
+    private async Task<string> WithTransientErrorsAsync(Func<Task<string>> operation, CancellationToken ct)
+    {
+        try { return await operation(); }
+        catch (HttpRequestException ex) when (ex.StatusCode is null or HttpStatusCode.RequestTimeout
+            or HttpStatusCode.TooManyRequests or HttpStatusCode.InternalServerError or HttpStatusCode.BadGateway
+            or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout)
+        {
+            _log.LogWarning(ex, "Transient catalogue tool failure.");
+            throw new ModelContextProtocol.McpException("catalogue_transient_failure: catalogue lookup temporarily unavailable; retry this card.");
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            _log.LogWarning(ex, "Catalogue tool request timed out.");
+            throw new ModelContextProtocol.McpException("catalogue_transient_failure: catalogue lookup timed out; retry this card.");
+        }
+    }
+
+    private async Task<string> ResolveCoreAsync(string name, string set, string? collectorNumber, string? language, CancellationToken ct)
     {
         var resolved = await _catalogue.ResolveAsync(name, set, collectorNumber, language, ct);
 
@@ -117,6 +142,7 @@ public sealed class MtgCatalogueTools
             // the localised one and is here only so the reading can be checked against the card.
             name = resolved.Printing.Name,
             printedName = resolved.Printing.PrintedName,
+            flavorName = resolved.Printing.FlavorName,
             language = resolved.Printing.Language,
             // Present only when the printing above could not be told from these. They all carry
             // the same name, so this says which printing is uncertain, never which card.
@@ -126,6 +152,7 @@ public sealed class MtgCatalogueTools
                 collectorNumber = c.CollectorNumber,
                 name = c.Name,
                 printedName = c.PrintedName,
+                flavorName = c.FlavorName,
                 language = c.Language,
                 imageUrl = c.ImageUrl
             }),
@@ -190,7 +217,7 @@ public sealed class MtgCatalogueTools
         [Description("Collector number as printed, e.g. '167' or '5J-b'.")] string collectorNumber,
         [Description("Two-letter language code of the printing, e.g. 'ja'. Omit for English.")] string? language = null,
         CancellationToken ct = default) =>
-        Format(await _catalogue.LookupBySetAndNumberAsync(set, collectorNumber, language, ct));
+        await WithTransientErrorsAsync(async () => Format(await _catalogue.LookupBySetAndNumberAsync(set, collectorNumber, language, ct)), ct);
 
     [McpServerTool(Name = "lookup_by_name_and_set")]
     [Description("Look up a Magic printing by card name constrained to a set code. Use when the collector number is unreadable.")]
@@ -198,14 +225,14 @@ public sealed class MtgCatalogueTools
         [Description("Card name, fuzzy matching is applied.")] string name,
         [Description("Set code as printed on the card.")] string set,
         CancellationToken ct = default) =>
-        Format(await _catalogue.LookupByNameAndSetAsync(name, set, ct));
+        await WithTransientErrorsAsync(async () => Format(await _catalogue.LookupByNameAndSetAsync(name, set, ct)), ct);
 
     [McpServerTool(Name = "lookup_by_name")]
     [Description("Fuzzy Magic card name search. Last resort: it returns an arbitrary printing, so prefer the set-constrained tools.")]
     public async Task<string> LookupByNameAsync(
         [Description("Card name, fuzzy matching is applied.")] string name,
         CancellationToken ct = default) =>
-        Format(await _catalogue.LookupByNameAsync(name, ct));
+        await WithTransientErrorsAsync(async () => Format(await _catalogue.LookupByNameAsync(name, ct)), ct);
 
     internal static string Format(CataloguePrinting? printing) => printing is null
         ? """{"found":false}"""
@@ -217,6 +244,7 @@ public sealed class MtgCatalogueTools
             collectorNumber = printing.CollectorNumber,
             name = printing.Name,
             printedName = printing.PrintedName,
+            flavorName = printing.FlavorName,
             language = printing.Language
         });
 }

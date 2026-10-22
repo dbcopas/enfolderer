@@ -121,10 +121,73 @@ internal static class CatalogueHttpChecks
                     "Catalogue authorization errors are not mistaken for missing printings.");
             }
         }
+        using (var stub = new Stub(HttpStatusCode.TooManyRequests, HttpStatusCode.OK)
+            { RetryDelay = TimeSpan.FromMilliseconds(100) })
+        using (var client = new HttpClient(new PoliteRateLimitHandler(TimeSpan.Zero,
+            requestTimeout: TimeSpan.FromMilliseconds(30), operationTimeout: TimeSpan.FromSeconds(1)) { InnerHandler = stub }))
+        {
+            CatalogueHttp.ApplyDefaults(client);
+            var timer = Stopwatch.StartNew();
+            using var response = await client.GetAsync("https://api.scryfall.com/cards/test");
+            check(response.IsSuccessStatusCode && timer.Elapsed >= TimeSpan.FromMilliseconds(90)
+                && client.Timeout == Timeout.InfiniteTimeSpan,
+                "Retry-After may outlive the network timeout without cancelling a healthy queued request");
+        }
+        using (var stub = new Stub(HttpStatusCode.TooManyRequests) { RetryDelay = TimeSpan.FromSeconds(10) })
+        using (var client = new HttpClient(new PoliteRateLimitHandler(TimeSpan.Zero,
+            operationTimeout: TimeSpan.FromMilliseconds(80)) { InnerHandler = stub }))
+        {
+            CatalogueHttp.ApplyDefaults(client);
+            var timer = Stopwatch.StartNew();
+            try
+            {
+                using var response = await client.GetAsync("https://api.scryfall.com/cards/test");
+                check(false, "a cooldown must not exceed the total operation budget");
+            }
+            catch (HttpRequestException ex)
+            {
+                check(ex.StatusCode == HttpStatusCode.RequestTimeout && timer.Elapsed < TimeSpan.FromSeconds(1) && stub.Calls == 1,
+                    "an over-budget cooldown fails explicitly without ignoring Retry-After or sending another request");
+            }
+        }
+        using (var stub = new SlowOnce())
+        using (var client = new HttpClient(new PoliteRateLimitHandler(TimeSpan.Zero,
+            requestTimeout: TimeSpan.FromMilliseconds(30), operationTimeout: TimeSpan.FromSeconds(4)) { InnerHandler = stub }))
+        {
+            CatalogueHttp.ApplyDefaults(client);
+            using var response = await client.GetAsync("https://api.scryfall.com/cards/test");
+            check(response.IsSuccessStatusCode && stub.Calls == 2,
+                "a timed-out network GET retries independently after bounded backoff");
+        }
+        using (var stub = new SlowOnce())
+        using (var client = new HttpClient(new PoliteRateLimitHandler(TimeSpan.Zero) { InnerHandler = stub }))
+        using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50)))
+        {
+            CatalogueHttp.ApplyDefaults(client);
+            try
+            {
+                using var response = await client.GetAsync("https://api.scryfall.com/cards/test", cancellation.Token);
+                check(false, "caller cancellation must propagate during a network read");
+            }
+            catch (OperationCanceledException)
+            {
+                check(stub.Calls == 1, "caller cancellation never becomes a timeout or a retried GET");
+            }
+        }
     }
 
     private static HttpClient Create(HttpMessageHandler stub) =>
         new(new PoliteRateLimitHandler(TimeSpan.Zero) { InnerHandler = stub });
+
+    private sealed class SlowOnce : HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            if (++Calls == 1) await Task.Delay(TimeSpan.FromSeconds(10), ct);
+            return new(HttpStatusCode.OK);
+        }
+    }
 
     private sealed class Stub(params HttpStatusCode[] statuses) : HttpMessageHandler
     {

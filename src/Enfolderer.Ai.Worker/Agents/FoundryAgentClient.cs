@@ -81,10 +81,11 @@ public sealed partial class FoundryAgentClient
     public async Task<string> RunAsync(
         string agentId, string prompt, AgentImage? image, string? approvedServerLabel, CancellationToken ct,
         AgentImage? detailImage = null,
-        Action<string>? validateReply = null)
+        Action<string>? validateReply = null,
+        Func<string, CancellationToken, Task>? validateReplyAsync = null)
     {
         if (_useResponses)
-            return await RunResponseAsync(agentId, prompt, image, approvedServerLabel, ct, detailImage, validateReply);
+            return await RunResponseAsync(agentId, prompt, image, approvedServerLabel, ct, detailImage, validateReply, validateReplyAsync);
 
         var fileIds = new List<string>();
         var uploadTimer = Stopwatch.StartNew();
@@ -124,11 +125,12 @@ public sealed partial class FoundryAgentClient
                 try
                 {
                     validateReply?.Invoke(reply);
+                    if (validateReplyAsync is not null) await validateReplyAsync(reply, ct);
                     _log.LogInformation("Agent {AgentId}: timing runs_and_reply, thread {ThreadId}, elapsed {ElapsedMs} ms.",
                         agentId, threadId, runTimer.ElapsedMilliseconds);
                     return reply;
                 }
-                catch (Exception ex) when (validateReply is not null
+                catch (Exception ex) when ((validateReply is not null || validateReplyAsync is not null)
                     && ex is InvalidOperationException or JsonException)
                 {
                     _log.LogWarning(ex,

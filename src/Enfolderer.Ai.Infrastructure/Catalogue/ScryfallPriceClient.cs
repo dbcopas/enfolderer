@@ -22,7 +22,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
             var value => value
         };
         var local = await ReadAsync(set, number, language, ct);
-        (decimal? Nonfoil, decimal? Foil, string? Layout, string? Name, IReadOnlyList<int> GathererIds, Guid? OracleId) english = (null, null, null, null, [], null);
+        (decimal? Nonfoil, decimal? Foil, string? Layout, string? Name, IReadOnlyList<int> GathererIds, Guid? OracleId, string? FlavorName) english = (null, null, null, null, [], null, null);
         string? error = null;
         if (language != "en" && (local.Nonfoil is null || local.Foil is null))
         {
@@ -48,6 +48,17 @@ public sealed class ScryfallPriceClient(HttpClient http)
         };
     }
 
+    public async Task<bool> MatchesFlavorNameAsync(IdentifiedCard card, CancellationToken ct)
+    {
+        if (!card.HasPrinting || card.Language != "en" || string.IsNullOrWhiteSpace(card.ReadName)) return false;
+        var printing = await ReadAsync(card.Set!, card.CollectorNumber!, "en", ct);
+        static string Letters(string text) => new(text.Where(char.IsLetterOrDigit).ToArray());
+        return string.Equals(printing.Name, card.Name, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(printing.FlavorName)
+            && Letters(card.ReadName).Length > 0
+            && string.Equals(Letters(printing.FlavorName), Letters(card.ReadName), StringComparison.OrdinalIgnoreCase);
+    }
+
     public async Task<IReadOnlyList<CardPrintingReference>> GetRelatedPrintingsAsync(Guid oracleId, CancellationToken ct)
     {
         if (oracleId == Guid.Empty) throw new ArgumentException("A canonical card ID is required.", nameof(oracleId));
@@ -63,7 +74,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
             {
                 var wait = _nextRequest - DateTimeOffset.UtcNow;
                 if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
-                _nextRequest = DateTimeOffset.UtcNow.AddMilliseconds(120);
+                _nextRequest = DateTimeOffset.UtcNow.AddMilliseconds(500);
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
                 request.Headers.UserAgent.ParseAdd("Enfolderer-ScanPricing/1.0");
                 request.Headers.Accept.ParseAdd("application/json");
@@ -101,7 +112,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
         }
     }
 
-    private async Task<(decimal? Nonfoil, decimal? Foil, string? Layout, string? Name, IReadOnlyList<int> GathererIds, Guid? OracleId)> ReadAsync(
+    private async Task<(decimal? Nonfoil, decimal? Foil, string? Layout, string? Name, IReadOnlyList<int> GathererIds, Guid? OracleId, string? FlavorName)> ReadAsync(
         string set, string number, string language, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
@@ -109,7 +120,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
         {
             var wait = _nextRequest - DateTimeOffset.UtcNow;
             if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
-            _nextRequest = DateTimeOffset.UtcNow.AddMilliseconds(120);
+            _nextRequest = DateTimeOffset.UtcNow.AddMilliseconds(500);
             var url = $"https://api.scryfall.com/cards/{Uri.EscapeDataString(set.Trim().ToLowerInvariant())}"
                 + $"/{Uri.EscapeDataString(number.Trim())}"
                 + (language == "en" ? "" : $"/{Uri.EscapeDataString(language)}");
@@ -117,7 +128,7 @@ public sealed class ScryfallPriceClient(HttpClient http)
             request.Headers.UserAgent.ParseAdd("Enfolderer-ScanPricing/1.0");
             request.Headers.Accept.ParseAdd("application/json");
             using var response = await http.SendAsync(request, ct);
-            if (response.StatusCode == HttpStatusCode.NotFound) return (null, null, null, null, [], null);
+            if (response.StatusCode == HttpStatusCode.NotFound) return (null, null, null, null, [], null, null);
             response.EnsureSuccessStatusCode();
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
             var root = doc.RootElement;
@@ -137,7 +148,8 @@ public sealed class ScryfallPriceClient(HttpClient http)
                 oracleId = Guid.TryParse(oracle, out var parsed) && parsed != Guid.Empty ? parsed
                     : throw new InvalidDataException("Scryfall returned an invalid canonical card ID.");
             return (ReadPrice(prices, "eur"), ReadPrice(prices, "eur_foil"),
-                ReadOptionalText(root, "layout"), ReadOptionalText(root, "name"), ReadGathererIds(root), oracleId);
+                ReadOptionalText(root, "layout"), ReadOptionalText(root, "name"), ReadGathererIds(root), oracleId,
+                ReadOptionalText(root, "flavor_name"));
         }
         finally { _gate.Release(); }
     }

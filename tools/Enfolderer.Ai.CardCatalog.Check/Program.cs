@@ -73,6 +73,7 @@ internal static class Program
         ApiOwnershipChecks.RunAsync(Check).GetAwaiter().GetResult();
         FoundryResponseChecks.RunAsync(Check).GetAwaiter().GetResult();
         CatalogueHttpChecks.RunAsync(Check).GetAwaiter().GetResult();
+        AlternateTitleChecks.RunAsync(Check).GetAwaiter().GetResult();
         ResolutionChecks().GetAwaiter().GetResult();
         PromptChecks();
         ThrottleChecks();
@@ -493,8 +494,9 @@ internal static class Program
             var (catalogue, stub) = Build(url =>
                 url.Contains("%21%22") ? Searches(Card("mh3", "438", "Flare of Denial"))(url) : null);
             var resolved = await catalogue.ResolveAsync("Flare of Denial", "mh3", "438", "en", default);
-            Check(resolved.Printing is not null, "the exact-name operator is tried first");
-            Check(stub.Urls.Count == 1, "and an exact hit asks nothing further");
+            Check(resolved.Printing is not null, "the exact-name operator is the first name-search rung");
+            Check(stub.Urls.Count == 2 && stub.Urls.Count(u => u.Contains("/cards/search")) == 1,
+                "after an unavailable exact-number lookup, an exact name hit asks nothing further");
         }
 
         {
