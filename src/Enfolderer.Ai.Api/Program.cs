@@ -128,7 +128,14 @@ jobs.MapPost("/", async (
     // write the blob itself. The path is derived here only so that the job document and the worker
     // agree on where the image will land once PUT /jobs/{id}/content relays it.
     var createdAt = DateTimeOffset.UtcNow;
-    var blobPrefix = ScanBlobPaths.BuildJobPrefix(jobId, createdAt);
+    var firstName = JobOwnerFilter.ReadFirstName(context.User);
+    if (firstName is null)
+    {
+        firstName = $"user-{owner.ObjectId}";
+        loggerFactory.CreateLogger("Jobs").LogWarning(
+            "Job {JobId}: no usable given/display name; using an owner-ID storage prefix.", jobId);
+    }
+    var blobPrefix = ScanBlobPaths.BuildJobPrefix(jobId, createdAt, firstName);
     var blobPath = $"{ScanBlobPaths.ScansContainer}/{ScanBlobPaths.BuildScanBlobName(blobPrefix, request.FileName)}";
     var uploadExpiresAt = createdAt.Add(platform.UploadWindow);
 

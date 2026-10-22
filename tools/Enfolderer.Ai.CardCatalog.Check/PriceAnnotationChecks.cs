@@ -307,7 +307,7 @@ internal static class PriceAnnotationChecks
             check(store.Path == "outputs/price-test/priced.png" && store.ContentType == "image/png",
                 "output uses a job-scoped private container path and PNG content type");
             source.Position = 0;
-            var datedPrefix = ScanBlobPaths.BuildJobPrefix("dated", new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero));
+            var datedPrefix = ScanBlobPaths.BuildJobPrefix("dated", new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero), "Douglas");
             var datedResult = await service.CreateAsync(new ScanResultDocument { JobId = "dated", Cards = [] },
                 source, default, blobPrefix: datedPrefix);
             check(store.Path == $"outputs/{datedPrefix}/priced.png"

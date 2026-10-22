@@ -337,7 +337,7 @@ public sealed record ScanJobDocument
 
     [JsonPropertyName("status")] public ScanJobStatus Status { get; init; } = ScanJobStatus.Pending;
 
-    /// <summary>UTC creation timestamp and job ID used as the folder in each blob container; null for legacy jobs.</summary>
+    /// <summary>Creator label, UTC creation minute and job ID used as the folder in each blob container; null for legacy jobs.</summary>
     [JsonPropertyName("blobPrefix")] public string? BlobPrefix { get; init; }
 
     /// <summary>Blob path of the uploaded image, e.g. <c>scans/{blobPrefix}/page1.jpg</c>.</summary>

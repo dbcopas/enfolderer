@@ -40,7 +40,7 @@ internal static class ConcurrencyChecks
             var count = concurrency == 9 ? 12 : 4;
             var store = new RecordingStore();
             var blobPrefix = concurrency == 1 ? null
-                : ScanBlobPaths.BuildJobPrefix("parallel", new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero));
+                : ScanBlobPaths.BuildJobPrefix("parallel", new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero), "Douglas");
             await store.CreateAsync(new ScanJobDocument
             {
                 Id = "parallel", JobId = "parallel", BlobPrefix = blobPrefix, BlobPath = "scan.png"

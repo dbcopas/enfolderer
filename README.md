@@ -459,11 +459,20 @@ validation; use a separate config to test it.
 
 ### Blob folder ordering
 
-New scan blobs use a shared UTC date-stamped folder in the `scans`, `crops` and `outputs`
-containers, for example `20261020T120921995Z-<job-id>`. Sort blob folder names ascending for
-oldest first or descending for newest first. The prefix is fixed at job creation and reused
-on retries. Existing undated folders and their download links remain accessible; they are not
-renamed, and public job IDs and download URLs do not change.
+New scan blobs use a shared creator/date-stamped folder in the `scans`, `crops` and `outputs`
+containers, for example `Douglas-261022-1530-<job-id>`. The format is
+`firstName-yyMMdd-HHmm-jobId`, with a 24-hour UTC time and minute precision. Folder-name sorting
+groups by creator first, then by age within that creator; the full job ID prevents collisions
+between scans in the same minute.
+The label comes from the authenticated given name, falling back to the first word of the
+signed-in display name. If neither supplies a usable name, the API logs a warning and uses
+`user-<owner-object-id>` instead, never an email address or request-body name. Names are
+accent-normalized, stripped to ASCII letters/digits/hyphens/underscores and capped at 64 characters.
+Names are descriptive labels only; tenant/object IDs still control access.
+The prefix is fixed at job creation and reused on retries, even if the user changes their name.
+Existing timestamp-only and undated folders and their download links remain accessible; they
+are not renamed, and public job IDs and download URLs do not change. Collection receipts keep
+their existing owner/job keys and are not renamed.
 
 ### Guest scan allowances
 

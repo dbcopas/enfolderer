@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Infrastructure.Storage;
 
 namespace Enfolderer.Ai.Api;
@@ -6,6 +7,24 @@ namespace Enfolderer.Ai.Api;
 /// <summary>Applies creator identity checks to every job route, including uploads and downloads.</summary>
 public sealed class JobOwnerFilter : IEndpointFilter
 {
+    public static string? ReadFirstName(ClaimsPrincipal principal)
+    {
+        if (principal.Identity?.IsAuthenticated != true) return null;
+        foreach (var claim in new[] { "given_name", ClaimTypes.GivenName })
+        {
+            var name = ScanBlobPaths.SanitizePersonName(principal.FindFirstValue(claim));
+            if (name.Length > 0) return name;
+        }
+        foreach (var claim in new[] { "name", ClaimTypes.Name })
+        {
+            var word = principal.FindFirstValue(claim)?.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (word?.Contains('@') == true) continue;
+            var name = ScanBlobPaths.SanitizePersonName(word);
+            if (name.Length > 0) return name;
+        }
+        return null;
+    }
+
     public static (string TenantId, string ObjectId)? ReadOwner(ClaimsPrincipal principal)
     {
         if (principal.Identity?.IsAuthenticated != true) return null;

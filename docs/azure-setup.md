@@ -269,6 +269,14 @@ it does not assign users, grant or consume credits, or change authentication pol
 
 ## 6. Verification and cutover gate
 
+New scan folders in `scans`, `crops` and `outputs` use `firstName-yyMMdd-HHmm-jobId`,
+for example `Douglas-261022-1530-<job-id>`, with UTC time. The API uses the authenticated
+given name, then the first display-name word, or an explicitly logged `user-<owner-object-id>`
+fallback. No Graph permission or client-supplied name is needed. Labels are sanitized and
+fixed in the job document; authorization remains tenant/object-ID based. Verify that uploads,
+crops and overlays use the same prefix, while both older timestamp-only and undated downloads
+still work. Existing blobs and owner-scoped collection receipts are not renamed.
+
 The `collection-add-and-browse` branch adds a mobile-only scanned collection, separate from
 uploaded desktop snapshots. It needs no new Azure resources or permissions: the API and worker use
 their existing Entra access to the `collections` container. Each added scan is saved once at
@@ -344,7 +352,7 @@ Deployed on 2026-10-19 into tenant `6a32cdb1-b813-4447-96d9-4f42e9cd37e3`,
 subscription `e3e0cdb6-dda9-477e-8d06-656c824ea765`, Sweden Central:
 
 - Subscription deployment: `enfolderer-cost`; current MTG-only image tag:
-  `v20261022-id-recovery` (all four apps, alternate-title identification and bounded catalogue recovery).
+  `v20261022-named-prefix` (all four apps, creator-prefixed compact UTC scan folders).
 - New resource groups: `enf-cost-platform`, `enf-cost-cardgeo`, `enf-cost-cardid`.
 - Shared ACA environment: `enf-cost-platform-env`; Foundry account: `enf-cost-ai`.
 - API/mobile website: <https://enf-cost-api.purplefield-875302b1.swedencentral.azurecontainerapps.io>.

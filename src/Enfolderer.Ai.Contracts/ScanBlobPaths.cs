@@ -16,10 +16,18 @@ public static class ScanBlobPaths
     public const string CropsContainer = "crops";
     public const string OutputsContainer = "outputs";
 
-    public static string BuildJobPrefix(string jobId, DateTimeOffset createdAt)
+    public static string BuildJobPrefix(string jobId, DateTimeOffset createdAt, string firstName)
     {
         if (string.IsNullOrWhiteSpace(jobId)) throw new ArgumentException("jobId is required.", nameof(jobId));
-        return $"{createdAt.UtcDateTime.ToString("yyyyMMdd'T'HHmmssfff'Z'", CultureInfo.InvariantCulture)}-{SanitizeSegment(jobId)}";
+        var name = SanitizePersonName(firstName);
+        if (name.Length == 0) throw new ArgumentException("A usable first name is required.", nameof(firstName));
+        return $"{name}-{createdAt.UtcDateTime.ToString("yyMMdd-HHmm", CultureInfo.InvariantCulture)}-{SanitizeSegment(jobId)}";
+    }
+
+    public static string SanitizePersonName(string? value)
+    {
+        var name = SanitizeSegment(value?.Normalize(NormalizationForm.FormD));
+        return name.Length > MaxStemLength ? name[..MaxStemLength] : name;
     }
 
     public static string BuildAnnotatedBlobPath(string jobId) =>

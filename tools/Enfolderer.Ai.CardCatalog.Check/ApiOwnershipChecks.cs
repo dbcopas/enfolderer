@@ -31,16 +31,45 @@ internal static class ApiOwnershipChecks
     public static async Task RunAsync(Action<bool, string> check)
     {
         var timestamp = new DateTimeOffset(2026, 10, 20, 14, 9, 21, 995, TimeSpan.FromHours(2));
-        var prefix = ScanBlobPaths.BuildJobPrefix("job", timestamp);
-        check(prefix == "20261020T120921995Z-job"
-            && prefix == ScanBlobPaths.BuildJobPrefix("job", timestamp.ToUniversalTime())
-            && string.CompareOrdinal(prefix, ScanBlobPaths.BuildJobPrefix("job", timestamp.AddMilliseconds(1))) < 0,
-            "blob prefixes use fixed-width UTC creation time and sort chronologically");
+        var prefix = ScanBlobPaths.BuildJobPrefix("job", timestamp, "Douglas");
+        check(prefix == "Douglas-261020-1209-job"
+            && prefix == ScanBlobPaths.BuildJobPrefix("job", timestamp.ToUniversalTime(), "Douglas")
+            && string.CompareOrdinal(prefix, ScanBlobPaths.BuildJobPrefix("job", timestamp.AddMinutes(1), "Douglas")) < 0,
+            "named blob prefixes use the exact compact UTC format and sort by minute within a creator");
+        check(prefix == ScanBlobPaths.BuildJobPrefix("job", timestamp.AddMilliseconds(1), "Douglas")
+            && ScanBlobPaths.BuildJobPrefix("one", timestamp, "Douglas") != ScanBlobPaths.BuildJobPrefix("two", timestamp, "Douglas"),
+            "minute-precision names omit seconds while job IDs prevent same-minute collisions");
+        check(ScanBlobPaths.BuildJobPrefix("job", new DateTimeOffset(2026, 1, 1, 1, 0, 0, TimeSpan.FromHours(2)), "Douglas")
+            == "Douglas-251231-2300-job", "compact dates follow the UTC day and year, not local midnight");
+        check(ScanBlobPaths.BuildJobPrefix("job", timestamp, "../../D\u00f6uglas/..") == prefix
+            && ScanBlobPaths.SanitizePersonName(new string('A', 200)).Length == 64,
+            "creator labels normalize accents, strip path characters and bound name length");
+        try
+        {
+            ScanBlobPaths.BuildJobPrefix("job", timestamp, "../");
+            check(false, "an unusable creator label must not silently create an unnamed prefix");
+        }
+        catch (ArgumentException) { check(true, "an unusable creator label fails explicitly before storage"); }
+        foreach (var (claims, expected) in new (Claim[], string?)[]
+        {
+            ([new("given_name", "Douglas"), new("name", "Wrong Person")], "Douglas"),
+            ([new(ClaimTypes.GivenName, "Felix"), new("name", "Wrong Person")], "Felix"),
+            ([new("given_name", " "), new("name", "  Alvero  Example")], "Alvero"),
+            ([new(ClaimTypes.Name, "  Adrien  Example")], "Adrien"),
+            ([new("given_name", "../"), new("name", "  Jos\u00e9 Example")], "Jose"),
+            ([new("name", "person@example.com")], null),
+            ([new("name", "\u6771\u4eac")], null),
+            ([], null)
+        })
+            check(JobOwnerFilter.ReadFirstName(new ClaimsPrincipal(new ClaimsIdentity(claims, "test"))) == expected,
+                "creator labels use trusted given-name claims, then a usable first display-name word, never email");
+        check(JobOwnerFilter.ReadFirstName(new ClaimsPrincipal(new ClaimsIdentity([new Claim("given_name", "Douglas")]))) is null,
+            "unauthenticated name claims cannot supply a creator label");
         var culture = System.Globalization.CultureInfo.CurrentCulture;
         try
         {
             System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("ar-SA");
-            check(ScanBlobPaths.BuildJobPrefix("job", timestamp) == prefix,
+            check(ScanBlobPaths.BuildJobPrefix("job", timestamp, "Douglas") == prefix,
                 "blob date prefixes are independent of the machine's culture and calendar");
         }
         finally { System.Globalization.CultureInfo.CurrentCulture = culture; }
@@ -49,6 +78,10 @@ internal static class ApiOwnershipChecks
             && ScanBlobPaths.BuildAnnotatedBlobPath(oldDocument) == "outputs/legacy/priced.png"
             && ScanBlobPaths.BuildCropBlobName(oldDocument, 0) == "legacy/card-000.png",
             "persisted legacy jobs without a blob prefix retain their original output and crop paths");
+        var timestampOnly = oldDocument with { BlobPrefix = "20261020T120921995Z-legacy" };
+        check(ScanBlobPaths.BuildAnnotatedBlobPath(timestampOnly) == "outputs/20261020T120921995Z-legacy/priced.png"
+            && ScanBlobPaths.BuildCropBlobName(timestampOnly, 0) == "20261020T120921995Z-legacy/card-000.png",
+            "existing long-timestamp folders keep their persisted paths unchanged");
         Console.WriteLine("\nReal API routes: two-user ownership isolation");
         var store = new InMemoryJobStore();
         var images = new Images();
@@ -107,6 +140,8 @@ internal static class ApiOwnershipChecks
         using var anonymous = await client.PostAsJsonAsync("/jobs/", new CreateJobRequest());
         check(anonymous.StatusCode == HttpStatusCode.Unauthorized, "anonymous callers cannot create jobs");
         client.DefaultRequestHeaders.Add("X-Test-User", UserA);
+        client.DefaultRequestHeaders.Add("X-Test-Given-Name", "Douglas");
+        client.DefaultRequestHeaders.Add("X-Test-Name", "Different Person");
         foreach (var hint in new[] { "pokemon", "pokémon", "ptcg", "yugioh", "lorcana", "invalid" })
         {
             using var unsupported = await client.PostAsJsonAsync("/jobs/",
@@ -118,6 +153,8 @@ internal static class ApiOwnershipChecks
         using var created = await client.PostAsJsonAsync("/jobs/", new
         {
             fileName = "scan.jpg",
+            firstName = "Forged",
+            blobPrefix = "Forged-000000-0000",
             ownerTenantId = UserB,
             ownerObjectId = UserB
         });
@@ -130,9 +167,9 @@ internal static class ApiOwnershipChecks
             "job creation persists the authenticated caller, not request-body ownership");
         check(job.GameHint == CardGames.Magic, "jobs without a hint default explicitly to MTG");
         check(Guid.TryParseExact(job.JobId, "N", out _)
-            && job.BlobPrefix == ScanBlobPaths.BuildJobPrefix(job.JobId, job.CreatedAt)
+            && job.BlobPrefix == ScanBlobPaths.BuildJobPrefix(job.JobId, job.CreatedAt, "Douglas")
             && job.BlobPath == $"scans/{job.BlobPrefix}/scan.jpg",
-            "new jobs persist one sortable blob prefix without changing the public job ID");
+            "new jobs persist the trusted creator's compact prefix, ignoring request-body names and preserving the public job ID");
         var roundTrip = System.Text.Json.JsonSerializer.Deserialize<ScanJobDocument>(
             System.Text.Json.JsonSerializer.Serialize(job))!;
         check(roundTrip.BlobPrefix == job.BlobPrefix
@@ -140,12 +177,21 @@ internal static class ApiOwnershipChecks
             "the exact blob prefix survives job persistence rather than being recomputed on retries");
         foreach (var hint in new[] { " MTG ", "magic", "magic-the-gathering", "" })
         {
+            client.DefaultRequestHeaders.Remove("X-Test-Given-Name");
+            client.DefaultRequestHeaders.Remove("X-Test-Name");
+            if (hint == " MTG ") client.DefaultRequestHeaders.Add("X-Test-Given-Name", "Douglas");
+            if (hint == "magic") client.DefaultRequestHeaders.Add("X-Test-Name", "Felix Example");
+            if (hint == "") client.DefaultRequestHeaders.Add("X-Test-Name", "person@example.com");
             using var accepted = await client.PostAsJsonAsync("/jobs/",
                 new CreateJobRequest { FileName = "scan.jpg", GameHint = hint });
             accepted.EnsureSuccessStatusCode();
             var result = await accepted.Content.ReadFromJsonAsync<CreateJobResponse>();
             check((await store.GetAsync(result!.JobId))?.GameHint == CardGames.Magic,
                 $"'{hint}': compatible MTG hints are normalized");
+            var label = hint == " MTG " ? "Douglas" : hint == "magic" ? "Felix" : $"user-{UserA}";
+            var acceptedJob = (await store.GetAsync(result!.JobId))!;
+            check(acceptedJob.BlobPrefix == ScanBlobPaths.BuildJobPrefix(result.JobId, acceptedJob.CreatedAt, label),
+                "real job routes use the given/display name or the explicit owner-ID fallback");
         }
 
         foreach (var caller in new[] { UserB, "other-tenant", "missing-claims", "" })
@@ -570,6 +616,13 @@ internal static class ApiOwnershipChecks
                 [new("tid", user == "other-tenant" ? UserB : Tenant),
                  new("oid", user is "other-tenant" or "missing-scope" ? UserA : user),
                  new("scp", user == "missing-scope" ? "Other.Permission" : "Scan.Submit")];
+            if (user != "missing-claims")
+            {
+                if (Request.Headers.TryGetValue("X-Test-Given-Name", out var given))
+                    claims = [.. claims, new("given_name", given.ToString())];
+                if (Request.Headers.TryGetValue("X-Test-Name", out var display))
+                    claims = [.. claims, new("name", display.ToString())];
+            }
             return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
                 new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme.Name)), Scheme.Name)));
         }
