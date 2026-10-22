@@ -10,25 +10,9 @@ public static class ScannedCollectionEndpoints
         var collection = app.MapGroup("/scanned-collection").RequireAuthorization();
         collection.AddEndpointFilter<JobOwnerFilter>();
         collection.MapGet("/", async (string? set, HttpContext http, IScannedCollectionStore store,
-            ILoggerFactory logs, CancellationToken ct) =>
-        {
-            set = set?.Trim().ToUpperInvariant();
-            if (set is { Length: > 0 } && (set.Length > 12 || !set.All(char.IsAsciiLetterOrDigit)))
-            {
-                logs.CreateLogger("ScannedCollection").LogWarning("Rejected invalid scanned collection set filter.");
-                return Results.BadRequest(new { error = "Choose a valid set code." });
-            }
-            var owner = JobOwnerFilter.ReadOwner(http.User)!.Value;
-            var printings = await store.ReadAsync(owner.TenantId, owner.ObjectId, ct);
-            return Results.Ok(new
-            {
-                sets = printings.Select(p => p.Set.ToUpperInvariant()).Distinct().Order().ToArray(),
-                totalPrintings = printings.Count,
-                totalQuantity = printings.Sum(p => (long)p.Quantity),
-                printings = string.IsNullOrEmpty(set) ? printings
-                    : printings.Where(p => string.Equals(p.Set, set, StringComparison.OrdinalIgnoreCase)).ToArray()
-            });
-        });
+            ILoggerFactory logs, CancellationToken ct) => await ReadAsync(set, http, store, logs, false, ct));
+        collection.MapGet("/cards.csv", async (string? set, HttpContext http, IScannedCollectionStore store,
+            ILoggerFactory logs, CancellationToken ct) => await ReadAsync(set, http, store, logs, true, ct));
 
         jobs.MapGet("/{jobId}/collection", async (string jobId, HttpContext http,
             IScannedCollectionStore collections, CancellationToken ct) =>
@@ -58,6 +42,31 @@ public static class ScannedCollectionEndpoints
                 printings = addition.Printings.Count,
                 skipped = job.Result.Cards.Count - addition.Printings.Sum(p => p.Quantity)
             });
+        });
+    }
+
+    private static async Task<IResult> ReadAsync(string? set, HttpContext http, IScannedCollectionStore store,
+        ILoggerFactory logs, bool csv, CancellationToken ct)
+    {
+        set = set?.Trim().ToUpperInvariant();
+        if (set is { Length: > 0 } && (set.Length > 12 || !set.All(char.IsAsciiLetterOrDigit)))
+        {
+            logs.CreateLogger("ScannedCollection").LogWarning("Rejected invalid scanned collection set filter.");
+            return Results.BadRequest(new { error = "Choose a valid set code." });
+        }
+        var owner = JobOwnerFilter.ReadOwner(http.User)!.Value;
+        var printings = await store.ReadAsync(owner.TenantId, owner.ObjectId, ct);
+        var filtered = string.IsNullOrEmpty(set) ? printings
+            : printings.Where(p => string.Equals(p.Set, set, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (csv)
+            return Results.File(System.Text.Encoding.UTF8.GetBytes(MobileWebEndpoints.Csv(filtered)),
+                "text/csv; charset=utf-8", $"scanned-collection{(string.IsNullOrEmpty(set) ? "" : "-" + set)}.csv");
+        return Results.Ok(new
+        {
+            sets = printings.Select(p => p.Set.ToUpperInvariant()).Distinct().Order().ToArray(),
+            totalPrintings = printings.Count,
+            totalQuantity = printings.Sum(p => (long)p.Quantity),
+            printings = filtered
         });
     }
 }

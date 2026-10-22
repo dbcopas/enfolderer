@@ -6,6 +6,7 @@ using System.Xml.Linq;
 using Azure;
 using Azure.Core.Pipeline;
 using Azure.Storage.Blobs;
+using Enfolderer.Ai.Api;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Infrastructure.Storage;
 
@@ -28,6 +29,17 @@ internal static class ScannedCollectionChecks
             response.EnsureSuccessStatusCode();
             check(response.Headers.CacheControl?.NoStore == true, "scanned collection responses prohibit shared caching");
             return await response.Content.ReadFromJsonAsync<JsonElement>();
+        }
+        async Task<string> Export(string suffix = "")
+        {
+            using var response = await client.GetAsync("/scanned-collection/cards.csv" + suffix);
+            response.EnsureSuccessStatusCode();
+            check(response.Headers.CacheControl?.NoStore == true, "collection CSV prohibits caching");
+            check(response.Content.Headers.ContentType?.MediaType == "text/csv"
+                && response.Content.Headers.ContentType.CharSet == "utf-8"
+                && response.Content.Headers.ContentDisposition?.DispositionType == "attachment",
+                "collection CSV is a UTF-8 attachment");
+            return await response.Content.ReadAsStringAsync();
         }
         IdentifiedCard Card(string set, string number, string language = "en") => new()
         {
@@ -53,15 +65,28 @@ internal static class ScannedCollectionChecks
         {
             Caller(caller.Length == 0 ? null : caller);
             using var read = await client.GetAsync("/scanned-collection/");
+            using var export = await client.GetAsync("/scanned-collection/cards.csv");
             using var add = await client.PostAsync($"/jobs/{jobId}/collection", null);
             check(read.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
-                && add.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden,
+                && add.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                && export.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden,
                 "scanned collection requires authentication, identity claims and delegated scan scope");
         }
         Caller(userA);
         var empty = await View();
         check(empty.GetProperty("totalQuantity").GetInt64() == 0 && empty.GetProperty("printings").GetArrayLength() == 0,
             "new scanned collection is empty without requiring a desktop snapshot");
+        check(await Export() == "Name;Set;Number;Language;Quantity\r\n", "empty collection exports a header-only CSV");
+        var escaped = MobileWebEndpoints.Csv(new ScannedCollectionPrinting[]
+        {
+            new("CMM", "12", "ja", "名前; \"quoted\"\r\nnext", 2),
+            new("CMM", "-1", "en", " \t=SUM(1)", 1),
+            new("CMM", "@number", "en", "+formula", 1)
+        });
+        check(escaped.Contains("\"名前; \"\"quoted\"\"\r\nnext\";CMM;12;ja;2\r\n", StringComparison.Ordinal)
+            && escaped.Contains("' \t=SUM(1);CMM;'-1;en;1\r\n", StringComparison.Ordinal)
+            && escaped.Contains("'+formula;CMM;'@number;en;1\r\n", StringComparison.Ordinal),
+            "collection CSV preserves Unicode, quotes separators/newlines and neutralizes spreadsheet formulas");
         var snapshot = new CollectionSnapshot { Printings = [new("CMM", "123", 99, 99)] };
         await snapshots.WriteAsync(tenant, userA, snapshot);
         var balanceBefore = await client.GetFromJsonAsync<JsonElement>("/allowance/");
@@ -107,6 +132,20 @@ internal static class ScannedCollectionChecks
             && filtered.GetProperty("sets").GetArrayLength() == 2,
             "a separate scan increases exact printing quantity and filtering retains all available set choices");
         var noMatches = await View("?set=ZZZ");
+        var allCsv = await Export();
+        check(allCsv.Split("\r\n", StringSplitOptions.RemoveEmptyEntries).Length == 5
+            && allCsv.Contains("Swords to Plowshares;CMM;123;en;4\r\n", StringComparison.Ordinal)
+            && allCsv.Contains("Swords to Plowshares;CMM;123;ja;1\r\n", StringComparison.Ordinal)
+            && allCsv.Contains("Swords to Plowshares;STA;10;en;1\r\n", StringComparison.Ordinal),
+            "CSV exports exact saved quantities and language rows without uploaded snapshot quantities");
+        var setCsv = await Export("?set=%20cmm%20");
+        check(setCsv.Split("\r\n", StringSplitOptions.RemoveEmptyEntries).Length == 4
+            && !setCsv.Contains(";STA;", StringComparison.Ordinal),
+            "CSV uses the same normalized set filter as browsing");
+        check(await Export("?set=ZZZ") == "Name;Set;Number;Language;Quantity\r\n",
+            "unknown CSV set produces a header-only download");
+        using var invalidCsv = await client.GetAsync("/scanned-collection/cards.csv?set=%3Cscript%3E");
+        check(invalidCsv.StatusCode == HttpStatusCode.BadRequest, "CSV rejects malformed set filters");
         using var invalidSet = await client.GetAsync("/scanned-collection/?set=%3Cscript%3E");
         check(noMatches.GetProperty("printings").GetArrayLength() == 0 && invalidSet.StatusCode == HttpStatusCode.BadRequest,
             "unknown sets have no matches and malformed set filters are rejected");
@@ -148,6 +187,8 @@ internal static class ScannedCollectionChecks
             "unfinished scans and scans without identified printings cannot be saved");
 
         Caller(userB);
+        check(await Export() == "Name;Set;Number;Language;Quantity\r\n",
+            "CSV cannot export another user's collection");
         using var stolen = await client.PostAsync($"/jobs/{jobId}/collection", null);
         using var stolenStatus = await client.GetAsync($"/jobs/{jobId}/collection");
         check(stolen.StatusCode == HttpStatusCode.NotFound && stolenStatus.StatusCode == HttpStatusCode.NotFound
@@ -162,6 +203,8 @@ internal static class ScannedCollectionChecks
         using var bAdd = await client.PostAsync($"/jobs/{bId}/collection", null);
         check(bAdd.IsSuccessStatusCode && (await View()).GetProperty("totalQuantity").GetInt64() == 1,
             "users with no scan credits can still save completed scans to their own separate collection");
+        check(await Export() == "Name;Set;Number;Language;Quantity\r\nSwords to Plowshares;STA;10;en;1\r\n",
+            "users with no scan credits can export only their own collection");
         Caller(userA);
         check((await View()).GetProperty("totalQuantity").GetInt64() == 7, "different users' additions never mix");
         await BlobChecks(check, tenant, userA, userB, job);

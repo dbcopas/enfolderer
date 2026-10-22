@@ -75,13 +75,6 @@ public static class MobileWebEndpoints
 
     public static string Csv(ScanResultDocument result)
     {
-        static string Cell(string? value)
-        {
-            var text = value ?? "";
-            // Downloads may be opened in a spreadsheet; names must not become executable formulas.
-            if (text.TrimStart().StartsWithAny('=', '+', '-', '@')) text = "'" + text;
-            return text.IndexOfAny([';', '"', '\r', '\n']) >= 0 ? "\"" + text.Replace("\"", "\"\"") + "\"" : text;
-        }
         static string Amount(decimal? value) => value?.ToString("0.00", CultureInfo.InvariantCulture) ?? "";
         var rows = CardValueRanking.Order(result.Cards.Where(c => c.IsIdentified)).Select((c, i) =>
             string.Join(';', (i + 1).ToString(CultureInfo.InvariantCulture),
@@ -94,6 +87,21 @@ public static class MobileWebEndpoints
                 Cell(c.Prices?.Source), Cell(c.Prices?.RetrievedAt.ToString("u", CultureInfo.InvariantCulture))));
         return "Rank;Card position;Name;Set;Number;Language;Nonfoil EUR;Foil EUR;Ranking EUR;Owned;All printings;Ownership error;Resolution;Price error;Price source;Retrieved UTC\r\n"
             + string.Join("\r\n", rows) + "\r\n";
+    }
+
+    public static string Csv(IReadOnlyList<ScannedCollectionPrinting> printings) =>
+        "Name;Set;Number;Language;Quantity\r\n"
+        + string.Join("\r\n", printings.Select(p => string.Join(';',
+            Cell(p.Name), Cell(p.Set), Cell(p.Number), Cell(p.Language),
+            p.Quantity.ToString(CultureInfo.InvariantCulture))))
+        + (printings.Count > 0 ? "\r\n" : "");
+
+    private static string Cell(string? value)
+    {
+        var text = value ?? "";
+        // Downloads may be opened in a spreadsheet; names must not become executable formulas.
+        if (text.TrimStart().StartsWithAny('=', '+', '-', '@')) text = "'" + text;
+        return text.IndexOfAny([';', '"', '\r', '\n']) >= 0 ? "\"" + text.Replace("\"", "\"\"") + "\"" : text;
     }
 
     private static bool StartsWithAny(this string value, params char[] choices) =>

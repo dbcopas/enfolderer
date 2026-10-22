@@ -5,6 +5,7 @@ let previewUrl, imageUrl, csvUrl, collectionAvailable = false;
 let scansAvailable = false;
 let resultJobId, eligibleCards = 0, scanAdded = false, addingToCollection = false, collectionLoading = false;
 let collectionRefreshPending = false;
+let downloadingCollection = false, collectionCsvUrl;
 const scopes = () => [config.scope];
 const report = error => {
   console.error(error);
@@ -148,6 +149,32 @@ async function addScanToCollection() {
   } finally {
     addingToCollection = false;
     setBusy(busy);
+  }
+
+}
+
+async function downloadScannedCollection() {
+  if (downloadingCollection) return;
+  downloadingCollection = true;
+  const button = $("downloadScannedCollection");
+  const selected = $("collectionSet").value;
+  button.disabled = true;
+  button.textContent = "Preparing CSV...";
+  try {
+    const response = await api("/scanned-collection/cards.csv" + (selected ? "?set=" + encodeURIComponent(selected) : ""));
+    const blob = await response.blob();
+    if (collectionCsvUrl) URL.revokeObjectURL(collectionCsvUrl);
+    collectionCsvUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = collectionCsvUrl;
+    link.download = `scanned-collection${selected ? "-" + selected : ""}.csv`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+  } finally {
+    downloadingCollection = false;
+    button.disabled = false;
+    button.textContent = "Download collection CSV";
   }
 }
 
@@ -418,6 +445,7 @@ $("viewScannedCollection").onclick = run(async () => {
 });
 $("collectionSet").onchange = run(loadScannedCollection);
 $("refreshScannedCollection").onclick = run(loadScannedCollection);
+$("downloadScannedCollection").onclick = run(downloadScannedCollection);
 $("snapshot").onchange = run(async event => {
   const file = event.target.files[0];
   event.target.value = "";

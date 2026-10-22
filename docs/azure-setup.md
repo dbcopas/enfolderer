@@ -304,6 +304,14 @@ Verify the switch defaults off, auto-saving does not count the current scan in i
 retrying cannot duplicate a receipt, and a read failure in either source shows unknown ownership
 rather than partial totals. Authenticated collection responses must remain `no-store`.
 
+The scanned-collection CSV export needs only an API image update, with no new resources or
+permissions. In **View scanned collection**, use **Download collection CSV** with All sets and
+with a selected set. Verify the UTF-8, semicolon-separated Name/Set/Number/Language/Quantity
+download contains only that user's scanned additions (not uploaded snapshots), preserves
+language-specific quantities, and still works without scan credits. Empty results contain the
+header only. `GET /scanned-collection/cards.csv?set=CMM` must reject anonymous access, invalid
+filters must return 400, and successful exports must be `no-store` attachments.
+
 ```powershell
 .\scripts\test-cost-infrastructure.ps1
 .\scripts\test-scan-access.ps1 -NamePrefix $prefix
@@ -352,7 +360,7 @@ Deployed on 2026-10-19 into tenant `6a32cdb1-b813-4447-96d9-4f42e9cd37e3`,
 subscription `e3e0cdb6-dda9-477e-8d06-656c824ea765`, Sweden Central:
 
 - Subscription deployment: `enfolderer-cost`; current MTG-only image tag:
-  `v20261022-named-prefix` (all four apps, creator-prefixed compact UTC scan folders).
+  `v20261022-collection-csv` (all four apps, mobile scanned-collection CSV download).
 - New resource groups: `enf-cost-platform`, `enf-cost-cardgeo`, `enf-cost-cardid`.
 - Shared ACA environment: `enf-cost-platform-env`; Foundry account: `enf-cost-ai`.
 - API/mobile website: <https://enf-cost-api.purplefield-875302b1.swedencentral.azurecontainerapps.io>.

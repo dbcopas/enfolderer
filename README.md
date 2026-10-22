@@ -177,7 +177,13 @@ addition in its ownership overlay. A failed automatic save leaves the scan and d
 available, with an explicit message and the manual add button to retry safely.
 
 Select **View scanned collection** to browse your added printings, see quantities, and filter by
-set. This collection is stored separately from desktop ownership snapshots: adding cards does not
+set. Use **Download collection CSV** in that view to download all saved cards, or only the selected
+set. The UTF-8, semicolon-separated CSV contains Name, Set, Number, Language and Quantity, with
+one row per saved printing/language and spreadsheet formula protection. Empty collections/sets
+download the header only. This exports scanned additions, not uploaded desktop snapshots or
+combined ownership totals, and does not consume scan credits. The authenticated endpoint is
+`GET /scanned-collection/cards.csv` (optional `?set=CMM`); responses are private and `no-store`.
+This collection is stored separately from desktop ownership snapshots: adding cards does not
 update desktop databases, uploaded snapshot quantities or previously rendered overlays.
 Replacing/deleting a snapshot does not remove scanned additions. New mobile ownership comparisons
 add uploaded snapshot quantities and saved scanned quantities together; either source can be used
