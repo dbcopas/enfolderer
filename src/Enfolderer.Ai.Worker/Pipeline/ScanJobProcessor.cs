@@ -344,6 +344,7 @@ public sealed class ScanJobProcessor
         var cards = new IdentifiedCard[boundaries.Count];
         var sourceBytes = source.ToArray();
         using var progressGate = new SemaphoreSlim(1);
+        using var cropGate = new SemaphoreSlim(1);
         var processed = 0;
         var identified = 0;
         await Parallel.ForEachAsync(Enumerable.Range(0, boundaries.Count),
@@ -398,8 +399,15 @@ public sealed class ScanJobProcessor
                 // see the rectified faces — and handed to the agent as bytes, because Team B cannot
                 // reach the container either.
                 var timer = Stopwatch.StartNew();
-                using var cardSource = new MemoryStream(sourceBytes, writable: false);
-                var cropBytes = await WriteCropAsync(cardSource, boundary.Quad, cropPath, ct);
+                byte[] cropBytes;
+                // Bound full-photo decodes independently of network concurrency on the 2 GiB worker.
+                await cropGate.WaitAsync(ct);
+                try
+                {
+                    using var cardSource = new MemoryStream(sourceBytes, writable: false);
+                    cropBytes = await WriteCropAsync(cardSource, boundary.Quad, cropPath, ct);
+                }
+                finally { cropGate.Release(); }
                 LogTiming(job.JobId, "crop_and_store", timer, index);
 
                 var image = new AgentImage(cropBytes, Path.GetFileName(cropPath), "image/png");
@@ -415,10 +423,16 @@ public sealed class ScanJobProcessor
                 if (_artVerifier is not null)
                 {
                     timer.Restart();
-                    using var artSource = new MemoryStream(sourceBytes, writable: false);
-                    using var artCrop = new MemoryStream();
-                    PerspectiveCropper.CropToPng(artSource, boundary.Quad, artCrop, _options.CropHeight);
-                    var artBytes = artCrop.ToArray();
+                    byte[] artBytes;
+                    await cropGate.WaitAsync(ct);
+                    try
+                    {
+                        using var artSource = new MemoryStream(sourceBytes, writable: false);
+                        using var artCrop = new MemoryStream();
+                        PerspectiveCropper.CropToPng(artSource, boundary.Quad, artCrop, _options.CropHeight);
+                        artBytes = artCrop.ToArray();
+                    }
+                    finally { cropGate.Release(); }
                     card = await _artVerifier.VerifyAndReviewAsync(card, artBytes, job.JobId, crop, agent, ct);
                     LogTiming(job.JobId, "art_verification", timer, index);
                 }

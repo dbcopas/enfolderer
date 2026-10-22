@@ -15,8 +15,8 @@ param modelDeployments array = [
     name: 'gpt-5-mini'
     model: 'gpt-5-mini'
     version: '2025-08-07'
-    // Keep 100k TPM headroom for multi-card scans; this is not provisioned throughput.
-    capacity: 100
+    // Nine-way card identification shares this pay-per-token budget with geometry.
+    capacity: 300
   }
 ]
 

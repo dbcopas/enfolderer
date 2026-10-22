@@ -5,9 +5,10 @@ using Enfolderer.Ai.Infrastructure.Catalogue;
 
 var app = McpServerHost.Create(args, "mcp-cardcatalog-mtg", (services, _) =>
     services
-        .AddHttpClient<ScryfallCatalogue>(CatalogueHttp.ApplyDefaults)
-        .AddHttpMessageHandler(() => new PoliteRateLimitHandler(TimeSpan.FromMilliseconds(100)))
-        .Services.AddHttpClient<ScryfallPriceClient>(CatalogueHttp.ApplyDefaults)
-        .AddHttpMessageHandler(() => new PoliteRateLimitHandler(TimeSpan.FromMilliseconds(100))));
+        .AddHttpClient("scryfall", CatalogueHttp.ApplyDefaults)
+        // Four requests/second per replica keeps the two-replica limit below Scryfall's ceiling.
+        .AddHttpMessageHandler(() => new PoliteRateLimitHandler(TimeSpan.FromMilliseconds(250)))
+        .AddTypedClient<ScryfallCatalogue>()
+        .AddTypedClient<ScryfallPriceClient>());
 
 await app.RunAsync();

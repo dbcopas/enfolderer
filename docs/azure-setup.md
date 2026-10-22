@@ -20,7 +20,7 @@ but do not register any agents or enable new scans.
 | Storage | Standard LRS, public HTTPS transport, Entra RBAC only; shared keys and anonymous blob access disabled |
 | Cosmos DB | Single region, free tier requested at creation, database-shared 400 RU/s; local/key authentication disabled |
 | Foundry | One account, two logical pipeline projects, one operator owns both; worker gets invoke-only roles |
-| Model | GPT-5 mini `2025-08-07`, Global Standard, capacity 100 (100,000 TPM) |
+| Model | GPT-5 mini `2025-08-07`, Global Standard, capacity 300 (300,000 TPM / 300 RPM) |
 | Registry | Basic ACR, admin credentials disabled, managed-identity pulls |
 | API Management | Not needed or deployed; the API already enforces tenant, scope, pilot allowlist and ownership |
 
@@ -108,7 +108,8 @@ az rest --method get --url "https://management.azure.com/subscriptions/e3e0cdb6-
     --query "value[?name.value=='OpenAI.GlobalStandard.gpt-5-mini'].{used:currentValue,limit:limit}" -o table
 ```
 
-At least 100 unused capacity units are needed. If unavailable, stop; do not switch model or region
+At least 300 unused capacity units are needed for a new deployment (200 additional units when
+upgrading an existing allocation of 100). If unavailable, stop; do not switch model or region
 without authorization. Verify the three destination resource-group names are unused.
 
 ## 2. Credential-free application registrations
@@ -315,11 +316,52 @@ from the old deployment by this guide.
 Deployed on 2026-10-19 into tenant `6a32cdb1-b813-4447-96d9-4f42e9cd37e3`,
 subscription `e3e0cdb6-dda9-477e-8d06-656c824ea765`, Sweden Central:
 
-- Subscription deployment: `enfolderer-cost`; current MTG-only image tag: `v20261019-1129`.
+- Subscription deployment: `enfolderer-cost`; current MTG-only image tag:
+  `v20261022-parallel-opt2` (all four apps).
 - New resource groups: `enf-cost-platform`, `enf-cost-cardgeo`, `enf-cost-cardid`.
 - Shared ACA environment: `enf-cost-platform-env`; Foundry account: `enf-cost-ai`.
 - API/mobile website: <https://enf-cost-api.purplefield-875302b1.swedencentral.azurecontainerapps.io>.
-- Model: GPT-5 mini `2025-08-07`, Global Standard, capacity 100.
+- Model: GPT-5 mini `2025-08-07`, Global Standard; initially capacity 100, raised to 300 on
+  2026-10-22 for the parallel-identification branch.
+
+### Parallel-identification validation (2026-10-22)
+
+The worker now allows nine independent card identifications with bounded, isolated transient
+retries. Full-photo decode/cropping remains serialized to protect the worker's 2 GiB allocation.
+The image deployment script records the release tag in the subscription deployment, so a later
+redeploy does not revert to the earlier worker-only experimental image.
+
+| Fixture | Exact printing/language matches | End-to-end time |
+|---|---|---|
+| `training/01/image.jpg` binder | 9/9 | 139.8 seconds |
+| `training/01/loose-pair-upload.jpg` | 2/2 | 77.4 seconds |
+| `training/03/image.jpg` adventure page | 7/7 | 132.9 seconds |
+
+All three passed dated upload/crop/annotation and historical-download checks. The initial
+instrumented binder baseline took 451.3 seconds and returned only 8/9 because one identification
+timed out; the initial loose pair passed 2/2 in 92.6 seconds. These are representative measurements,
+not a latency SLA or a controlled single-variable benchmark.
+
+The final binder logged 183,790 input tokens (116,608 cached), 20,323 output tokens and 13,888
+reasoning tokens across geometry, identification and printing-review responses, with zero
+worker throttle/service retries. Token totals include follow-up tool/approval contexts, not just
+one request per card. Compare completed workloads and cache state before claiming token savings.
+The increased TPM allocation remains consumption-priced Global Standard, not reserved PTU.
+
+Lower reasoning was tested but not retained: four catalogue tool failures invalidated its
+quality comparison. `MtgCardIdAgent` version 3 restores the original definition and principal;
+do not send a per-request `reasoning` override with a named agent (the endpoint rejects it).
+Full-resolution card/footer images, complete art candidates and original reasoning are retained.
+Instead, the accepted tool optimization reuses successful/404 printing searches for one minute
+within a bounded catalogue cache and shares pacing between identification and price lookups.
+Four requests/second per replica stays below Scryfall's approximate ten/second ceiling with the
+configured two replicas. Keep that aggregate limit in mind before increasing replicas.
+
+Inspect worker `token_usage`, `response_summary` and `timing` logs when evaluating a new setting;
+missing metrics are warnings, not zero usage. Keep a candidate only after exact-printing and
+language checks pass. Image rollback does not change agent versions or model capacity.
+
+### Resource sizing
 
 | App | vCPU / memory | Replica range |
 |---|---|---|

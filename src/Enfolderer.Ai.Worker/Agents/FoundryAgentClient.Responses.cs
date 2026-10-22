@@ -47,40 +47,20 @@ public sealed partial class FoundryAgentClient
             while (true)
             {
                 var parentId = previousId;
-                JsonDocument document;
-                try
+                var body = new Dictionary<string, object>
                 {
-                    var body = new Dictionary<string, object>
-                    {
-                        ["input"] = input, ["background"] = true, ["store"] = true
-                    };
-                    if (previousId is not null) body["previous_response_id"] = previousId;
-                    document = await SendAsync(HttpMethod.Post, path + query,
-                        body, timeout.Token);
-                }
-                catch (FoundryAccessException ex) when (ex.StatusCode == 429 && throttles < _throttleRetries)
-                {
-                    await DelayAfterThrottleAsync(agentName, ex.Message, ++throttles, timeout.Token);
-                    continue;
-                }
-                catch (FoundryAccessException ex) when (ex.StatusCode is 500 or 502 or 503 or 504
-                    && serverErrors < MaxServerErrorRetries)
-                {
-                    _log.LogWarning(ex, "Transient Responses failure for agent {Agent}; retry {Retry}.",
-                        agentName, serverErrors + 1);
-                    await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, serverErrors++)), timeout.Token);
-                    continue;
-                }
+                    ["input"] = input, ["background"] = true, ["store"] = true
+                };
+                if (previousId is not null) body["previous_response_id"] = previousId;
+                using var document = await SendResponseAsync(HttpMethod.Post, path + query, body);
 
-                using (document)
-                {
-                    previousId = RequireString(document, "id", "response id");
-                    responseIds.Add(previousId);
-                }
+                previousId = RequireString(document, "id", "response id");
+                responseIds.Add(previousId);
 
-                using var completed = await WaitForResponseAsync(path, query, previousId, timeout.Token);
+                using var completed = await WaitForResponseAsync(previousId);
                 finishedIds.Add(previousId);
                 var root = completed.RootElement;
+                LogResponseUsage(agentName, previousId, root);
                 var status = root.GetProperty("status").GetString();
                 if (!string.Equals(status, "completed", StringComparison.Ordinal))
                 {
@@ -92,7 +72,7 @@ public sealed partial class FoundryAgentClient
                     if (IsThrottled(code, message) && throttles < _throttleRetries)
                     {
                         previousId = parentId;
-                        await DelayAfterThrottleAsync(agentName, message, ++throttles, timeout.Token);
+                        await DelayAsync(message, ++throttles, throttled: true);
                         continue;
                     }
                     if (IsServerError(status ?? "", code) && serverErrors < MaxServerErrorRetries)
@@ -100,7 +80,7 @@ public sealed partial class FoundryAgentClient
                         _log.LogWarning("Agent {Agent} response {Response} failed with server_error; retry {Retry}.",
                             agentName, previousId, serverErrors + 1);
                         previousId = parentId;
-                        await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, serverErrors++)), timeout.Token);
+                        await DelayAsync(message, ++serverErrors, throttled: false);
                         continue;
                     }
                     throw new InvalidOperationException(
@@ -166,6 +146,10 @@ public sealed partial class FoundryAgentClient
         }
         finally
         {
+            _log.LogInformation(
+                "Agent {AgentId}: response_summary elapsed_ms={ElapsedMs} responses={Responses} approvals={Approvals} corrections={Corrections} throttle_retries={ThrottleRetries} service_retries={ServiceRetries}.",
+                agentName, timer.ElapsedMilliseconds, responseIds.Count, approvals, regenerations,
+                throttles, serverErrors);
             foreach (var id in responseIds)
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -186,6 +170,58 @@ public sealed partial class FoundryAgentClient
             }
         }
 
+        async Task<JsonDocument> SendResponseAsync(HttpMethod method, string requestPath, object? body)
+        {
+            while (true)
+            {
+                try
+                {
+                    return await SendAsync(method, requestPath, body, timeout.Token);
+                }
+                catch (FoundryAccessException ex) when (ex.StatusCode == 429 && throttles < _throttleRetries)
+                {
+                    await DelayAsync(ex.Message, ++throttles, throttled: true, ex.RetryAfter);
+                }
+                catch (FoundryAccessException ex) when (ex.StatusCode is 408 or 500 or 502 or 503 or 504
+                    && serverErrors < MaxServerErrorRetries)
+                {
+                    await DelayAsync(ex.Message, ++serverErrors, throttled: false, ex.RetryAfter);
+                }
+                // An interrupted POST may already have created background work. Only replay
+                // transport failures for reads, where the known response ID can be resumed safely.
+                catch (HttpRequestException ex) when (method == HttpMethod.Get && serverErrors < MaxServerErrorRetries)
+                {
+                    await DelayAsync(ex.Message, ++serverErrors, throttled: false);
+                }
+            }
+        }
+
+        async Task DelayAsync(string? message, int attempt, bool throttled, TimeSpan? retryAfter = null)
+        {
+            var delay = retryAfter ?? RetryAfter(message)
+                ?? TimeSpan.FromSeconds((throttled ? _throttleBackoff.TotalSeconds : 1) * Math.Pow(2, attempt - 1));
+            delay = delay < TimeSpan.Zero ? TimeSpan.Zero : delay > MaxThrottleWait ? MaxThrottleWait : delay;
+            delay += TimeSpan.FromMilliseconds(Random.Shared.Next(0, 251));
+            _log.LogWarning(
+                "Agent {Agent} response {Response}: transient {Kind} failure; retry {Retry} of {Max} in {Delay}. {Message}",
+                agentName, previousId, throttled ? "throttle" : "service/transport", attempt,
+                throttled ? _throttleRetries : MaxServerErrorRetries, delay, AgentJson.Summarize(message));
+            await Task.Delay(delay, timeout.Token);
+        }
+
+        async Task<JsonDocument> WaitForResponseAsync(string id)
+        {
+            while (true)
+            {
+                var document = await SendResponseAsync(HttpMethod.Get, path + "/" + Uri.EscapeDataString(id) + query, null);
+                var status = RequireString(document, "status", "response status");
+                if (status is not "queued" and not "in_progress")
+                    return document;
+                document.Dispose();
+                await Task.Delay(_pollInterval, timeout.Token);
+            }
+        }
+
         void AddImage(AgentImage? value)
         {
             if (value is not null)
@@ -198,17 +234,33 @@ public sealed partial class FoundryAgentClient
         }
     }
 
-    private async Task<JsonDocument> WaitForResponseAsync(string path, string query, string id, CancellationToken ct)
+    private void LogResponseUsage(string agentName, string responseId, JsonElement response)
     {
-        while (true)
+        var usage = ReadResponseUsage(response);
+        if (usage is null)
         {
-            var document = await SendAsync(HttpMethod.Get, path + "/" + Uri.EscapeDataString(id) + query, null, ct);
-            var status = RequireString(document, "status", "response status");
-            if (status is not "queued" and not "in_progress")
-                return document;
-            document.Dispose();
-            await Task.Delay(_pollInterval, ct);
+            _log.LogWarning("Agent {AgentId} response {ResponseId}: token usage unavailable.", agentName, responseId);
+            return;
         }
+        _log.LogInformation(
+            "Agent {AgentId} response {ResponseId}: token_usage input={InputTokens} output={OutputTokens} cached={CachedTokens} reasoning={ReasoningTokens}.",
+            agentName, responseId, usage.InputTokens, usage.OutputTokens, usage.CachedTokens, usage.ReasoningTokens);
+    }
+
+    internal sealed record ResponseUsage(long InputTokens, long OutputTokens, long? CachedTokens, long? ReasoningTokens);
+
+    internal static ResponseUsage? ReadResponseUsage(JsonElement response)
+    {
+        if (!response.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object
+            || Read(usage, "input_tokens") is not { } input || Read(usage, "output_tokens") is not { } output)
+            return null;
+        return new(input, output, Detail("input_tokens_details", "cached_tokens"), Detail("output_tokens_details", "reasoning_tokens"));
+
+        long? Detail(string group, string name) =>
+            usage.TryGetProperty(group, out var details) && details.ValueKind == JsonValueKind.Object ? Read(details, name) : null;
+        static long? Read(JsonElement value, string name) =>
+            value.TryGetProperty(name, out var count) && count.ValueKind == JsonValueKind.Number
+                && count.TryGetInt64(out var number) && number >= 0 ? number : null;
     }
 
     internal static IReadOnlyList<ToolApproval> BuildResponseApprovals(JsonElement response, string? approvedLabel)

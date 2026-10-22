@@ -44,7 +44,7 @@ public sealed class ScanPipelineOptions
     public int CropHeight { get; set; } = 1024;
 
     /// <summary>Maximum independent cards in flight within one scan. Use 1 for a sequential baseline.</summary>
-    public int MaxConcurrentCards { get; set; } = 2;
+    public int MaxConcurrentCards { get; set; } = 9;
 
     /// <summary>How long a single agent run may take before the job fails.</summary>
     public TimeSpan AgentRunTimeout { get; set; } = TimeSpan.FromMinutes(5);

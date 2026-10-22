@@ -72,6 +72,7 @@ internal static class Program
         SecurityChecks.RunAsync(Check).GetAwaiter().GetResult();
         ApiOwnershipChecks.RunAsync(Check).GetAwaiter().GetResult();
         FoundryResponseChecks.RunAsync(Check).GetAwaiter().GetResult();
+        CatalogueHttpChecks.RunAsync(Check).GetAwaiter().GetResult();
         ResolutionChecks().GetAwaiter().GetResult();
         PromptChecks();
         ThrottleChecks();

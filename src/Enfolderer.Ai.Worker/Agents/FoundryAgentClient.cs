@@ -624,7 +624,8 @@ public sealed partial class FoundryAgentClient
 
             throw new FoundryAccessException(
                 $"Foundry request {method} {path} against {_projectEndpoint} failed with {(int)response.StatusCode}: {AgentJson.Summarize(payload)}",
-                (int)response.StatusCode);
+                (int)response.StatusCode, response.Headers.RetryAfter?.Delta
+                    ?? (response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow));
         }
 
         return JsonDocument.Parse(payload);
@@ -641,9 +642,15 @@ public sealed partial class FoundryAgentClient
 /// <summary>Raised when a Foundry data-plane call is rejected; carries the HTTP status code.</summary>
 public sealed class FoundryAccessException : Exception
 {
-    public FoundryAccessException(string message, int statusCode) : base(message) => StatusCode = statusCode;
+    public FoundryAccessException(string message, int statusCode, TimeSpan? retryAfter = null) : base(message)
+    {
+        StatusCode = statusCode;
+        RetryAfter = retryAfter;
+    }
 
     public int StatusCode { get; }
+
+    public TimeSpan? RetryAfter { get; }
 
     public bool IsAuthorizationFailure => StatusCode is 401 or 403;
 }

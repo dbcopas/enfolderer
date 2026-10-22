@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 
@@ -182,6 +183,9 @@ public sealed class ScryfallCatalogue
     public const string ApiRoot = "https://api.scryfall.com";
 
     private readonly HttpClient _http;
+    private readonly ConcurrentDictionary<string, SearchResult> _searchCache = new(StringComparer.Ordinal);
+
+    private sealed record SearchResult(IReadOnlyList<CataloguePrinting> Printings, DateTimeOffset ExpiresAt);
 
     public ScryfallCatalogue(HttpClient http) => _http = http;
 
@@ -379,6 +383,11 @@ public sealed class ScryfallCatalogue
         // nothing at all rather than matching the printings in that language.
         if (localised) url += "&include_multilingual=true";
 
+        var cacheKey = url;
+        ct.ThrowIfCancellationRequested();
+        if (_searchCache.TryGetValue(cacheKey, out var cached) && cached.ExpiresAt > DateTimeOffset.UtcNow)
+            return cached.Printings;
+
         var printings = new List<CataloguePrinting>();
         var visited = new HashSet<string>(StringComparer.Ordinal);
         while (true)
@@ -386,7 +395,8 @@ public sealed class ScryfallCatalogue
             if (!visited.Add(url) || visited.Count > 20)
                 throw new InvalidDataException("Printing search pagination exceeded its safe limit or repeated a page.");
             using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
-            if (response.StatusCode == System.Net.HttpStatusCode.NotFound && visited.Count == 1) return [];
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound && visited.Count == 1)
+                return Cache([]);
             response.EnsureSuccessStatusCode();
             await using var stream = await response.Content.ReadAsStreamAsync(ct);
             using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
@@ -408,7 +418,14 @@ public sealed class ScryfallCatalogue
         // every card in the set whose name has that word in it. Exact matching is Scryfall's job
         // in the other branch; here it has to be done on the way out, or the fallback that exists
         // to forgive a stray accent quietly widens into a substring search.
-        return exact ? printings : printings.Where(p => NameMatches(name, p)).ToList();
+        return Cache(exact ? printings : printings.Where(p => NameMatches(name, p)).ToList());
+
+        IReadOnlyList<CataloguePrinting> Cache(IReadOnlyList<CataloguePrinting> found)
+        {
+            if (_searchCache.Count < 128 || _searchCache.ContainsKey(cacheKey))
+                _searchCache[cacheKey] = new SearchResult(found, DateTimeOffset.UtcNow.AddMinutes(1));
+            return found;
+        }
     }
 
     /// <summary>
@@ -779,7 +796,8 @@ public sealed class ScryfallCatalogue
         if (string.IsNullOrEmpty(url)) return null;
 
         using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
-        if (!response.IsSuccessStatusCode) return null;
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);

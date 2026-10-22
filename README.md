@@ -200,13 +200,42 @@ precomputed all-sets total is reused (not added repeatedly); their exact quantit
 assigned to the scanned printing. This supports newer reprints absent from older exports,
 without matching scanned names or requiring a fresh upload. Catalogue failures remain explicit warnings.
 
-The worker processes up to **two cards concurrently** within each scan. Each task uses its own
+On the `parallel-card-identification` branch, the worker processes up to **nine cards concurrently**
+within each scan. Each task uses its own
 source-image stream; results retain reading order and progress writes are serialized. Per-card
 failures do not discard the other cards. Set the worker environment variable
-`ScanPipeline__MaxConcurrentCards` to `1` for a sequential baseline, or `3` for a measured trial.
+`ScanPipeline__MaxConcurrentCards` to a lower value to reduce model quota pressure, or `1` for a sequential baseline.
 Values below 1 are rejected. Desktop polling is capped at three seconds during active scans.
 
-Worker logs include `timing` events in milliseconds for source download, boundaries, each card's
+Each independent card's Foundry Responses call has its own retry budget and five-minute deadline.
+HTTP 429/model throttling gets up to `ScanPipeline__AgentThrottleRetries` retries (default 3);
+HTTP 408/500/502/503/504, failed `server_error` responses, and polling transport failures share
+two additional transient retries. Polling retries resume the same response ID, not the entire
+card or scan. Backoff is exponential (10 seconds initially for throttling, 1 second for service
+failures), prefers `Retry-After` headers or service-message advice, caps the base wait at two
+minutes, and adds up to 250 ms jitter to spread concurrent retries. Cancellation interrupts
+backoff. Authorization, invalid requests, and MCP errors are not retried by this policy; the
+existing one-time reading/JSON correction remains unchanged. An unidentified card does not get
+extra transient retries. Exhaustion is logged and becomes that card's error without discarding
+other results. Ambiguous POST transport failures are not replayed because they may already
+have created background work. Nine-way concurrency is deployed to the cost-optimized Azure
+environment. Full-photo crop/decode work is serialized independently of the model calls to limit
+peak memory; reducing concurrency remains available if quota pressure increases.
+
+GPT-5 mini remains Global Standard, now allocated 300,000 TPM and 300 RPM rather than
+100,000 TPM and 100 RPM. This raises throughput limits, not individual model generation speed.
+No provisioned-throughput reservation or premium processing tier is used.
+
+Identification and pricing share one paced Scryfall HTTP pipeline: four requests/second per
+replica (at most two catalogue replicas). GETs retry transient HTTP failures twice, honor both
+forms of `Retry-After`, and apply the cooldown to queued calls too. Permanent errors are not
+retried or disguised as missing printings. Successful/404 printing searches are reused for up to
+one minute in a bounded per-catalogue cache; partial pages and failures are never cached.
+
+Worker logs include `token_usage` events for input/output, cached input and reasoning tokens,
+plus `response_summary` events with elapsed time, response/approval/correction counts and isolated
+throttle/service retries. Missing usage is explicitly logged rather than reported as zero.
+Worker logs also include `timing` events in milliseconds for source download, boundaries, each card's
 crop/store, identification and art verification, all cards, pricing, rendering, image storage,
 and total worker processing. Foundry logs time background Responses/tool approval/reply retrieval.
 `.\scripts\show-last-scan.ps1` includes job timing events. The worker total
@@ -229,10 +258,11 @@ token cache, without copying secrets into this repository. The ordinary pilot al
 grant diagnostics access. See [operator setup](docs/azure-setup.md#6-verification-and-cutover-gate) for
 the separate operator allowlist, permissions and privacy/retention considerations.
 
-Deploy the updated worker and rebuild/restart the desktop before comparing the same photos at
-concurrency 1, 2 and 3. Compare identity/printing accuracy as well as elapsed time and
-throttling. Pricing remains serialized with polite Scryfall pacing. No service SKU, model,
-replica count or quota is increased by this change; consider upgrades only after measurement.
+Compare the same photos at concurrency 1, 2, 3 and 9, including identity/printing/language accuracy,
+elapsed time, tool failures and throttling. Pricing remains serialized with polite Scryfall pacing.
+Lower reasoning effort was benchmarked but not retained: the candidate had catalogue failures,
+so the faster completion was not evidence of an accuracy-preserving speedup. Original reasoning,
+full-resolution card/footer images and all art-comparison candidates remain unchanged.
 Responses carry high-detail inline image bytes, not public blob URLs or persistent Files uploads.
 Transient response creation failures retry twice; quota refusals use the configured backoff.
 Authentication failures are not retried or downgraded to classic/anonymous calls. Tool failures

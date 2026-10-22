@@ -45,6 +45,11 @@ try {
         Assert ($app.properties.environmentId -eq '[parameters(''environmentId'')]') 'App is not using the supplied shared environment.'
         Assert ($app.identity.type -eq 'UserAssigned') 'Every app must retain a managed identity.'
     }
+    $mcpApps = @($apps | Where-Object { $_.properties.template.scale.minReplicas -eq 1 })
+    Assert ($mcpApps.Count -eq 2) 'Expected two warm MCP module definitions.'
+    foreach ($app in $mcpApps) {
+        Assert ($app.properties.template.scale.maxReplicas -le 2) 'Catalogue pacing assumes at most two MCP replicas.'
+    }
     $environmentInputs = @($template.resources | Where-Object {
         $_.type -eq 'Microsoft.Resources/deployments' -and $_.properties.parameters.ContainsKey('environmentId')
     } | ForEach-Object { $_.properties.parameters.environmentId.value } | Select-Object -Unique)

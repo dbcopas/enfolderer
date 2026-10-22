@@ -33,8 +33,10 @@ internal static class ConcurrencyChecks
             && unsupportedImages.Reads == 0 && unsupportedAgent.Completed.IsEmpty,
             "legacy unsupported queued jobs fail explicitly before image downloads or agent calls");
 
-        foreach (var concurrency in new[] { 1, 2, 3 })
+        check(new ScanPipelineOptions().MaxConcurrentCards == 9, "new branch defaults to nine concurrent cards");
+        foreach (var concurrency in new[] { 1, 2, 3, 9 })
         {
+            var count = concurrency == 9 ? 12 : 4;
             var store = new RecordingStore();
             var blobPrefix = concurrency == 1 ? null
                 : ScanBlobPaths.BuildJobPrefix("parallel", new DateTimeOffset(2026, 10, 20, 12, 0, 0, TimeSpan.Zero));
@@ -42,28 +44,28 @@ internal static class ConcurrencyChecks
             {
                 Id = "parallel", JobId = "parallel", BlobPrefix = blobPrefix, BlobPath = "scan.png"
             });
-            var agent = new IdentificationAgent();
+            var agent = new IdentificationAgent(requiredConcurrency: concurrency);
             var images = new Images();
-            var processor = new ScanJobProcessor(store, images, new Boundaries(), [agent],
+            var processor = new ScanJobProcessor(store, images, new Boundaries(count), [agent],
                 new ScanPipelineOptions { CropHeight = 140, MaxConcurrentCards = concurrency },
                 new Credential(), new ScanPlatformOptions(), NullLogger<ScanJobProcessor>.Instance);
             await processor.ProcessAsync(new ScanJobMessage("parallel", "scan.png", null), default);
             var job = await store.GetAsync("parallel");
             check(agent.Peak == concurrency, $"card concurrency reaches but never exceeds {concurrency}");
-            check(job?.Status == ScanJobStatus.Completed && job.CardsProcessed == 4 && job.CardsIdentified == 3
-                && job.Result!.Cards.Select(c => c.Index).SequenceEqual([0, 1, 2, 3])
-                && job.Result.Cards.Select(c => c.Quad!.BoundingBox().X).SequenceEqual(new double[] { 0, 100, 200, 300 })
+            check(job?.Status == ScanJobStatus.Completed && job.CardsProcessed == count && job.CardsIdentified == count - 1
+                && job.Result!.Cards.Select(c => c.Index).SequenceEqual(Enumerable.Range(0, count))
+                && job.Result.Cards.Select(c => c.Quad!.BoundingBox().X).SequenceEqual(Enumerable.Range(0, count).Select(i => i * 100d))
                 && job.Result.Cards[2].Error == "Test card failure",
                 "parallel completion preserves order, geometry and isolated card failures");
             check(concurrency == 1 || agent.Completed.First() != 0,
                 "results remain in reading order even when later cards finish first");
-            check(store.Progress.SequenceEqual([0, 1, 2, 3, 4, 4]),
+            check(store.Progress.SequenceEqual(Enumerable.Range(0, count + 1).Append(count)),
                 "persisted progress is monotonic and no concurrent update loses a completed card");
-            check(images.WrittenPaths.Count == 4 && Enumerable.Range(0, 4).All(index =>
+            check(images.WrittenPaths.Count == count && Enumerable.Range(0, count).All(index =>
                     images.WrittenPaths.Contains($"crops/{blobPrefix ?? "parallel"}/card-{index:D3}.png")),
                 "parallel workers keep every crop in the persisted dated or legacy job folder");
             await processor.ProcessAsync(new ScanJobMessage("parallel", "scan.png", null), default);
-            check(agent.Completed.Count == 3 && store.Progress.Count == 6,
+            check(agent.Completed.Count == count - 1 && store.Progress.Count == count + 2,
                 "duplicate queue delivery never reruns a completed scan");
         }
         var duplicateStore = new RecordingStore();
@@ -117,19 +119,20 @@ internal static class ConcurrencyChecks
         }
     }
 
-    private sealed class Boundaries : ICardBoundaryAgent
+    private sealed class Boundaries(int count = 4) : ICardBoundaryAgent
     {
         public string AgentId => "boundary";
         public Task<IReadOnlyList<DetectedBoundary>> DetectAsync(AgentImage image, string path, int width, int height,
             CancellationToken ct = default) => Task.FromResult<IReadOnlyList<DetectedBoundary>>(
-                Enumerable.Range(0, 4).Select(i => new DetectedBoundary(
+                Enumerable.Range(0, count).Select(i => new DetectedBoundary(
                     new CardQuad([new(i * 100, 0), new(i * 100 + 99, 0),
                         new(i * 100 + 99, 139), new(i * 100, 139)]), 1, CardGames.Magic)).ToArray());
     }
 
-    private sealed class IdentificationAgent(CancellationTokenSource? cancellation = null) : ICardIdentificationAgent
+    private sealed class IdentificationAgent(CancellationTokenSource? cancellation = null, int requiredConcurrency = 0) : ICardIdentificationAgent
     {
         private int _active;
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public System.Collections.Concurrent.ConcurrentQueue<int> Completed { get; } = new();
         public int Peak { get; private set; }
         public string Game => CardGames.Magic;
@@ -138,9 +141,11 @@ internal static class ConcurrencyChecks
         {
             var active = Interlocked.Increment(ref _active);
             lock (this) Peak = Math.Max(Peak, active);
+            if (active >= requiredConcurrency) _started.TrySetResult();
             try
             {
                 cancellation?.Cancel();
+                await _started.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
                 await Task.Delay(crop.Index == 0 ? 120 : 25, ct);
                 using var decoded = Image.Load<Rgba32>(crop.Image.Content.ToArray());
                 if (crop.Index == 2) throw new InvalidOperationException("Test card failure");
@@ -158,7 +163,7 @@ internal static class ConcurrencyChecks
         public Task<Stream> OpenReadAsync(string path, CancellationToken ct = default)
         {
             Reads++;
-            using var image = new Image<Rgba32>(400, 140);
+            using var image = new Image<Rgba32>(1200, 140);
             var stream = new MemoryStream();
             image.SaveAsPng(stream);
             stream.Position = 0;
