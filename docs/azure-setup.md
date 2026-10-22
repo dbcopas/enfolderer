@@ -269,6 +269,22 @@ it does not assign users, grant or consume credits, or change authentication pol
 
 ## 6. Verification and cutover gate
 
+The `collection-add-and-browse` branch adds a mobile-only scanned collection, separate from
+uploaded desktop snapshots. It needs no new Azure resources or permissions: the API uses its
+existing Entra access to the `collections` container. Each accepted scan is saved once at
+`{tenantId}/{objectId}/scanned/{jobId}.json`, using conditional creation to make retries safe
+across API replicas. Existing `{tenantId}/{objectId}/collection.json` snapshots remain unchanged.
+Include the `scanned/` receipts in any collection retention/backup policy; deleting scan images
+does not remove these saved quantities. Without Azure Storage, the explicitly logged local
+development fallback is in-memory and does not survive an API restart.
+
+After deploying this feature's API image, check **Add identified cards to collection** and
+**View scanned collection** with two users. Verify that a scan is counted once, separate scans
+increase only the matching set/collector-number/language quantity, set filtering works, and
+neither additions nor snapshot replacement/deletion changes the other collection. Browse/save
+must still work with no scan credits; existing ownership overlays continue to use the uploaded
+snapshot only. Authenticated collection responses must remain `no-store`.
+
 ```powershell
 .\scripts\test-cost-infrastructure.ps1
 .\scripts\test-scan-access.ps1 -NamePrefix $prefix
@@ -317,7 +333,7 @@ Deployed on 2026-10-19 into tenant `6a32cdb1-b813-4447-96d9-4f42e9cd37e3`,
 subscription `e3e0cdb6-dda9-477e-8d06-656c824ea765`, Sweden Central:
 
 - Subscription deployment: `enfolderer-cost`; current MTG-only image tag:
-  `v20261022-parallel-opt2` (all four apps).
+  `v20261022-collection` (all four apps, scanned-collection release).
 - New resource groups: `enf-cost-platform`, `enf-cost-cardgeo`, `enf-cost-cardid`.
 - Shared ACA environment: `enf-cost-platform-env`; Foundry account: `enf-cost-ai`.
 - API/mobile website: <https://enf-cost-api.purplefield-875302b1.swedencentral.azurecontainerapps.io>.

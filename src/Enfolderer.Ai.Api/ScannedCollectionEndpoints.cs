@@ -1,0 +1,63 @@
+using Enfolderer.Ai.Contracts;
+using Enfolderer.Ai.Infrastructure.Storage;
+
+namespace Enfolderer.Ai.Api;
+
+public static class ScannedCollectionEndpoints
+{
+    public static void MapScannedCollection(this WebApplication app, RouteGroupBuilder jobs)
+    {
+        var collection = app.MapGroup("/scanned-collection").RequireAuthorization();
+        collection.AddEndpointFilter<JobOwnerFilter>();
+        collection.MapGet("/", async (string? set, HttpContext http, IScannedCollectionStore store,
+            ILoggerFactory logs, CancellationToken ct) =>
+        {
+            set = set?.Trim().ToUpperInvariant();
+            if (set is { Length: > 0 } && (set.Length > 12 || !set.All(char.IsAsciiLetterOrDigit)))
+            {
+                logs.CreateLogger("ScannedCollection").LogWarning("Rejected invalid scanned collection set filter.");
+                return Results.BadRequest(new { error = "Choose a valid set code." });
+            }
+            var owner = JobOwnerFilter.ReadOwner(http.User)!.Value;
+            var printings = await store.ReadAsync(owner.TenantId, owner.ObjectId, ct);
+            return Results.Ok(new
+            {
+                sets = printings.Select(p => p.Set.ToUpperInvariant()).Distinct().Order().ToArray(),
+                totalPrintings = printings.Count,
+                totalQuantity = printings.Sum(p => (long)p.Quantity),
+                printings = string.IsNullOrEmpty(set) ? printings
+                    : printings.Where(p => string.Equals(p.Set, set, StringComparison.OrdinalIgnoreCase)).ToArray()
+            });
+        });
+
+        jobs.MapGet("/{jobId}/collection", async (string jobId, HttpContext http,
+            IScannedCollectionStore collections, CancellationToken ct) =>
+        {
+            var owner = JobOwnerFilter.ReadOwner(http.User)!.Value;
+            return Results.Ok(new { added = await collections.ContainsAsync(owner.TenantId, owner.ObjectId, jobId, ct) });
+        });
+
+        jobs.MapPost("/{jobId}/collection", async (string jobId, HttpContext http, IJobStore jobsStore,
+            IScannedCollectionStore collections, ILoggerFactory logs, CancellationToken ct) =>
+        {
+            var job = await jobsStore.GetAsync(jobId, ct);
+            if (job?.Status != ScanJobStatus.Completed || job.Result is null)
+                return Results.Conflict(new { error = "Only a completed scan can be added to your scanned collection." });
+            var addition = ScannedCollectionAddition.FromResult(jobId, job.Result);
+            if (addition.Printings.Count == 0)
+                return Results.BadRequest(new { error = "This scan has no identified cards with set and collector number to add." });
+            var owner = JobOwnerFilter.ReadOwner(http.User)!.Value;
+            var added = await collections.AddAsync(owner.TenantId, owner.ObjectId, addition, ct);
+            logs.CreateLogger("ScannedCollection").LogInformation(
+                "Scan {JobId} collection addition: {Outcome}, {Printings} printings.",
+                jobId, added ? "added" : "already added", addition.Printings.Count);
+            return Results.Ok(new
+            {
+                added,
+                quantity = addition.Printings.Sum(p => p.Quantity),
+                printings = addition.Printings.Count,
+                skipped = job.Result.Cards.Count - addition.Printings.Sum(p => p.Quantity)
+            });
+        });
+    }
+}

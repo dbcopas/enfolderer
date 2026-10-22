@@ -74,6 +74,7 @@ app.Use(async (context, next) =>
         "img-src 'self' blob:; connect-src 'self' https://login.microsoftonline.com; " +
         "frame-src 'self' https://login.microsoftonline.com https://login.live.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self'";
     if (context.Request.Path.StartsWithSegments("/jobs") || context.Request.Path.StartsWithSegments("/collection")
+        || context.Request.Path.StartsWithSegments("/scanned-collection")
         || context.Request.Path.StartsWithSegments("/diagnostics")
         || context.Request.Path.StartsWithSegments("/allowance") || context.Request.Path.StartsWithSegments("/admin"))
         context.Response.Headers.CacheControl = "no-store";
@@ -100,6 +101,7 @@ app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 var jobs = app.MapGroup("/jobs");
 jobs.RequireAuthorization();
 jobs.AddEndpointFilter<JobOwnerFilter>();
+app.MapScannedCollection(jobs);
 
 jobs.MapPost("/", async (
     CreateJobRequest request,

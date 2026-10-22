@@ -3,6 +3,8 @@ const $ = id => document.getElementById(id);
 let auth, account, config, photo, activeJob, polling = false, busy = false;
 let previewUrl, imageUrl, csvUrl, collectionAvailable = false;
 let scansAvailable = false;
+let resultJobId, eligibleCards = 0, scanAdded = false, addingToCollection = false, collectionLoading = false;
+let collectionRefreshPending = false;
 const scopes = () => [config.scope];
 const report = error => {
   console.error(error);
@@ -55,11 +57,96 @@ async function api(path, options = {}) {
 
 function setBusy(value) {
   busy = value;
-  $("scan").disabled = value || !photo || !scansAvailable;
-  for (const id of ["camera", "photo", "snapshot", "deleteCollection"]) $(id).disabled = value;
+  $("scan").disabled = value || addingToCollection || !photo || !scansAvailable;
+  for (const id of ["camera", "photo", "snapshot", "deleteCollection"]) $(id).disabled = value || addingToCollection;
   $("useCollection").disabled = value || !collectionAvailable;
   $("previewWrap").classList.toggle("scanning", value);
   $("scanSweep").hidden = !value;
+  updateCollectionButton();
+}
+
+function updateCollectionButton() {
+  $("addToScannedCollection").disabled = busy || addingToCollection || scanAdded || eligibleCards === 0;
+  $("addToScannedCollection").textContent = addingToCollection ? "Adding cards..."
+    : scanAdded ? "Scan already added" : "Add identified cards to collection";
+}
+
+async function loadScannedCollection() {
+  if (collectionLoading) {
+    collectionRefreshPending = true;
+    return;
+  }
+  collectionLoading = true;
+  $("collectionSet").disabled = true;
+  $("refreshScannedCollection").disabled = true;
+  $("scannedCollectionInfo").textContent = "Loading your scanned collection...";
+  $("scannedCollectionList").replaceChildren();
+  const selected = $("collectionSet").value;
+  try {
+    const data = await (await api("/scanned-collection/" + (selected ? "?set=" + encodeURIComponent(selected) : ""))).json();
+    $("collectionSet").replaceChildren();
+    const all = document.createElement("option");
+    all.value = "";
+    all.textContent = "All sets";
+    $("collectionSet").append(all);
+    for (const set of data.sets) {
+      const option = document.createElement("option");
+      option.value = set;
+      option.textContent = set;
+      $("collectionSet").append(option);
+    }
+    $("collectionSet").value = selected;
+    $("scannedCollectionInfo").textContent = data.totalPrintings === 0
+      ? "No scanned cards added yet. Complete a scan, then use Add identified cards to collection."
+      : `${data.totalQuantity.toLocaleString()} copies across ${data.totalPrintings.toLocaleString()} unique printings. `
+        + `${data.printings.length.toLocaleString()} ${data.printings.length === 1 ? "printing" : "printings"} shown${selected ? " in " + selected : ""}.`;
+    if (data.totalPrintings > 0 && data.printings.length === 0) {
+      $("scannedCollectionInfo").textContent += " No added cards in this set.";
+    }
+    for (const printing of data.printings) {
+      const row = document.createElement("article");
+      row.className = "card-row";
+      const title = document.createElement("strong");
+      title.textContent = printing.name;
+      const detail = document.createElement("p");
+      detail.textContent = `${printing.set} ${printing.number} | ${printing.language || "Unknown language"} | Quantity: ${printing.quantity.toLocaleString()}`;
+      row.append(title, detail);
+      $("scannedCollectionList").append(row);
+    }
+  } catch (error) {
+    $("scannedCollectionInfo").textContent = "Could not load your scanned collection. Use Refresh to try again.";
+    throw error;
+  } finally {
+    collectionLoading = false;
+    $("collectionSet").disabled = false;
+    $("refreshScannedCollection").disabled = false;
+    if (collectionRefreshPending) {
+      collectionRefreshPending = false;
+      await loadScannedCollection();
+    }
+  }
+}
+
+async function addScanToCollection() {
+  if (!resultJobId || addingToCollection || scanAdded || eligibleCards === 0 || busy) return;
+  const jobId = resultJobId;
+  addingToCollection = true;
+  setBusy(busy);
+  $("scanCollectionInfo").textContent = "Adding identified cards...";
+  try {
+    const result = await (await api(`/jobs/${jobId}/collection`, { method: "POST" })).json();
+    scanAdded = true;
+    $("scanCollectionInfo").textContent = result.added
+      ? `Added ${result.quantity} copies across ${result.printings} printings. ${result.skipped} unidentified or incomplete cards skipped.`
+      : "This scan is already in your scanned collection. Quantities were not changed.";
+    if (!$("scannedCollection").hidden) await loadScannedCollection();
+  } catch (error) {
+    if (!scanAdded) $("scanCollectionInfo").textContent = "Could not confirm the addition. Try again; the same scan will not be counted twice.";
+    throw error;
+  } finally {
+    addingToCollection = false;
+    setBusy(busy);
+  }
 }
 
 async function loadAllowance() {
@@ -86,7 +173,7 @@ async function loadCollection() {
 }
 
 async function choosePhoto(event) {
-  if (busy) return;
+  if (busy || addingToCollection) return;
   const file = event.target.files[0];
   event.target.value = "";
   if (!file) return;
@@ -145,6 +232,22 @@ function showProgress(job, started) {
 }
 
 async function showResults(result) {
+  resultJobId = activeJob.id;
+  scanAdded = false;
+  eligibleCards = result.cards.filter(card => card.game === "mtg" && card.name && card.set && card.collectorNumber && !card.error).length;
+  $("scanCollectionInfo").textContent = eligibleCards > 0
+    ? `${eligibleCards} identified cards can be added to your scanned collection.`
+    : "No identified cards with set and collector number are available to add.";
+  updateCollectionButton();
+  const collectionJobId = resultJobId;
+  try {
+    const state = await (await api(`/jobs/${collectionJobId}/collection`)).json();
+    if (resultJobId === collectionJobId) {
+      scanAdded = state.added;
+      if (scanAdded) $("scanCollectionInfo").textContent = "This scan is already in your scanned collection.";
+      updateCollectionButton();
+    }
+  } catch (error) { report(error); }
   $("results").hidden = false;
   $("summary").textContent = `${result.cards.length} cards detected. Download the overlay and price-ranked CSV below.`;
   $("cardList").replaceChildren();
@@ -226,7 +329,7 @@ async function pollJob() {
 }
 
 async function startScan() {
-  if (!photo || busy) return;
+  if (!photo || busy || addingToCollection) return;
   await loadAllowance();
   if (!scansAvailable) return;
   $("results").hidden = true;
@@ -292,6 +395,16 @@ $("camera").onchange = run(choosePhoto);
 $("photo").onchange = run(choosePhoto);
 $("scan").onclick = run(startScan);
 $("retry").onclick = run(pollJob);
+$("addToScannedCollection").onclick = run(addScanToCollection);
+$("viewScannedCollection").onclick = run(async () => {
+  const showing = $("scannedCollection").hidden;
+  $("scannedCollection").hidden = !showing;
+  $("viewScannedCollection").setAttribute("aria-expanded", String(showing));
+  $("viewScannedCollection").textContent = showing ? "Hide scanned collection" : "View scanned collection";
+  if (showing) await loadScannedCollection();
+});
+$("collectionSet").onchange = run(loadScannedCollection);
+$("refreshScannedCollection").onclick = run(loadScannedCollection);
 $("snapshot").onchange = run(async event => {
   const file = event.target.files[0];
   event.target.value = "";

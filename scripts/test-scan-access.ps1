@@ -81,7 +81,7 @@ $webConfig = Invoke-RestMethod "https://$api/web-config" -TimeoutSec 30
 if ($webConfig.enabled) {
     $website = Invoke-WebRequest "https://$api/" -TimeoutSec 30
     if ($website.Content -notmatch 'Pocket scanner') { throw 'Mobile website was not served by the API.' }
-    foreach ($path in '/collection/', '/jobs/anonymous-check/cards.csv') {
+    foreach ($path in '/collection/', '/scanned-collection/', '/jobs/anonymous-check/collection', '/jobs/anonymous-check/cards.csv') {
         $denied = Invoke-WebRequest "https://$api$path" -SkipHttpErrorCheck -TimeoutSec 30
         if ($denied.StatusCode -ne 401) { throw "Anonymous $path must return 401." }
     }

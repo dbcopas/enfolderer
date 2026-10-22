@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/site.css">
   <script defer src="/lib/msal-browser.min.js"
     integrity="sha384-TlDXht2cVvKBRAwDJrpYYtb+vUcYNxMgTELqFTRcnu0SP//KlFc7eE8so0+lJ03E" crossorigin="anonymous"></script>
-  <script defer src="/app.js?v=2"></script>
+  <script defer src="/app.js?v=3"></script>
 </head>
 <body>
   <header class="topbar">
@@ -32,6 +32,21 @@
     <div id="workspace" hidden>
       <p id="account" class="small muted"></p>
       <p id="allowance" class="small muted" role="status" aria-live="polite">Checking scan allowance...</p>
+      <div class="capture-actions">
+        <button id="viewScannedCollection" class="secondary" aria-expanded="false" aria-controls="scannedCollection">View scanned collection</button>
+      </div>
+      <section id="scannedCollection" class="panel" hidden aria-labelledby="scannedCollectionTitle">
+        <h2 id="scannedCollectionTitle">Your scanned collection</h2>
+        <p class="muted">Cards you added from scans, counted separately for each set, collector number and language. Uploaded desktop snapshots are kept separate.</p>
+        <div class="collection-controls">
+          <label for="collectionSet">Filter by set
+            <select id="collectionSet"><option value="">All sets</option></select>
+          </label>
+          <button id="refreshScannedCollection" class="secondary">Refresh</button>
+        </div>
+        <p id="scannedCollectionInfo" class="small muted" role="status" aria-live="polite"></p>
+        <div id="scannedCollectionList" class="card-list"></div>
+      </section>
       <section class="panel">
         <div class="section-heading"><span class="step">01</span><h2>Frame your cards</h2></div>
         <p class="muted">Use even light, keep the whole card in view, and avoid glare over titles and footer text.</p>
@@ -68,13 +83,16 @@
         <div class="capture-actions">
           <a id="imageDownload" class="button primary" hidden>Save overlay</a>
           <a id="csvDownload" class="button secondary" hidden>Download price-ranked CSV</a>
+          <button id="addToScannedCollection" class="secondary" disabled>Add identified cards to collection</button>
         </div>
+        <p id="scanCollectionInfo" class="small muted" role="status" aria-live="polite"></p>
+        <p class="small muted">Review uncertain printings before adding. Each identified card with a set and collector number adds one copy. Each scan can be added once; another scan adds more copies. This does not change your uploaded snapshot or existing overlays.</p>
         <p class="small muted">Both prices are shown: nonfoil, then foil. The gold trophy marks the highest-value printing you still need, using nonfoil or foil when nonfoil is unavailable. Pink panels mean a missing exact printing; amber means ownership is unknown. A double-faced card needs two copies. No trophy is shown when no known shortage has a price.</p>
         <div id="cardList" class="card-list"></div>
         <p class="small muted">Daily Cardmarket reference prices via Scryfall, not live offers. The CSV is a ranked report, not an import file. Confidence circles: green = placed, yellow = review, red = unidentified or low confidence.</p>
       </section>
       <details class="panel collection-panel">
-        <summary>My collection <span id="collectionBadge" class="badge">Not uploaded</span></summary>
+        <summary>Desktop ownership snapshot <span id="collectionBadge" class="badge">Not uploaded</span></summary>
         <p class="muted">In the desktop app, choose <strong>Scan &rarr; Export Mobile Collection Snapshot</strong>. Upload the JSON file here, from your phone or a computer signed into this website.</p>
         <p class="small muted">Only printing identifiers and quantities are stored, not your original databases, notes or card names. Re-export after your collection changes. Scans use the snapshot available when the overlay is rendered.</p>
         <label class="button secondary" for="snapshot">Upload / replace snapshot</label>

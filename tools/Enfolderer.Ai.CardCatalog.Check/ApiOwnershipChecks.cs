@@ -93,10 +93,10 @@ internal static class ApiOwnershipChecks
             && website.Contains("Sign-in may use your existing account or a code sent to your email")
             && !website.Contains("invited Microsoft account") && !website.Contains("Outlook.com users"),
             "mobile welcome explains invited-email sign-in without requiring a Microsoft account");
-        using var scriptResponse = await client.GetAsync("/app.js?v=2");
+        using var scriptResponse = await client.GetAsync("/app.js?v=3");
         scriptResponse.EnsureSuccessStatusCode();
         var mobileScript = await scriptResponse.Content.ReadAsStringAsync();
-        check(website.Contains("src=\"/app.js?v=2\"")
+        check(website.Contains("src=\"/app.js?v=3\"")
             && scriptResponse.Headers.CacheControl?.NoCache == true,
             "mobile script bypasses the old cached URL and requires revalidation on subsequent visits");
         check(mobileScript.Contains("gameHint: \"mtg\"") && !mobileScript.Contains("$(\"game\")"),
@@ -330,6 +330,8 @@ internal static class ApiOwnershipChecks
         using var absentCollection = await client.PostAsJsonAsync("/jobs/", new CreateJobRequest { UseCollection = true });
         check(removedSnapshot.StatusCode == HttpStatusCode.NoContent && absentCollection.StatusCode == HttpStatusCode.BadRequest,
             "snapshot deletion is supported and collection scans require an uploaded snapshot");
+        await ScannedCollectionChecks.RunAsync(check, client, store,
+            factory.Services.GetRequiredService<ICollectionSnapshotStore>(), Tenant, UserA, UserB);
         var csv = MobileWebEndpoints.Csv(new ScanResultDocument
         {
             Cards = [new IdentifiedCard { Set = "aaa", Name = "=Formula;\"Title\"", CollectorNumber = "1", Language = "en" }]
@@ -359,6 +361,8 @@ internal static class ApiOwnershipChecks
             pilotClient.DefaultRequestHeaders.Add("X-Test-User", UserB);
             using var deniedPilot = await pilotClient.GetAsync("/collection/");
             check(deniedPilot.StatusCode == HttpStatusCode.Forbidden, "private pilot rejects an authenticated but unapproved tenant user");
+            using var deniedScanned = await pilotClient.GetAsync("/scanned-collection/");
+            check(deniedScanned.StatusCode == HttpStatusCode.Forbidden, "scanned collection also enforces the pilot allowlist");
         }
         client.DefaultRequestHeaders.Remove("X-Test-User");
         client.DefaultRequestHeaders.Add("X-Test-User", "missing-scope");

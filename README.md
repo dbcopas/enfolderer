@@ -161,8 +161,29 @@ Unpriced cards sort last and ties retain scan order. This mobile report replaces
 five-column download and is not import-compatible. Desktop import CSVs remain unchanged.
 Spreadsheet formula prefixes are escaped.
 
+Use **Add identified cards to collection** on a completed scan to save its cards to your private
+**scanned collection**. Each identified MTG card with a set and collector number adds one copy;
+failed/unidentified cards and cards without a collector number are skipped. Review uncertain
+printings before adding them. Copies are counted by **set + collector number + language**, never
+by card name: two Swords to Plowshares printings stay separate. Foil finish is not inferred.
+Each scan can be added once, including after a page reload or a retry; a separate scan increases
+the corresponding quantities. Adding or browsing cards does not consume scan credits.
+
+Select **View scanned collection** to browse your added printings, see quantities, and filter by
+set. This collection is separate from desktop ownership snapshots: adding cards does not update
+desktop databases, uploaded snapshot quantities, ownership comparisons or previously rendered
+overlays. Replacing/deleting a snapshot does not remove scanned additions.
+
+Scanned additions are durable, owner-scoped, immutable receipts in the existing private
+`collections` blob container. Atomic create-if-absent writes prevent duplicate additions across
+API replicas and simultaneous clicks; different scans cannot overwrite each other.
+`GET /scanned-collection/?set=CMM` lists the current user's printings (omit `set` for all),
+while `POST /jobs/{jobId}/collection` saves only that user's stored completed scan results.
+`GET /jobs/{jobId}/collection` restores the already-added button state. All three routes enforce
+the same tenant, delegated permission, pilot allowlist and ownership policy as scans.
+
 For ownership, use **Scan > Export Mobile Collection Snapshot...** in the desktop app, then
-upload that JSON under **My collection** on the website (a computer signed into the same account
+upload that JSON under **Desktop ownership snapshot** on the website (a computer signed into the same account
 can upload it too). The export reads the same local database pair used by desktop scans.
 Only printing keys (set/number and public Gatherer IDs), exact quantities and locally computed all-printing totals leave
 the desktop; original databases, card names and personal notes are not uploaded. Replace it
