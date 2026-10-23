@@ -121,15 +121,23 @@ internal static class ApiOwnershipChecks
         check(website.Contains("Magic: The Gathering") && !website.Contains("id=\"game\"")
             && !website.Contains("pokemon", StringComparison.OrdinalIgnoreCase),
             "mobile UI advertises MTG without offering a game selector");
-        check(website.Contains("Sign in with your invited account")
+        check(website.Contains("Welcome to the beta")
             && website.Contains("Accept your invitation first, then use the same email address")
             && website.Contains("Sign-in may use your existing account or a code sent to your email")
             && !website.Contains("invited Microsoft account") && !website.Contains("Outlook.com users"),
             "mobile welcome explains invited-email sign-in without requiring a Microsoft account");
-        using var scriptResponse = await client.GetAsync("/app.js?v=4");
+        check(website.Contains("id=\"instructions\"") && website.Contains("id=\"accessRequestForm\"")
+            && !website.Contains("tenant", StringComparison.OrdinalIgnoreCase)
+            && !website.Contains("outlook", StringComparison.OrdinalIgnoreCase),
+            "beta guidance is collapsible, includes an access form and avoids provider/account-structure jargon");
+        check(website.Contains("MTG Studio database") && website.Contains("Enfolderer desktop client")
+            && website.Contains("Export Mobile Collection Snapshot") && website.Contains("upload the exported JSON file")
+            && website.Contains("No MTG Studio database? You can still save newly scanned cards"),
+            "collection guidance explains MTG Studio database export/upload prerequisites without blocking scanned-only saving");
+        using var scriptResponse = await client.GetAsync("/app.js?v=5");
         scriptResponse.EnsureSuccessStatusCode();
         var mobileScript = await scriptResponse.Content.ReadAsStringAsync();
-        check(website.Contains("src=\"/app.js?v=4\"")
+        check(website.Contains("src=\"/app.js?v=5\"")
             && scriptResponse.Headers.CacheControl?.NoCache == true,
             "mobile script bypasses the old cached URL and requires revalidation on subsequent visits");
         check(mobileScript.Contains("gameHint: \"mtg\"") && !mobileScript.Contains("$(\"game\")"),
@@ -469,6 +477,98 @@ internal static class ApiOwnershipChecks
             }
         }
         await CheckAllowancesAsync(check);
+        await CheckAccessRequestsAsync(check);
+    }
+
+    private static async Task CheckAccessRequestsAsync(Action<bool, string> check)
+    {
+        Console.WriteLine("\nBeta access requests: anonymous submission, durable inbox isolation and rate limits");
+        var requests = new InMemoryAccessRequestStore();
+        await using var factory = new WebApplicationFactory<JobOwnerFilter>().WithWebHostBuilder(builder =>
+        {
+            builder.UseContentRoot(Directory.GetCurrentDirectory());
+            builder.UseSetting("AzureAd:Instance", "https://login.microsoftonline.com/");
+            builder.UseSetting("AzureAd:TenantId", Tenant);
+            builder.UseSetting("AzureAd:ClientId", UserA);
+            builder.UseSetting("MobileWeb:AllowedUserObjectIds", $"{UserA},{UserB}");
+            builder.UseSetting("ScanAllowances:AdminUserObjectIds", UserA);
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IAccessRequestStore>();
+                services.AddSingleton<IAccessRequestStore>(requests);
+                services.AddAuthentication(options =>
+                {
+                    options.DefaultAuthenticateScheme = "AccessRequestTest";
+                    options.DefaultChallengeScheme = "AccessRequestTest";
+                }).AddScheme<AuthenticationSchemeOptions, TestIdentity>("AccessRequestTest", _ => { });
+            });
+        });
+        using var client = factory.CreateClient();
+        using var admin = factory.CreateClient();
+        admin.DefaultRequestHeaders.Add("X-Test-User", UserA);
+        using var anonymousRead = await client.GetAsync("/admin/access-requests/");
+        check(anonymousRead.StatusCode == HttpStatusCode.Unauthorized, "anonymous callers cannot read access request emails");
+        using var invalid = await client.PostAsJsonAsync("/access-requests", new { name = "", email = "bad", note = "" });
+        check(invalid.StatusCode == HttpStatusCode.BadRequest && (await requests.ReadAsync()).Count == 0,
+            "invalid request fields are rejected without persistence");
+        using var oversized = await client.PostAsync("/access-requests",
+            new StringContent(new string('x', 4097), System.Text.Encoding.UTF8, "application/json"));
+        check(oversized.StatusCode == HttpStatusCode.RequestEntityTooLarge, "public requests enforce the actual body size limit");
+        var request = new { name = "<b>Beta tester</b>", email = "beta@example.com", note = "Please invite me." };
+        using var sent = await client.PostAsJsonAsync("/access-requests", request);
+        check(sent.StatusCode == HttpStatusCode.Accepted && sent.Headers.CacheControl?.NoStore == true,
+            "anonymous users can save an access request without sign-in or granting themselves access");
+        using var duplicate = await client.PostAsJsonAsync("/access-requests", new
+        {
+            name = "Different name", email = " BETA@EXAMPLE.COM ", note = "Changed note"
+        });
+        var saved = (await requests.ReadAsync()).Single();
+        check(duplicate.StatusCode == HttpStatusCode.Accepted
+            && await sent.Content.ReadAsStringAsync() == await duplicate.Content.ReadAsStringAsync()
+            && saved.Name == request.name && saved.Email == request.email && saved.Note == request.note,
+            "case/whitespace email duplicates neither disclose nor overwrite pending requests");
+        using var malformed = await client.PostAsync("/access-requests",
+            new StringContent("{", System.Text.Encoding.UTF8, "application/json"));
+        check(malformed.StatusCode == HttpStatusCode.BadRequest, "malformed request JSON is rejected explicitly");
+        using var limited = await client.PostAsJsonAsync("/access-requests", request);
+        check(limited.StatusCode == HttpStatusCode.TooManyRequests
+            && limited.Headers.RetryAfter?.Delta == TimeSpan.FromSeconds(60),
+            "the sixth request is rate limited with retry guidance");
+        foreach (var caller in new[] { UserB, "other-tenant", "missing-scope", "missing-claims" })
+        {
+            client.DefaultRequestHeaders.Remove("X-Test-User");
+            client.DefaultRequestHeaders.Add("X-Test-User", caller);
+            using var denied = await client.GetAsync("/admin/access-requests/");
+            using var deniedDelete = await client.DeleteAsync("/admin/access-requests/" + saved.Id);
+            var status = await client.GetFromJsonAsync<System.Text.Json.JsonElement>("/access-requests/admin");
+            check(denied.StatusCode == HttpStatusCode.Forbidden && deniedDelete.StatusCode == HttpStatusCode.Forbidden
+                && !status.GetProperty("allowed").GetBoolean(),
+                "ordinary users, wrong accounts and missing scopes cannot discover or remove request details");
+        }
+        using var inbox = await admin.GetAsync("/admin/access-requests/");
+        var rows = await inbox.Content.ReadFromJsonAsync<AccessRequest[]>();
+        check(inbox.IsSuccessStatusCode && inbox.Headers.CacheControl?.NoStore == true && rows?.Single() == saved,
+            "only the configured admin can read the private no-store inbox");
+        using var invalidId = await admin.DeleteAsync("/admin/access-requests/bad");
+        check(invalidId.StatusCode == HttpStatusCode.BadRequest, "admin deletion rejects non-hash request IDs");
+        using var removed = await admin.DeleteAsync("/admin/access-requests/" + saved.Id);
+        check(removed.StatusCode == HttpStatusCode.NoContent && (await requests.ReadAsync()).Count == 0,
+            "admin can remove a reviewed request without changing account access");
+        await using var validationFactory = factory.WithWebHostBuilder(_ => { });
+        using var validationClient = validationFactory.CreateClient();
+        foreach (var fields in new[]
+        {
+            new { name = new string('x', 101), email = "valid@example.com", note = "" },
+            new { name = "Valid", email = "Display Name <valid@example.com>", note = "" },
+            new { name = "Valid", email = "valid@example.com\r\nInjected: true", note = "" },
+            new { name = "Valid", email = "valid@example.com", note = new string('x', 501) },
+            new { name = "Valid", email = "valid@example.com", note = "hidden\0control" }
+        })
+        {
+            using var rejected = await validationClient.PostAsJsonAsync("/access-requests", fields);
+            check(rejected.StatusCode == HttpStatusCode.BadRequest && (await requests.ReadAsync()).Count == 0,
+                "overlong fields, email display/header injection and invalid controls cannot enter the access inbox");
+        }
     }
 
     private static async Task CheckAllowancesAsync(Action<bool, string> check)

@@ -41,6 +41,7 @@ builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"));
 builder.Services.AddAuthorization();
+builder.Services.AddAccessRequestServices();
 builder.Services.AddProblemDetails();
 var webClientId = builder.Configuration["MobileWeb:ClientId"];
 var pilotUsers = (builder.Configuration["MobileWeb:AllowedUserObjectIds"] ?? "")
@@ -75,6 +76,7 @@ app.Use(async (context, next) =>
         "frame-src 'self' https://login.microsoftonline.com https://login.live.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self'";
     if (context.Request.Path.StartsWithSegments("/jobs") || context.Request.Path.StartsWithSegments("/collection")
         || context.Request.Path.StartsWithSegments("/scanned-collection")
+        || context.Request.Path.StartsWithSegments("/access-requests")
         || context.Request.Path.StartsWithSegments("/diagnostics")
         || context.Request.Path.StartsWithSegments("/allowance") || context.Request.Path.StartsWithSegments("/admin"))
         context.Response.Headers.CacheControl = "no-store";
@@ -91,7 +93,9 @@ app.UseStaticFiles(new StaticFileOptions
 });
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 app.MapMobileWeb();
+app.MapAccessRequests();
 app.MapScanDiagnostics();
 app.MapScanAllowances();
 

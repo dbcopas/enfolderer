@@ -6,6 +6,7 @@ let scansAvailable = false;
 let resultJobId, eligibleCards = 0, scanAdded = false, addingToCollection = false, collectionLoading = false;
 let collectionRefreshPending = false;
 let downloadingCollection = false, collectionCsvUrl;
+let accessInboxLoading = false;
 const scopes = () => [config.scope];
 const report = error => {
   console.error(error);
@@ -50,7 +51,7 @@ async function api(path, options = {}) {
         setBusy(busy);
       }
     } catch (error) { console.warn("The API error response was not JSON.", error); }
-    if (response.status === 403 && !detail.includes("scan allowance")) detail = "This account is not approved for the private pilot. Ask the administrator to invite and approve your account.";
+    if (response.status === 403 && !detail.includes("scan allowance")) detail = "This account cannot use this feature yet. Use Request access to contact Douglas, or sign out and use the email address on your invitation.";
     if (response.status === 413) detail = "This file is too large. Use a smaller photo or export a smaller collection snapshot.";
     throw new Error(detail);
   }
@@ -185,7 +186,7 @@ async function loadAllowance() {
   scansAvailable = allowance.unlimited || allowance.remaining > 0;
   $("allowance").textContent = allowance.unlimited ? "Unlimited scans"
     : `${allowance.remaining} scans remaining. One submitted photo uses one scan, including failed scans.`
-      + (scansAvailable ? "" : " Ask the administrator for more scans. Your previous downloads remain available.");
+      + (scansAvailable ? "" : " Use Request access to ask Douglas for more scans. Your previous downloads remain available.");
   setBusy(busy);
 }
 
@@ -196,7 +197,7 @@ async function loadCollection(preserveChoice = false) {
   $("collectionBadge").textContent = state.available ? "Ready" : "Not uploaded";
   $("collectionInfo").textContent = state.available
     ? `${state.printings.toLocaleString()} printings. Exported ${new Date(state.exportedAt).toLocaleString()}.`
-    : "No uploaded snapshot. Saved scanned cards still contribute to collection checks.";
+    : "No desktop collection uploaded. You can still check against cards saved from scans.";
   $("deleteCollection").hidden = !state.available;
   if (!collectionAvailable) $("useCollection").checked = false;
   else if (!preserveChoice || !wasAvailable) $("useCollection").checked = true;
@@ -285,7 +286,7 @@ async function showResults(result) {
     }
   } catch (error) { report(error); }
   $("results").hidden = false;
-  $("summary").textContent = `${result.cards.length} cards detected. Download the overlay and price-ranked CSV below.`;
+  $("summary").textContent = `${result.cards.length} cards found. Review the results, then download your labelled photo or price-ranked CSV.`;
   $("cardList").replaceChildren();
   const amount = value => value == null ? "unavailable" : new Intl.NumberFormat(undefined, { style: "currency", currency: "EUR" }).format(value);
   for (const card of result.cards) {
@@ -397,7 +398,7 @@ async function startScan() {
 
 async function initialize() {
   config = await (await fetch("/web-config", { cache: "no-store" })).json();
-  if (!config.enabled) throw new Error("Mobile sign-in has not been configured by the administrator.");
+  if (!config.enabled) throw new Error("Sign-in is not ready yet. You can still use Request access to contact Douglas.");
   if (!window.msal) throw new Error("The Microsoft sign-in library could not load. Check your connection and reload.");
   auth = new msal.PublicClientApplication({
     auth: { clientId: config.clientId, authority: `https://login.microsoftonline.com/${config.tenantId}`,
@@ -416,6 +417,10 @@ async function initialize() {
   $("signOut").hidden = false;
   $("account").textContent = `Signed in as ${account.username}`;
   $("autoAddToCollection").checked = sessionStorage.getItem(autoAddKey()) === "true";
+  try {
+    const inbox = await (await api("/access-requests/admin")).json();
+    $("accessInbox").hidden = !inbox.allowed;
+  } catch (error) { report(error); }
   try { await loadAllowance(); } catch (error) { report(error); }
   await loadCollection();
   const saved = sessionStorage.getItem(jobKey());
@@ -426,6 +431,84 @@ async function initialize() {
   }
 }
 
+async function sendAccessRequest(event) {
+  event.preventDefault();
+  const button = $("sendAccessRequest");
+  if (button.disabled) return;
+  button.disabled = true;
+  $("accessRequestStatus").textContent = "Sending your request...";
+  try {
+    const response = await fetch("/access-requests", {
+      method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: $("requestName").value.trim(), email: $("requestEmail").value.trim(),
+        note: $("requestNote").value.trim() })
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Your request could not be saved. Please try again.");
+    $("accessRequestStatus").textContent = body.message;
+    $("accessRequestForm").reset();
+  } catch (error) {
+    $("accessRequestStatus").textContent = "Your request was not confirmed. Please try again.";
+    throw error;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadAccessRequests() {
+  if (accessInboxLoading) return;
+  accessInboxLoading = true;
+  const button = $("refreshAccessRequests");
+  button.disabled = true;
+  $("accessInboxStatus").textContent = "Loading requests...";
+  $("accessInboxList").replaceChildren();
+  try {
+    const requests = await (await api("/admin/access-requests/")).json();
+    $("accessInboxStatus").textContent = `${requests.length} pending ${requests.length === 1 ? "request" : "requests"}. Refresh to check for new arrivals.`;
+    for (const request of requests) {
+      const row = document.createElement("article");
+      row.className = "card-row";
+      const name = document.createElement("strong");
+      name.textContent = request.name;
+      const detail = document.createElement("p");
+      detail.textContent = `${request.email} (unverified) | ${new Date(request.createdAt).toLocaleString()}`;
+      const note = document.createElement("p");
+      note.textContent = request.note;
+      const remove = document.createElement("button");
+      remove.className = "quiet danger";
+      remove.textContent = "Remove request";
+      remove.onclick = run(async () => {
+        if (!confirm("Remove this request from the inbox? This does not change the person's access.")) return;
+        remove.disabled = true;
+        try {
+          await api("/admin/access-requests/" + encodeURIComponent(request.id), { method: "DELETE" });
+          await loadAccessRequests();
+        } finally { remove.disabled = false; }
+      });
+      row.append(name, detail, note, remove);
+      $("accessInboxList").append(row);
+    }
+  } catch (error) {
+    $("accessInboxStatus").textContent = "Could not load requests. Use Refresh requests to try again.";
+    throw error;
+  } finally {
+    accessInboxLoading = false;
+    button.disabled = false;
+  }
+}
+
+$("accessRequestForm").onsubmit = run(sendAccessRequest);
+$("openAccessRequest").onclick = () => {
+  $("requestAccess").open = true;
+  $("requestName").focus();
+};
+$("requestAccess").ontoggle = () => {
+  $("openAccessRequest").setAttribute("aria-expanded", String($("requestAccess").open));
+};
+$("refreshAccessRequests").onclick = run(loadAccessRequests);
+$("accessInbox").ontoggle = run(async () => {
+  if ($("accessInbox").open) await loadAccessRequests();
+});
 $("signIn").onclick = run(() => auth.loginRedirect({ scopes: scopes(), prompt: "select_account" }));
 $("signOut").onclick = run(async () => { polling = false; await auth.logoutRedirect({ account }); });
 $("camera").onchange = run(choosePhoto);

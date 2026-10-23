@@ -238,7 +238,31 @@ internal static class ScannedCollectionChecks
         check(isolated.Count == 4 && isolated.Sum(p => p.Quantity) == 6
             && await firstReplica.ContainsAsync(tenant, userA, job.JobId),
             "Blob prefix listing isolates users and the saved-scan status survives new store instances");
+        var requestStore = new BlobAccessRequestStore(service);
+        var request = new AccessRequest(AccessRequest.EmailId("beta@example.com"), "Beta", "beta@example.com",
+            "Please invite me.", DateTimeOffset.UtcNow);
+        await Task.WhenAll(Enumerable.Range(0, 5).Select(_ => requestStore.AddAsync(request)));
+        await requestStore.AddAsync(request with { Name = "Overwritten" });
+        var pending = await new BlobAccessRequestStore(service).ReadAsync();
+        check(pending.Count == 1 && pending[0] == request
+            && wire.Documents.ContainsKey("/collections/" + BlobAccessRequestStore.Prefix + request.Id + ".json"),
+            "access requests survive fresh Blob-backed stores and concurrent retries cannot overwrite them");
+        check((await firstReplica.ReadAsync(tenant, userA)).Count == 4
+            && pending.All(r => r.Email == "beta@example.com"),
+            "access inbox and scanned collection listings use disjoint prefixes");
+        await requestStore.DeleteAsync(request.Id);
+        check((await requestStore.ReadAsync()).Count == 0 && wire.Documents.Count == 2,
+            "removing a request preserves all scanned collection receipts");
         wire.Fail = true;
+        try
+        {
+            await requestStore.AddAsync(request);
+            check(false, "access request storage errors must not return success");
+        }
+        catch (RequestFailedException e)
+        {
+            check(e.Status == 403, "access request storage permission failures are surfaced");
+        }
         try
         {
             await firstReplica.AddAsync(tenant, userA, addition);
@@ -287,6 +311,11 @@ internal static class ScannedCollectionChecks
             }
             if (!Documents.TryGetValue(request.RequestUri.AbsolutePath, out var content))
                 return Error(HttpStatusCode.NotFound, "BlobNotFound");
+            if (request.Method == HttpMethod.Delete)
+            {
+                Documents.TryRemove(request.RequestUri.AbsolutePath, out _);
+                return Success(HttpStatusCode.Accepted, []);
+            }
             if (request.Method == HttpMethod.Head)
             {
                 var properties = Success(HttpStatusCode.OK, []);

@@ -14,7 +14,7 @@ public static class ScanAllowanceEndpoints
 
     public static IResult Exhausted() => Results.Json(new
     {
-        error = "Your scan allowance is exhausted or has not been granted. Ask the administrator for more scans. Previous results remain available.",
+        error = "Your scan allowance has no credits available. Use Request access to ask Douglas for more scans. Previous results remain available.",
         code = "scan_allowance_exhausted"
     }, statusCode: StatusCodes.Status403Forbidden);
 

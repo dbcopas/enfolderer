@@ -269,6 +269,39 @@ it does not assign users, grant or consume credits, or change authentication pol
 
 ## 6. Verification and cutover gate
 
+### Beta access requests and email availability
+
+The 2026-10-23 subscription check found `Microsoft.Communication` registered and an existing
+`UDACS` Communication Services resource, but no Email Communication Service, verified/linked
+email domain, SendGrid resource, Logic App or email connection. This means there is **no configured
+sender**, not that the subscription is fundamentally unable to send email. No email was sent to
+`douglas.copas@gmail.com`, and no paid email resources were provisioned. Setting up a verified
+sender, quota and delivery handling is a separate decision.
+
+Instead, deploy the API image for the **Request access** form and private inbox. It uses the
+existing API Blob Data Contributor grant on `collections`, under `_access-requests/`; no
+infrastructure or permission change is needed. Request emails are unverified, and requests
+never bypass app assignment, the pilot allowlist, or scan allowances.
+
+To review requests, sign in at the mobile website as an identity in
+`ScanAllowances:AdminUserObjectIds`, open **Access requests (admin)**, and refresh when needed.
+After checking the supplied details, use the existing invitation/approval and allowance process;
+then **Remove request** to delete the stored personal details. Removing a request does not revoke
+access. Retain this prefix during scan cleanup; do not treat it as an obsolete scan folder.
+As a fallback, open Storage Account > Containers > collections > `_access-requests` in Azure
+Portal and view the JSON with your authorized storage identity.
+
+Verify anonymous valid submissions return 202, malformed fields return 400, bodies over 4096
+bytes return 413, and the sixth request in a minute returns 429 with `Retry-After: 60`.
+Duplicate normalized emails must return the same acknowledgement without replacing the
+original. Confirm a fresh API instance reads the saved request, only allowance admins can
+read/delete it, and ordinary users cannot see the inbox. All request responses must be
+`no-store`. The basic rate limit is global per API process; reassess abuse protection before
+scaling or advertising a public beta. Keep the collapse-by-default help and request form
+usable at phone width and without an active sign-in session.
+
+### Scan storage and collections
+
 New scan folders in `scans`, `crops` and `outputs` use `firstName-yyMMdd-HHmm-jobId`,
 for example `Douglas-261022-1530-<job-id>`, with UTC time. The API uses the authenticated
 given name, then the first display-name word, or an explicitly logged `user-<owner-object-id>`
@@ -287,7 +320,7 @@ does not remove these saved quantities. Without Azure Storage, the explicitly lo
 development fallback is in-memory and does not survive an API restart.
 
 Deploy both the API and worker images for the automatic-add and combined-ownership changes.
-The default-off **Automatically add identified cards to scanned collection** switch is captured
+The default-off **Automatically save identified cards** switch is captured
 on each new job; the worker saves after rendering ownership, even if the browser closes.
 Ownership excludes the current scan's receipt on a retry. Automatic save failures preserve
 completed results and expose an explicit manual-retry message.
@@ -360,7 +393,7 @@ Deployed on 2026-10-19 into tenant `6a32cdb1-b813-4447-96d9-4f42e9cd37e3`,
 subscription `e3e0cdb6-dda9-477e-8d06-656c824ea765`, Sweden Central:
 
 - Subscription deployment: `enfolderer-cost`; current MTG-only image tag:
-  `v20261022-collection-csv` (all four apps, mobile scanned-collection CSV download).
+  `v20261023-beta-access` (all four apps, clearer beta UI and a private access-request inbox).
 - New resource groups: `enf-cost-platform`, `enf-cost-cardgeo`, `enf-cost-cardid`.
 - Shared ACA environment: `enf-cost-platform-env`; Foundry account: `enf-cost-ai`.
 - API/mobile website: <https://enf-cost-api.purplefield-875302b1.swedencentral.azurecontainerapps.io>.

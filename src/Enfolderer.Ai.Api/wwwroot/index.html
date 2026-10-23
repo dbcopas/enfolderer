@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/site.css">
   <script defer src="/lib/msal-browser.min.js"
     integrity="sha384-TlDXht2cVvKBRAwDJrpYYtb+vUcYNxMgTELqFTRcnu0SP//KlFc7eE8so0+lJ03E" crossorigin="anonymous"></script>
-  <script defer src="/app.js?v=4"></script>
+  <script defer src="/app.js?v=5"></script>
 </head>
 <body>
   <header class="topbar">
@@ -19,25 +19,69 @@
     <section class="intro">
       <p class="eyebrow">YOUR COLLECTION, IN FOCUS</p>
       <h1>A little camera.<br>A lot of card knowledge.</h1>
-      <p class="muted">Photograph a Magic: The Gathering binder page or loose MTG cards. Get exact printings, both prices, and a picture of what your collection still needs.</p>
+      <p class="muted">Turn a photo of your Magic: The Gathering cards into a card list, price guide, and collection check.</p>
     </section>
     <div id="message" class="message" role="alert" hidden></div>
     <section id="welcome" class="panel">
       <div class="icon-orbit" aria-hidden="true">+</div>
-      <h2>Your pocket scanner</h2>
-      <p>Sign in with your invited account. Your photos and collection snapshot are private to your account.</p>
+      <h2>Welcome to the beta</h2>
+      <p>Already invited? Sign in with the email address you used for your invitation. Your photos and collection are private to you.</p>
       <button id="signIn" class="primary" disabled>Preparing sign-in...</button>
-      <p class="small muted">Private pilot. Accept your invitation first, then use the same email address. Sign-in may use your existing account or a code sent to your email.</p>
+      <p class="small muted">Accept your invitation first, then use the same email address. Sign-in may use your existing account or a code sent to your email. Check your spam folder if the invitation is missing.</p>
     </section>
+    <div class="capture-actions">
+      <button id="openAccessRequest" class="secondary" aria-controls="requestAccess" aria-expanded="false">Request access</button>
+    </div>
+    <details id="requestAccess" class="panel collection-panel">
+      <summary>Access request form</summary>
+      <p>Want to try the beta, or need help getting in? Send Douglas your details. No sign-in is needed.</p>
+      <form id="accessRequestForm" class="request-form">
+        <label for="requestName">Your name</label>
+        <input id="requestName" name="name" autocomplete="name" maxlength="100" required>
+        <label for="requestEmail">Email for your invitation</label>
+        <input id="requestEmail" name="email" type="email" autocomplete="email" maxlength="254" required>
+        <label for="requestNote">Anything else? (optional)</label>
+        <textarea id="requestNote" name="note" rows="3" maxlength="500"></textarea>
+        <p class="small muted">Your details are saved privately for Douglas to review, not emailed. This does not create an account or grant access. Please do not include passwords or other sensitive information.</p>
+        <button id="sendAccessRequest" class="primary" type="submit">Send access request</button>
+        <p id="accessRequestStatus" class="small muted" role="status" aria-live="polite"></p>
+      </form>
+    </details>
+    <details id="instructions" class="panel collection-panel">
+      <summary>How to use the scanner &amp; understand your results</summary>
+      <h3>1. Take a clear photo</h3>
+      <p>Use even light, avoid glare, and keep every card fully visible. You can photograph a binder page or loose cards. This beta supports Magic: The Gathering only.</p>
+      <h3>2. Scan and review</h3>
+      <p>Choose <strong>Identify my cards</strong> and allow a few minutes. One submitted photo uses one scan credit, even if identification fails. Reconnecting to the same scan does not use another credit. If you run out, request more scans from Douglas using the access request form.</p>
+      <p>Check the card name, set and collector number before relying on a result. Green circles mean the card was placed; yellow means review it; red means it was not identified reliably.</p>
+      <h3>3. Read the photo and prices</h3>
+      <p>Prices are shown as nonfoil, then foil. They are daily Cardmarket reference prices via Scryfall, not live offers. The scanner does not determine whether your physical card is foil.</p>
+      <p>With collection checking enabled, pink panels mark an exact printing you still need; amber means ownership could not be determined. The gold trophy highlights the highest-value printing you still need, using the foil price only when no nonfoil price is available. Double-faced cards use a two-copy target.</p>
+      <h3>4. Save cards to your collection</h3>
+      <p><strong>Add identified cards to collection</strong> saves one copy of each identified card with a set and collector number. The same scan can only be added once; scanning those cards again adds more copies. Different sets, collector numbers and languages stay separate.</p>
+      <p>Turn on <strong>Automatically save identified cards</strong> before scanning to skip the manual save step. It is off by default and remembered for this browser tab. Leave it off if you want to review first. Saving continues even if you close the page; a failed save can be retried manually.</p>
+      <h3>5. Check what you own and download your cards</h3>
+      <p>To track your existing collection, you need an <strong>MTG Studio database</strong> containing your cards. Open that database in the <strong>Enfolderer desktop client</strong>, choose <strong>Scan &rarr; Export Mobile Collection Snapshot</strong>, then upload the exported JSON file in <strong>Track an existing MTG Studio collection</strong> below. Do not upload the database itself. Export and upload again when your collection changes.</p>
+      <p><strong>Check my collection</strong> compares against saved scanned cards and any optional desktop collection file. If the same copies appear in both, they are counted twice. Ownership totals combine languages. A scan does not count its own newly saved cards, and saving later does not change an existing result photo.</p>
+      <p>No MTG Studio database? You can still save newly scanned cards and check against those saved cards. They are stored separately and do not update an MTG Studio database.</p>
+      <p><strong>View scanned collection</strong> lets you filter by set and download saved quantities as CSV. The scan-result CSV is a separate price-ranked report, not a desktop import file. Downloads and collection browsing do not use scan credits.</p>
+    </details>
     <div id="workspace" hidden>
       <p id="account" class="small muted"></p>
       <p id="allowance" class="small muted" role="status" aria-live="polite">Checking scan allowance...</p>
+      <details id="accessInbox" class="panel collection-panel" hidden>
+        <summary>Access requests (admin)</summary>
+        <p class="small muted">Submitted details are unverified. Review them before sending an invitation or granting scans. Nothing here approves access automatically.</p>
+        <button id="refreshAccessRequests" class="secondary">Refresh requests</button>
+        <p id="accessInboxStatus" class="small muted" role="status" aria-live="polite"></p>
+        <div id="accessInboxList" class="card-list"></div>
+      </details>
       <div class="capture-actions">
         <button id="viewScannedCollection" class="secondary" aria-expanded="false" aria-controls="scannedCollection">View scanned collection</button>
       </div>
       <section id="scannedCollection" class="panel" hidden aria-labelledby="scannedCollectionTitle">
         <h2 id="scannedCollectionTitle">Your scanned collection</h2>
-        <p class="muted">Cards you added from scans, counted separately for each set, collector number and language. Uploaded desktop snapshots are kept separate.</p>
+        <p class="muted">Cards you have saved from scans, with a quantity for each printing and language. Desktop collection files are not included here.</p>
         <div class="collection-controls">
           <label for="collectionSet">Filter by set
             <select id="collectionSet"><option value="">All sets</option></select>
@@ -65,9 +109,9 @@
         <p id="photoInfo" class="small muted"></p>
         <div class="scan-options">
           <label class="check"><input id="useCollection" type="checkbox" disabled> Check my collection</label>
-          <label class="check auto-add"><input id="autoAddToCollection" type="checkbox" role="switch"> Automatically add identified cards to scanned collection</label>
+          <label class="check auto-add"><input id="autoAddToCollection" type="checkbox" role="switch"> Automatically save identified cards</label>
         </div>
-        <p class="small muted">Collection checks combine your uploaded snapshot and saved scanned cards. Copies present in both sources are counted twice. Auto-add applies to new scans and runs after ownership is calculated, even if you close this page.</p>
+        <p class="small muted">Auto-save skips manual review. Leave it off to check results before adding cards. See the instructions above for collection and price details.</p>
         <button id="scan" class="primary full" disabled>Identify my cards</button>
       </section>
       <section id="progressPanel" class="panel" hidden aria-label="Scan progress">
@@ -77,7 +121,7 @@
         <progress id="progress" max="1" aria-label="Cards processed"></progress>
         <ol class="stages"><li id="stageUpload">Upload</li><li id="stageDetect">Detect</li><li id="stageIdentify">Identify</li><li id="stageRender">Price &amp; overlay</li></ol>
         <p id="elapsed" class="small muted"></p>
-        <p class="small muted">Progress reflects completed work. Keep this page open; if it reloads, your latest scan will resume.</p>
+        <p class="small muted">Scanning can take a few minutes. You can leave this page open to watch, or return in the same browser tab to reconnect.</p>
         <button id="retry" class="secondary" hidden>Reconnect to scan</button>
       </section>
       <section id="results" class="panel" hidden>
@@ -85,19 +129,18 @@
         <p id="summary" class="muted"></p>
         <img id="resultImage" class="result-image" alt="Card photo with prices, printing labels and collection overlays" hidden>
         <div class="capture-actions">
-          <a id="imageDownload" class="button primary" hidden>Save overlay</a>
+          <a id="imageDownload" class="button primary" hidden>Download result photo</a>
           <a id="csvDownload" class="button secondary" hidden>Download price-ranked CSV</a>
           <button id="addToScannedCollection" class="secondary" disabled>Add identified cards to collection</button>
         </div>
         <p id="scanCollectionInfo" class="small muted" role="status" aria-live="polite"></p>
-        <p class="small muted">Review uncertain printings before adding manually, or leave auto-add off when you want to review first. Each identified card with a set and collector number adds one copy. Each scan can be added once; another scan adds more copies. Uploaded quantities stay unchanged; saved cards contribute to future ownership checks, not existing overlays.</p>
-        <p class="small muted">Both prices are shown: nonfoil, then foil. The gold trophy marks the highest-value printing you still need, using nonfoil or foil when nonfoil is unavailable. Pink panels mean a missing exact printing; amber means ownership is unknown. A double-faced card needs two copies. No trophy is shown when no known shortage has a price.</p>
+        <p class="small muted">Check uncertain cards before saving. Each scan can be added once. For colour meanings, price details and collection rules, open the instructions above.</p>
         <div id="cardList" class="card-list"></div>
-        <p class="small muted">Daily Cardmarket reference prices via Scryfall, not live offers. The CSV is a ranked report, not an import file. Confidence circles: green = placed, yellow = review, red = unidentified or low confidence.</p>
+        <p class="small muted">Reference prices are a guide, not guaranteed sale values. Please report incorrect identifications to Douglas.</p>
       </section>
       <details class="panel collection-panel">
-        <summary>Desktop ownership snapshot <span id="collectionBadge" class="badge">Not uploaded</span></summary>
-        <p class="muted">In the desktop app, choose <strong>Scan &rarr; Export Mobile Collection Snapshot</strong>. Upload the JSON file here, from your phone or a computer signed into this website.</p>
+        <summary>Track an existing MTG Studio collection <span id="collectionBadge" class="badge">Not uploaded</span></summary>
+        <p class="muted">You need an MTG Studio database of your collection and the Enfolderer desktop client. Open your database in Enfolderer, choose <strong>Scan &rarr; Export Mobile Collection Snapshot</strong>, and upload the exported JSON file here. You can upload from your phone or a computer signed into this website. Upload the exported file, not the MTG Studio database.</p>
         <p class="small muted">Only printing identifiers and quantities are stored, not your original databases, notes or card names. Re-export after your collection changes. Scans use the snapshot available when the overlay is rendered.</p>
         <label class="button secondary" for="snapshot">Upload / replace snapshot</label>
         <input id="snapshot" class="file-input" type="file" accept=".json,application/json">

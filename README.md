@@ -148,7 +148,39 @@ Guests sign in with the invited email address, using their existing identity or 
 one-time passcode when enabled in Entra. A Microsoft account is not required for email-passcode guests.
 See [mobile setup](docs/azure-setup.md#5-mobile-website-and-separate-desktop-configuration).
 
-On a phone, take or select a photo, choose the game, and start the scan. The browser normalizes
+The beta welcome uses plain-language invitation guidance rather than identity-provider or
+directory terminology. **How to use the scanner & understand your results** is collapsed by
+default and explains photo quality, scan credits, uncertain results, prices, collection checking,
+automatic saving and downloads. Tracking an existing collection requires an MTG Studio database,
+exported as a mobile collection snapshot from the Enfolderer desktop client and uploaded to the
+website; users must not upload the raw database. The instructions distinguish that workflow
+from saving newly scanned cards, which needs no MTG Studio database. The default-off auto-save switch is labelled
+**Automatically save identified cards**; its behaviour is unchanged.
+
+**Request access** opens a public form for a name, invitation email and optional note. It works
+before sign-in, including when sign-in is unavailable, and can also be used to request more scans.
+Submissions are saved privately, not sent by email. Signed-in scan-allowance administrators see
+**Access requests (admin)** in the mobile workspace. Open it (or use **Refresh requests**) to see
+pending requests and remove them after review. Emails are self-reported and unverified; the form
+does not create users, send invitations, approve access or grant credits.
+
+`POST /access-requests` accepts bounded JSON (4096 bytes; name 100, email 254, note 500 characters).
+A global-per-API-process limiter permits five submissions per minute, without an unbounded
+per-IP cache or trusting forwarded headers. This is basic beta abuse protection, not a CAPTCHA
+or a cross-replica quota; monitor public usage before opening the beta widely. Pending requests
+are deduplicated by normalized email with conditional blob creation, so retries cannot replace
+someone else's pending details or reveal whether an address is already recorded.
+
+Requests use `_access-requests/<SHA256-of-normalized-email>.json` in the existing private
+`collections` container. No new Azure service, permission, anonymous blob access or email charge
+is required. Keep this prefix when cleaning scan images. Details persist until an administrator
+removes them; review and delete them promptly, including unverifiable/spam requests. The authenticated
+`GET /admin/access-requests/` and `DELETE /admin/access-requests/{id}` routes require the configured
+allowance-admin identity and delegated scan scope, and all request routes are `no-store`.
+Azure Portal storage browsing can also inspect the private JSON if API sign-in is unavailable.
+Local development without storage logs an explicit warning and uses a non-durable in-memory inbox.
+
+On a phone, take or select an MTG photo and start the scan. The browser normalizes
 orientation, removes metadata and caps the longest edge at 4096 pixels before upload. Use a
 browser-readable JPEG/PNG if HEIC is unsupported. Real stages and processed/identified counts
 drive the progress display; the grayscale preview and animated sweep indicate activity, not a
@@ -169,7 +201,7 @@ by card name: two Swords to Plowshares printings stay separate. Foil finish is n
 Each scan can be added once, including after a page reload or a retry; a separate scan increases
 the corresponding quantities. Adding or browsing cards does not consume scan credits.
 
-Alternatively, enable **Automatically add identified cards to scanned collection** before
+Alternatively, enable **Automatically save identified cards** before
 starting a scan. This switch is off by default and remembers your choice for your signed-in
 account in the current browser tab. It applies to new scans only. The worker saves eligible
 cards after calculating ownership, even if you close the page, so a scan does not count its own
