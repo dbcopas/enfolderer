@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Azure.Core;
+using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Worker.Agents;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -12,6 +13,34 @@ internal static class FoundryResponseChecks
     public static async Task RunAsync(Action<bool, string> check)
     {
         Console.WriteLine("\nFoundry agent-identity Responses transport");
+        var audit = new List<ScanEvidenceEvent>();
+        using (var response = JsonDocument.Parse("""
+            {"id":"response-audit","status":"completed","usage":{"input_tokens":20,"output_tokens":5},
+             "input":[{"image_url":"SECRET_IMAGE"}],
+             "output":[{"type":"reasoning","encrypted_content":"SECRET_REASONING","summary":[]},
+              {"type":"mcp_call","name":"resolve_printing","server_label":"catalogue",
+               "arguments":"{\"name\":\"Mutavault\",\"set\":\"prm\",\"promoLabel\":\"Grand Prix\",\"authorization\":\"SECRET_TOKEN\"}",
+               "output":"{\"found\":true,\"set\":\"pgpx\",\"collectorNumber\":\"2018\",\"name\":\"Mutavault\",\"alternates\":[{\"set\":\"pgpx\",\"collectorNumber\":\"2018\",\"imageUrl\":\"https://cards.scryfall.io/card.jpg?sig=SECRET_SIGNATURE\",\"encrypted_content\":\"SECRET_INTERNAL\"}]}"},
+              {"type":"mcp_call","name":"other","server_label":"unapproved",
+               "arguments":"{\"name\":\"SECRET_UNAPPROVED\"}"}]}
+            """))
+            FoundryEvidence.RecordResponse(response.RootElement, "CardAgent", "catalogue", audit.Add);
+        var archived = JsonSerializer.Serialize(audit, ScanJson.Options);
+        check(audit.Count == 3 && archived.Contains("Mutavault") && archived.Contains("Grand Prix")
+            && archived.Contains("2018") && archived.Contains("response-audit") && !archived.Contains("SECRET"),
+            "audit preserves observable catalogue arguments/results/usage while excluding hidden reasoning, credentials, input images and unapproved-server payloads");
+        using (var handler = new FlowHandler(malformed: true))
+        using (var http = new HttpClient(handler))
+        {
+            audit.Clear();
+            await Client(http).RunAsync("CardAgent", "identify", null, "catalogue", default,
+                validateReply: r => { using var _ = JsonDocument.Parse(r); }, recordEvidence: audit.Add);
+            check(handler.Deletes == 3 && audit.Count(e => e.Kind == "response") == 3
+                && audit.Count(e => e.Kind == "validation_failed") == 1
+                && audit.Count(e => e.Kind == "validation_passed") == 1
+                && audit.Count(e => e.Kind == "assistant_reply") == 2,
+                "rejected and corrected replies remain readable after Foundry response cleanup");
+        }
         using (var response = JsonDocument.Parse("""
             {"usage":{"input_tokens":2000,"output_tokens":300,
             "input_tokens_details":{"cached_tokens":1024},"output_tokens_details":{"reasoning_tokens":200}}}

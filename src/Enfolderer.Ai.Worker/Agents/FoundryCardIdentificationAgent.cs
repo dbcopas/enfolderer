@@ -79,16 +79,23 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
         IdentifyAsync(crop, null, ct);
 
     public Task<IdentifiedCard> ReviewPrintingAsync(CardCrop crop, IdentifiedCard previous, CancellationToken ct = default) =>
-        IdentifyAsync(crop, $"""
+        IdentifyAsync(crop, BuildReviewPrompt(previous), ct);
+
+    internal static string BuildReviewPrompt(IdentifiedCard previous) =>
+        $"""
             Printing verification requested: the previous answer was {previous.Set} {previous.CollectorNumber}.
             Artwork comparison was inconclusive and cannot establish a printing. Re-examine the original
             footer and both close-ups (full width, then left half, then right half), transcribe the
             printed set and collector number, and verify them with
             lookup_by_set_and_number before resolving the printing. Do not choose by artwork or memory.
+            Also transcribe any visible promotional event label. For "Grand Prix", call resolve_printing
+            with promoLabel "Grand Prix", keeping printed PRM and 001/001 as the raw read values.
+            These are not catalogue identifiers: the Grand Prix family is pgpx and may use a year
+            as its catalogue number. PRM alone is insufficient. Never upgrade an ambiguous answer.
             If a retro-frame footer has no readable set code, inspect the collector/copyright line and
             the printed expansion symbol; leave unreadable letters empty. Preserve photographed language.
             Catalogue candidates, not answers: {string.Join(", ", previous.ArtReferences.Select(r => $"{r.Set} {r.CollectorNumber}"))}.
-            """, ct);
+            """;
 
     private async Task<IdentifiedCard> IdentifyAsync(CardCrop crop, string? review, CancellationToken ct)
     {
@@ -115,6 +122,7 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
             validateReplyAsync: async (text, validationCt) =>
             {
                 var parsed = ParseIdentification(text, crop, Game, AgentId);
+                ValidatePromoPrinting(parsed);
                 ValidateLanguage(parsed);
                 await ValidateTitleAsync(parsed, validationCt);
                 if ((parsed.Resolution == "unresolved" || parsed.Resolution == "assumed")
@@ -132,7 +140,7 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
                         + "with that image-supported title. Do not treat the number lookup alone as corroboration. "
                         + "Preserve photographed language.");
                 }
-            });
+            }, recordEvidence: crop.RecordEvidence);
 
         try
         {
@@ -183,7 +191,16 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
                code only if you read it off this card; leave it empty if you did not, however sure you are
                which set the card is from. Answer with the set, collector number and name it gives back,
                never with the number you read, and copy its "resolution", "readCollectorNumber" and
-               "readSet" into your reply.
+               "readSet" and "readPromoLabel" into your reply.
+
+               Transcribe any visible promotional event label separately as readPromoLabel and pass
+               it to resolve_printing as promoLabel. A footer "001/001 P Grand Prix" with "PRM EN"
+               means readSet "PRM", readCollectorNumber "001/001", readPromoLabel "Grand Prix".
+               PRM alone is not evidence of Grand Prix. Do not replace these raw readings with
+               catalogue codes or years. A visible Grand Prix label restricts the catalogue to
+               pgpx, whose collector number may be a year instead of the printed fraction.
+               Use the tool's family result, not a default printing found from PRM or artwork.
+               Preserve unresolved or ambiguous family results; never upgrade them to confirmed.
 
                Alternate-title cards may print a large character name and the canonical Magic name
                underneath. Keep the large photographed title as readName and use the catalogue's
@@ -212,8 +229,13 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
 
             Return ONLY a JSON object, with no prose and no markdown fences:
             {"set":"","collectorNumber":"","name":"","language":null,"readName":null,"readLanguage":null,
-             "confidence":0.0,"resolution":"","readCollectorNumber":"","readSet":"","alternates":[],
-             "alternatesComplete":true}
+             "confidence":0.0,"resolution":"","readCollectorNumber":"","readSet":"","readPromoLabel":null,"alternates":[],
+             "alternatesComplete":true,"identificationSummary":null}
+
+            Include "identificationSummary": a 1-2 sentence user-facing explanation citing only
+            the visible title/footer and catalogue corroboration or uncertainty. Distinguish raw
+            printed evidence from catalogue identifiers and state unresolved or ambiguous printing
+            uncertainty honestly. Do not provide private chain-of-thought or internal deliberations.
 
             Copy "alternatesComplete" from the catalogue unchanged; false means image candidates
             are incomplete, not that the card is unreadable.
@@ -284,6 +306,8 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
             Resolution = Read("resolution"),
             ReadCollectorNumber = Read("readCollectorNumber"),
             ReadSet = Read("readSet"),
+            ReadPromoLabel = Read("readPromoLabel"),
+            IdentificationSummary = Read("identificationSummary"),
             Confidence = confidence,
             Agent = agentId,
             ArtReferences = ReadArtReferences(root),
@@ -300,6 +324,23 @@ public sealed class FoundryCardIdentificationAgent : ICardIdentificationAgent, I
             {
                 Error = "Agent reply was missing the set or the name: " + AgentJson.Summarize(reply)
             };
+    }
+
+    internal static void ValidatePromoPrinting(IdentifiedCard card)
+    {
+        if (card.Game != CardGames.Magic || !card.IsIdentified) return;
+        if (string.Equals(card.Resolution, "unresolved", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(card.Set, "prm", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(card.ReadSet, "prm", StringComparison.OrdinalIgnoreCase))
+            return;
+        if (System.Text.RegularExpressions.Regex.IsMatch(card.ReadPromoLabel ?? "", @"\bGrand\s+Prix\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)
+            && !string.Equals(card.Set, "pgpx", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "A visibly transcribed Grand Prix label cannot resolve to a non-PGPX printing. "
+                + "Call resolve_printing with promoLabel \"Grand Prix\" and the photographed title, "
+                + "preserving readSet and readCollectorNumber (e.g. PRM and 001/001). "
+                + "Use only the returned pgpx family result; keep missing matches unresolved and multiple matches ambiguous.");
     }
 
     internal static void ValidateLanguage(IdentifiedCard card)

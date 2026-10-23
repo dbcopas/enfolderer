@@ -1,4 +1,6 @@
 using Azure.Core;
+using System.Text;
+using System.Text.Json;
 using Enfolderer.Ai.Contracts;
 using Enfolderer.Ai.Infrastructure;
 using Enfolderer.Ai.Infrastructure.Catalogue;
@@ -62,9 +64,26 @@ internal static class ConcurrencyChecks
                 "results remain in reading order even when later cards finish first");
             check(store.Progress.SequenceEqual(Enumerable.Range(0, count + 1).Append(count)),
                 "persisted progress is monotonic and no concurrent update loses a completed card");
-            check(images.WrittenPaths.Count == count && Enumerable.Range(0, count).All(index =>
+            check(images.WrittenPaths.Count == count * 2 + 2 && Enumerable.Range(0, count).All(index =>
                     images.WrittenPaths.Contains($"crops/{blobPrefix ?? "parallel"}/card-{index:D3}.png")),
                 "parallel workers keep every crop in the persisted dated or legacy job folder");
+            check(job?.Result?.CsvBlobPath == $"outputs/{blobPrefix ?? "parallel"}/cards.csv"
+                && Encoding.UTF8.GetString(images.Contents[job.Result.CsvBlobPath]) == ScanCsv.Format(job.Result),
+                "completed scans persist the exact ranked UTF-8 CSV without changing report bytes");
+            for (var index = 0; index < count; index++)
+            {
+                using var evidence = JsonDocument.Parse(images.Contents[ScanBlobPaths.BuildEvidenceBlobPath(job!, index)]);
+                var root = evidence.RootElement;
+                check(root.GetProperty("index").GetInt32() == index
+                    && root.GetProperty("card").GetProperty("index").GetInt32() == index
+                    && root.GetProperty("events")[0].GetProperty("details").GetProperty("index").GetInt32() == index
+                    && (index != 2 || root.GetProperty("card").GetProperty("error").GetString() == "Test card failure"),
+                    "per-card durable evidence preserves failed cards and never mixes parallel traces");
+            }
+            using (var manifest = JsonDocument.Parse(images.Contents[ScanBlobPaths.BuildEvidenceBlobPath(job!)]))
+                check(manifest.RootElement.GetProperty("cards").GetArrayLength() == count
+                    && manifest.RootElement.GetProperty("result").GetProperty("csvBlobPath").GetString() == job!.Result!.CsvBlobPath,
+                    "durable identification manifest links every card to its own evidence and final priced result");
             await processor.ProcessAsync(new ScanJobMessage("parallel", "scan.png", null), default);
             check(agent.Completed.Count == count - 1 && store.Progress.Count == count + 2,
                 "duplicate queue delivery never reruns a completed scan");
@@ -97,6 +116,28 @@ internal static class ConcurrencyChecks
                 "parallel cancellation propagates without publishing a successful result");
         }
         await AutoAddChecksAsync(check);
+        foreach (var suffix in new[] { "/cards.csv", "/identification.json", "/identification/card-000.json" })
+        {
+            var jobId = Guid.NewGuid().ToString("N");
+            var jobs = new RecordingStore();
+            var collections = new InMemoryScannedCollectionStore();
+            const string tenant = "11111111-1111-1111-1111-111111111111";
+            const string owner = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+            await jobs.CreateAsync(new ScanJobDocument
+            {
+                Id = jobId, JobId = jobId, BlobPath = "scan.png", AutoAddToCollection = true,
+                OwnerTenantId = tenant, OwnerObjectId = owner
+            });
+            var images = new Images { FailSuffix = suffix };
+            var processor = new ScanJobProcessor(jobs, images, new Boundaries(), [new IdentificationAgent()],
+                new ScanPipelineOptions { CropHeight = 140 }, new Credential(), new ScanPlatformOptions(),
+                NullLogger<ScanJobProcessor>.Instance, scannedCollections: collections);
+            await processor.ProcessAsync(new ScanJobMessage(jobId, "scan.png", null), default);
+            var failed = await jobs.GetAsync(jobId);
+            check(failed?.Status == ScanJobStatus.Failed && failed.Error!.Contains("archive write failed")
+                && !await collections.ContainsAsync(tenant, owner, jobId),
+                "archive write failures are explicit failed jobs, never successful scans or silent collection additions");
+        }
     }
 
     private static async Task AutoAddChecksAsync(Action<bool, string> check)
@@ -222,6 +263,7 @@ internal static class ConcurrencyChecks
             if (active >= requiredConcurrency) _started.TrySetResult();
             try
             {
+                crop.RecordEvidence?.Invoke(ScanEvidenceEvent.Create("test_reading", new { index = crop.Index }));
                 cancellation?.Cancel();
                 await _started.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
                 await Task.Delay(crop.Index == 0 ? 120 : 25, ct);
@@ -238,6 +280,8 @@ internal static class ConcurrencyChecks
     {
         public int Reads { get; private set; }
         public System.Collections.Concurrent.ConcurrentQueue<string> WrittenPaths { get; } = new();
+        public System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> Contents { get; } = new();
+        public string? FailSuffix { get; init; }
         public Task<Stream> OpenReadAsync(string path, CancellationToken ct = default)
         {
             Reads++;
@@ -247,10 +291,14 @@ internal static class ConcurrencyChecks
             stream.Position = 0;
             return Task.FromResult<Stream>(stream);
         }
-        public Task WriteAsync(string path, Stream content, string contentType, CancellationToken ct = default)
+        public async Task WriteAsync(string path, Stream content, string contentType, CancellationToken ct = default)
         {
+            if (FailSuffix is not null && path.EndsWith(FailSuffix, StringComparison.Ordinal))
+                throw new IOException("archive write failed");
+            using var bytes = new MemoryStream();
+            await content.CopyToAsync(bytes, ct);
+            Contents[path] = bytes.ToArray();
             WrittenPaths.Enqueue(path);
-            return Task.CompletedTask;
         }
         public Task<bool> ExistsAsync(string path, CancellationToken ct = default) => Task.FromResult(true);
     }

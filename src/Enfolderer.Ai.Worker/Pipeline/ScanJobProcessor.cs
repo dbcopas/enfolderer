@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 using Azure;
 using Azure.Core;
 using Enfolderer.Ai.Contracts;
@@ -158,6 +160,25 @@ public sealed class ScanJobProcessor
                 result = await _annotation.CreateAsync(result, source, ct, snapshot, ownershipError, job.BlobPrefix, scanned);
             }
 
+            result = result with
+            {
+                CsvBlobPath = ScanBlobPaths.BuildCsvBlobPath(job),
+                IdentificationBlobPath = ScanBlobPaths.BuildEvidenceBlobPath(job)
+            };
+            job = job with { Result = result };
+            await WriteArchiveAsync(result.CsvBlobPath, Encoding.UTF8.GetBytes(ScanCsv.Format(result)), "text/csv; charset=utf-8", ct);
+            await WriteEvidenceAsync(result.IdentificationBlobPath, new
+            {
+                schemaVersion = 1, jobId = job.JobId, createdAt = job.CreatedAt,
+                evidenceKind = "Observable identification evidence, not private model reasoning.",
+                result,
+                cards = result.Cards.Select(card => new
+                {
+                    card.Index, card.Name, card.Set, card.CollectorNumber, card.Error,
+                    evidenceBlobPath = ScanBlobPaths.BuildEvidenceBlobPath(job, card.Index)
+                })
+            }, ct);
+
             if (job.AutoAddToCollection && result.Cards.Any(ScannedCollectionAddition.CanAdd))
             {
                 try
@@ -236,15 +257,15 @@ public sealed class ScanJobProcessor
     /// presenting a different identity than the one the role was granted to.
     /// </para>
     /// </summary>
-    private async Task<string> DescribeStorageRefusalAsync(RequestFailedException ex, string blobPath)
+    private async Task<string> DescribeStorageRefusalAsync(RequestFailedException ex, string blobPath, string operation = "reading")
     {
         var principal = await IdentityDiagnostics.DescribeAsync(
             _credential, "https://storage.azure.com/.default", _log);
 
-        return $"Azure Storage returned {ex.Status} {ex.ErrorCode} reading {blobPath} as {principal} "
+        return $"Azure Storage returned {ex.Status} {ex.ErrorCode} {operation} {blobPath} as {principal} "
              + $"(configured client id {_platform.ManagedIdentityClientId ?? "(unset)"}). The worker's "
              + "identity needs Storage Blob Data Reader on the scans container and Storage Blob Data "
-             + "Contributor on crops; compare the oid above with the worker identity's principal id.";
+             + "Contributor on crops and outputs; compare the oid above with the worker identity's principal id.";
     }
 
     /// <summary>
@@ -372,7 +393,21 @@ public sealed class ScanJobProcessor
             new ParallelOptions { MaxDegreeOfParallelism = _options.MaxConcurrentCards, CancellationToken = ct },
             async (index, token) =>
         {
-            var card = await IdentifyOneAsync(index, token);
+            var evidence = new List<ScanEvidenceEvent>();
+            void Record(ScanEvidenceEvent item)
+            {
+                if (evidence.Count >= 512)
+                    throw new InvalidOperationException("Identification evidence exceeded the 512-event per-card limit.");
+                evidence.Add(item);
+            }
+            var card = await IdentifyOneAsync(index, Record, token);
+            await WriteEvidenceAsync(ScanBlobPaths.BuildEvidenceBlobPath(job, index), new
+            {
+                schemaVersion = 1, jobId = job.JobId, index,
+                cropBlobPath = $"{ScanBlobPaths.CropsContainer}/{ScanBlobPaths.BuildCropBlobName(job, index)}",
+                card, decision = DescribeResolution(card) + DescribeArt(card),
+                events = evidence
+            }, token);
             await progressGate.WaitAsync(token);
             try
             {
@@ -389,7 +424,7 @@ public sealed class ScanJobProcessor
         });
         return cards.ToList();
 
-        async Task<IdentifiedCard> IdentifyOneAsync(int index, CancellationToken ct)
+        async Task<IdentifiedCard> IdentifyOneAsync(int index, Action<ScanEvidenceEvent> recordEvidence, CancellationToken ct)
         {
             var cardTimer = Stopwatch.StartNew();
             _log.LogInformation("Card {Index} of job {JobId}: processing card {Current} of {Total}.",
@@ -432,9 +467,11 @@ public sealed class ScanJobProcessor
                 LogTiming(job.JobId, "crop_and_store", timer, index);
 
                 var image = new AgentImage(cropBytes, Path.GetFileName(cropPath), "image/png");
-                var crop = new CardCrop(index, image, boundary.Quad, boundary.GameHint);
+                var crop = new CardCrop(index, image, boundary.Quad, boundary.GameHint) { RecordEvidence = recordEvidence };
                 timer.Restart();
                 var card = await agent.IdentifyAsync(crop, ct);
+                recordEvidence(ScanEvidenceEvent.Create("initial_identification",
+                    new { card, alternates = card.ArtReferences, card.ArtCandidatesComplete }));
                 LogTiming(job.JobId, "identify", timer, index);
 
                 // After the agent, not instead of it. The agent reads the card; this asks whether
@@ -492,6 +529,21 @@ public sealed class ScanJobProcessor
                 };
             }
             finally { LogTiming(job.JobId, "card_total", cardTimer, index); }
+        }
+    }
+
+    private async Task WriteEvidenceAsync(string path, object evidence, CancellationToken ct)
+    {
+        await WriteArchiveAsync(path, JsonSerializer.SerializeToUtf8Bytes(evidence, ScanJson.Options), "application/json", ct);
+    }
+
+    private async Task WriteArchiveAsync(string path, byte[] bytes, string contentType, CancellationToken ct)
+    {
+        await using var content = new MemoryStream(bytes, writable: false);
+        try { await _images.WriteAsync(path, content, contentType, ct); }
+        catch (RequestFailedException ex) when (ex.Status is 401 or 403)
+        {
+            throw new IOException(await DescribeStorageRefusalAsync(ex, path, "writing"), ex);
         }
     }
 

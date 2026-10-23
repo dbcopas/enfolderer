@@ -82,10 +82,11 @@ public sealed partial class FoundryAgentClient
         string agentId, string prompt, AgentImage? image, string? approvedServerLabel, CancellationToken ct,
         AgentImage? detailImage = null,
         Action<string>? validateReply = null,
-        Func<string, CancellationToken, Task>? validateReplyAsync = null)
+        Func<string, CancellationToken, Task>? validateReplyAsync = null,
+        Action<Enfolderer.Ai.Contracts.ScanEvidenceEvent>? recordEvidence = null)
     {
         if (_useResponses)
-            return await RunResponseAsync(agentId, prompt, image, approvedServerLabel, ct, detailImage, validateReply, validateReplyAsync);
+            return await RunResponseAsync(agentId, prompt, image, approvedServerLabel, ct, detailImage, validateReply, validateReplyAsync, recordEvidence);
 
         var fileIds = new List<string>();
         var uploadTimer = Stopwatch.StartNew();
@@ -122,10 +123,13 @@ public sealed partial class FoundryAgentClient
             {
                 var runId = await RunToCompletionAsync(agentId, threadId, approvedServerLabel, ct);
                 var reply = await ReadLastAssistantMessageAsync(threadId, runId, ct);
+                recordEvidence?.Invoke(Enfolderer.Ai.Contracts.ScanEvidenceEvent.Create("assistant_reply",
+                    new { agentId, threadId, runId, reply = FoundryEvidence.ReadJson(reply) }));
                 try
                 {
                     validateReply?.Invoke(reply);
                     if (validateReplyAsync is not null) await validateReplyAsync(reply, ct);
+                    recordEvidence?.Invoke(Enfolderer.Ai.Contracts.ScanEvidenceEvent.Create("validation_passed", new { agentId, runId }));
                     _log.LogInformation("Agent {AgentId}: timing runs_and_reply, thread {ThreadId}, elapsed {ElapsedMs} ms.",
                         agentId, threadId, runTimer.ElapsedMilliseconds);
                     return reply;
@@ -133,6 +137,8 @@ public sealed partial class FoundryAgentClient
                 catch (Exception ex) when ((validateReply is not null || validateReplyAsync is not null)
                     && ex is InvalidOperationException or JsonException)
                 {
+                    recordEvidence?.Invoke(Enfolderer.Ai.Contracts.ScanEvidenceEvent.Create("validation_failed",
+                        new { agentId, runId, error = ex.Message, attempt = attempt + 1 }));
                     _log.LogWarning(ex,
                         "Agent {AgentId} returned an invalid reply on thread {ThreadId}, run {RunId}, "
                         + "attempt {Attempt}/2. Reply: {Reply}",

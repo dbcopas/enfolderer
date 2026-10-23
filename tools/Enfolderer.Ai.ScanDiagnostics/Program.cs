@@ -117,8 +117,12 @@ try
     await Download("original", "original" + Path.GetExtension(ScanBlobPaths.SanitizeFileName(job.BlobPath)));
     if (job.Result?.AnnotatedImagePath is not null) await Download("annotated-image", "overlay.png");
     if (job.Result is not null) await Download("cards.csv", "cards.csv");
+    await Download("identification.json", "identification.json");
     for (var index = 0; index < job.CardsDetected; index++)
+    {
         await Download($"crops/{index}", $"crop-{index:D3}.png");
+        await Download($"identification/{index}", $"identification-{index:D3}.json");
+    }
     await File.WriteAllTextAsync(Path.Combine(directory, "manifest.json"), JsonSerializer.Serialize(new
     {
         job.JobId, retrievedAt = DateTimeOffset.UtcNow, api = api.ToString(), job.Status,

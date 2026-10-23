@@ -144,6 +144,12 @@ public sealed record IdentifiedCard
     /// </summary>
     [JsonPropertyName("readSet")] public string? ReadSet { get; init; }
 
+    /// <summary>The promotional event label visibly read from the footer, not a catalogue set code.</summary>
+    [JsonPropertyName("readPromoLabel")] public string? ReadPromoLabel { get; init; }
+
+    /// <summary>A brief user-facing explanation of visible evidence and catalogue corroboration or uncertainty.</summary>
+    [JsonPropertyName("identificationSummary")] public string? IdentificationSummary { get; init; }
+
     /// <summary>Confidence in the identification, 0..1.</summary>
     [JsonPropertyName("confidence")] public double Confidence { get; init; }
 
@@ -280,6 +286,9 @@ public sealed record ScanResultDocument
     [JsonPropertyName("cards")] public IReadOnlyList<IdentifiedCard> Cards { get; init; } = [];
 
     [JsonPropertyName("annotatedImagePath")] public string? AnnotatedImagePath { get; init; }
+
+    [JsonPropertyName("csvBlobPath")] public string? CsvBlobPath { get; init; }
+    [JsonPropertyName("identificationBlobPath")] public string? IdentificationBlobPath { get; init; }
 
     [JsonPropertyName("annotationError")] public string? AnnotationError { get; init; }
     [JsonPropertyName("collectionAddError")] public string? CollectionAddError { get; init; }

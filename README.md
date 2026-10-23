@@ -217,6 +217,10 @@ one row per saved printing/language and spreadsheet formula protection. Empty co
 download the header only. This exports scanned additions, not uploaded desktop snapshots or
 combined ownership totals, and does not consume scan credits. The authenticated endpoint is
 `GET /scanned-collection/cards.csv` (optional `?set=CMM`); responses are private and `no-store`.
+Each download is archived in private Blob Storage under
+`collections/<tenant-id>/<user-id>/exports/scanned/<all-or-set>-<sha256>.csv`.
+Identical exports reuse the same content-addressed snapshot. An archive write failure reports an
+error instead of returning an unarchived download; it never changes collection quantities.
 This collection is stored separately from desktop ownership snapshots: adding cards does not
 update desktop databases, uploaded snapshot quantities or previously rendered overlays.
 Replacing/deleting a snapshot does not remove scanned additions. New mobile ownership comparisons
@@ -330,7 +334,8 @@ and total worker processing. Foundry logs time background Responses/tool approva
 excludes desktop upload, queue wait, polling lag and the final image download.
 
 For operator investigations, `.\scripts\get-scan-diagnostics.ps1` downloads the latest uploaded
-pilot scan's original photo, overlay, per-card crops, full job/result JSON and ranked CSV, then
+pilot scan's original photo, overlay, per-card crops, full job/result JSON, ranked CSV and archived
+identification evidence, then
 collects Log Analytics evidence. Use `-JobId <id>` for a specific scan or `-Hours 168` to widen the
 default 24-hour search. Failed and running attempts are included; pending uploads are not selected
 as the latest scan. Downloads go outside the repository under local application data by default.
@@ -513,6 +518,41 @@ The prefix is fixed at job creation and reused on retries, even if the user chan
 Existing timestamp-only and undated folders and their download links remain accessible; they
 are not renamed, and public job IDs and download URLs do not change. Collection receipts keep
 their existing owner/job keys and are not renamed.
+
+### Persisted scan reports and identification evidence
+
+New scans automatically write `cards.csv`, `identification.json` and
+`identification/card-000.json` (zero-based card index) beneath their shared `outputs/<scan-prefix>/`
+folder. The manifest links every card's evidence to its crop and final scan result. Per-card
+evidence is saved as each identification finishes, including failed identifications, so completed
+cards remain inspectable if another stage fails. A required archive write failure fails the job
+explicitly before automatic collection saving; it is not reported as a successful scan.
+
+Evidence includes observable catalogue tool arguments/results, structured model replies,
+rejected readings and validation errors, retries, artwork candidate distances/thresholds,
+printing re-reads, and the programmatic decision to retain or change a printing. It does **not**
+request or store private model chain-of-thought, encrypted reasoning, credentials or inline input
+images. Non-JSON replies retain length/hash metadata rather than unfiltered text. The active
+Responses transport supplies tool evidence; legacy classic transport retains replies and
+validation events only. These records explain decisions without claiming certainty.
+
+The authenticated owner routes are `GET /jobs/<id>/identification.json` and
+`GET /jobs/<id>/identification/<index>`. The explicitly allowlisted diagnostics routes expose the
+same artifacts to operators. All downloads remain `no-store`; Blob Storage remains private.
+New scan CSV downloads read the archived bytes; older scans keep their existing on-demand CSV
+generation. Old model/tool traces cannot be reconstructed after Foundry cleanup and are not
+invented or silently backfilled.
+
+Archives have no automatic expiry for now, independently of the seven-day Cosmos job TTL.
+They include private card/collection information and creator labels: include them in your storage
+retention/cleanup policy. Cosmos expiry does not delete blobs, but API discovery/authorization
+still requires the job record. No old scan results or saved collection receipts are rewritten.
+
+Grand Prix promos illustrate why printed and catalogue identifiers must remain distinct:
+`PRM`, `001/001`, and a visibly read `Grand Prix` label can identify a printing catalogued as
+`PGPX 2018`. The label constrains exact-title catalogue lookup to that promo family; `PRM`
+alone does not. Missing family matches remain unresolved and multiple matches stay ambiguous.
+This does not force same-name cards to share a printing or relax artwork thresholds.
 
 ### Guest scan allowances
 

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Enfolderer.Ai.Contracts;
 using Microsoft.Extensions.Logging;
 
 namespace Enfolderer.Ai.Worker.Agents;
@@ -9,7 +10,8 @@ public sealed partial class FoundryAgentClient
     private async Task<string> RunResponseAsync(
         string agentName, string prompt, AgentImage? image, string? approvedServerLabel,
         CancellationToken ct, AgentImage? detailImage, Action<string>? validateReply,
-        Func<string, CancellationToken, Task>? validateReplyAsync)
+        Func<string, CancellationToken, Task>? validateReplyAsync,
+        Action<ScanEvidenceEvent>? recordEvidence)
     {
         if (string.IsNullOrWhiteSpace(agentName) || agentName.StartsWith("asst_", StringComparison.Ordinal))
             throw new InvalidOperationException(
@@ -62,6 +64,7 @@ public sealed partial class FoundryAgentClient
                 using var completed = await WaitForResponseAsync(previousId);
                 finishedIds.Add(previousId);
                 var root = completed.RootElement;
+                FoundryEvidence.RecordResponse(root, agentName, approvedServerLabel, recordEvidence);
                 LogResponseUsage(agentName, previousId, root);
                 var status = root.GetProperty("status").GetString();
                 if (!string.Equals(status, "completed", StringComparison.Ordinal))
@@ -91,7 +94,7 @@ public sealed partial class FoundryAgentClient
                         continue;
                     }
                     throw new InvalidOperationException(
-                        $"Foundry agent '{agentName}' response '{previousId}' ended with '{status}': {message ?? root.GetRawText()}");
+                        $"Foundry agent '{agentName}' response '{previousId}' ended with '{status}': {message ?? code ?? "no error details supplied"}");
                 }
 
                 var decisions = BuildResponseApprovals(root, approvedServerLabel);
@@ -123,7 +126,8 @@ public sealed partial class FoundryAgentClient
                         && toolError.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
                     {
                         if (await RetryCatalogueAsync(toolError.GetRawText())) { retryCatalogue = true; break; }
-                        throw new InvalidOperationException($"Foundry MCP call failed: {toolError.GetRawText()}");
+                        throw new InvalidOperationException(
+                            $"Foundry MCP call failed: {JsonSerializer.Serialize(FoundryEvidence.ReadJson(toolError.GetRawText()))}");
                     }
                 if (retryCatalogue)
                 {
@@ -139,10 +143,13 @@ public sealed partial class FoundryAgentClient
                     .Select(p => p.GetProperty("text").GetString()));
                 if (string.IsNullOrWhiteSpace(reply))
                     throw new InvalidOperationException($"Foundry response '{previousId}' completed without assistant text.");
+                recordEvidence?.Invoke(ScanEvidenceEvent.Create("assistant_reply",
+                    new { agentName, responseId = previousId, reply = FoundryEvidence.ReadJson(reply) }));
                 try
                 {
                     validateReply?.Invoke(reply);
                     if (validateReplyAsync is not null) await validateReplyAsync(reply, timeout.Token);
+                    recordEvidence?.Invoke(ScanEvidenceEvent.Create("validation_passed", new { agentName, responseId = previousId }));
                     _log.LogInformation("Agent {AgentId}: timing responses_and_reply, response {ResponseId}, elapsed {ElapsedMs} ms.",
                         agentName, previousId, timer.ElapsedMilliseconds);
                     return reply;
@@ -150,6 +157,8 @@ public sealed partial class FoundryAgentClient
                 catch (Exception ex) when ((validateReply is not null || validateReplyAsync is not null)
                     && ex is InvalidOperationException or JsonException)
                 {
+                    recordEvidence?.Invoke(ScanEvidenceEvent.Create("validation_failed",
+                        new { agentName, responseId = previousId, error = ex.Message, attempt = regenerations + 1 }));
                     _log.LogWarning(ex, "Agent {Agent} response {Response} returned an invalid reply.", agentName, previousId);
                     if (regenerations++ > 0)
                         throw new InvalidOperationException($"Agent '{agentName}' returned an invalid reply after 2 attempts.", ex);
@@ -220,6 +229,8 @@ public sealed partial class FoundryAgentClient
                 ?? TimeSpan.FromSeconds((throttled ? _throttleBackoff.TotalSeconds : 1) * Math.Pow(2, attempt - 1));
             delay = delay < TimeSpan.Zero ? TimeSpan.Zero : delay > MaxThrottleWait ? MaxThrottleWait : delay;
             delay += TimeSpan.FromMilliseconds(Random.Shared.Next(0, 251));
+            recordEvidence?.Invoke(ScanEvidenceEvent.Create("service_retry",
+                new { agentName, responseId = previousId, throttled, attempt, delay }));
             _log.LogWarning(
                 "Agent {Agent} response {Response}: transient {Kind} failure; retry {Retry} of {Max} in {Delay}. {Message}",
                 agentName, previousId, throttled ? "throttle" : "service/transport", attempt,
@@ -231,6 +242,8 @@ public sealed partial class FoundryAgentClient
         {
             if (error?.Contains("catalogue_transient_failure:", StringComparison.Ordinal) != true
                 || catalogueRetries >= 2) return false;
+            recordEvidence?.Invoke(ScanEvidenceEvent.Create("catalogue_retry",
+                new { agentName, responseId = previousId, attempt = catalogueRetries + 1 }));
             _log.LogWarning("Agent {Agent} response {Response}: transient catalogue tool failure; retry {Retry}/2.",
                 agentName, previousId, catalogueRetries + 1);
             await DelayAsync("Catalogue lookup temporarily unavailable.", ++catalogueRetries, throttled: false);

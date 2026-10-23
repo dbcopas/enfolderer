@@ -213,7 +213,8 @@ internal static class ApiOwnershipChecks
             foreach (var (method, suffix) in new[]
             {
                 (HttpMethod.Get, ""), (HttpMethod.Put, "/content"),
-                (HttpMethod.Post, "/submit"), (HttpMethod.Get, "/annotated-image"), (HttpMethod.Get, "/cards.csv")
+                (HttpMethod.Post, "/submit"), (HttpMethod.Get, "/annotated-image"), (HttpMethod.Get, "/cards.csv"),
+                (HttpMethod.Get, "/identification.json"), (HttpMethod.Get, "/identification/0")
             })
             {
                 using var request = new HttpRequestMessage(method, $"/jobs/{job.JobId}{suffix}");
@@ -264,6 +265,43 @@ internal static class ApiOwnershipChecks
         using var legacyImage = await client.GetAsync($"/jobs/{legacyId}/annotated-image");
         check(legacyImage.IsSuccessStatusCode && images.LastReadPath == $"outputs/{legacyId}/priced.png",
             "owned historical scans still download from undated folders");
+        var archivedJob = (await store.GetAsync(job.JobId))!;
+        archivedJob = archivedJob with
+        {
+            Result = archivedJob.Result! with
+            {
+                CsvBlobPath = ScanBlobPaths.BuildCsvBlobPath(archivedJob),
+                IdentificationBlobPath = ScanBlobPaths.BuildEvidenceBlobPath(archivedJob)
+            }
+        };
+        await store.UpsertAsync(archivedJob);
+        foreach (var (suffix, path) in new[]
+        {
+            ("cards.csv", ScanBlobPaths.BuildCsvBlobPath(archivedJob)),
+            ("identification.json", ScanBlobPaths.BuildEvidenceBlobPath(archivedJob)),
+            ("identification/0", ScanBlobPaths.BuildEvidenceBlobPath(archivedJob, 0))
+        })
+        {
+            using var archivedFile = await client.GetAsync($"/jobs/{job.JobId}/{suffix}");
+            check(archivedFile.IsSuccessStatusCode && images.LastReadPath == path
+                && archivedFile.Headers.CacheControl?.NoStore == true
+                && (await archivedFile.Content.ReadAsByteArrayAsync()).SequenceEqual(new byte[] { 1, 2, 3 }),
+                "owner downloads persisted CSV and audit bytes from the exact creator-prefixed path with no-store");
+        }
+        using (var legacyCsv = await client.GetAsync($"/jobs/{legacyId}/cards.csv"))
+            check(legacyCsv.IsSuccessStatusCode && (await legacyCsv.Content.ReadAsStringAsync()) == ScanCsv.Format(legacyOwned.Result!),
+                "historical CSVs without an archive remain regenerable from their unchanged result");
+        foreach (var index in new[] { -1, 1 })
+        {
+            using var invalidCard = await client.GetAsync($"/jobs/{job.JobId}/identification/{index}");
+            check(invalidCard.StatusCode == HttpStatusCode.NotFound, "out-of-range evidence indices are rejected");
+        }
+        images.Exists = false;
+        using (var absentAudit = await client.GetAsync($"/jobs/{job.JobId}/identification.json"))
+            check(absentAudit.StatusCode == HttpStatusCode.NotFound
+                && (await absentAudit.Content.ReadAsStringAsync()).Contains("not archived"),
+                "missing historical audit evidence is explicit rather than reconstructed as a fake trace");
+        images.Exists = true;
         await store.CreateAsync(new ScanJobDocument { Id = "legacy", JobId = "legacy" });
         using var legacy = await client.GetAsync("/jobs/legacy");
         check(legacy.StatusCode == HttpStatusCode.NotFound, "actual API denies legacy ownerless jobs");
@@ -294,7 +332,8 @@ internal static class ApiOwnershipChecks
                 if (caller.Length > 0) diagnostics.DefaultRequestHeaders.Add("X-Test-User", caller);
                 foreach (var path in new[] { "/diagnostics/scans/", $"/diagnostics/scans/{foreign.JobId}",
                     $"/diagnostics/scans/{foreign.JobId}/original", $"/diagnostics/scans/{foreign.JobId}/annotated-image",
-                    $"/diagnostics/scans/{foreign.JobId}/crops/0", $"/diagnostics/scans/{foreign.JobId}/cards.csv" })
+                    $"/diagnostics/scans/{foreign.JobId}/crops/0", $"/diagnostics/scans/{foreign.JobId}/cards.csv",
+                    $"/diagnostics/scans/{foreign.JobId}/identification.json", $"/diagnostics/scans/{foreign.JobId}/identification/0" })
                 {
                     using var denied = await diagnostics.GetAsync(path);
                     check(denied.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized,
@@ -310,7 +349,8 @@ internal static class ApiOwnershipChecks
                 "operator finds the latest uploaded pilot attempt, including failure, not a newer pending or removed-user scan");
             foreach (var path in new[] { $"/diagnostics/scans/{foreign.JobId}", $"/diagnostics/scans/{foreign.JobId}/original",
                 $"/diagnostics/scans/{foreign.JobId}/crops/0", $"/diagnostics/scans/{job.JobId}/annotated-image",
-                $"/diagnostics/scans/{job.JobId}/cards.csv" })
+                $"/diagnostics/scans/{job.JobId}/cards.csv", $"/diagnostics/scans/{job.JobId}/identification.json",
+                $"/diagnostics/scans/{job.JobId}/identification/0" })
             {
                 using var evidence = await diagnostics.GetAsync(path);
                 check(evidence.IsSuccessStatusCode && evidence.Headers.CacheControl?.NoStore == true,
@@ -390,6 +430,32 @@ internal static class ApiOwnershipChecks
             "snapshot deletion is supported and collection scans require an uploaded snapshot");
         await ScannedCollectionChecks.RunAsync(check, client, store,
             factory.Services.GetRequiredService<ICollectionSnapshotStore>(), Tenant, UserA, UserB);
+        foreach (var caller in new[] { UserA, UserB })
+        {
+            client.DefaultRequestHeaders.Remove("X-Test-User");
+            client.DefaultRequestHeaders.Add("X-Test-User", caller);
+            foreach (var filter in new[] { "", "?set=cmm" })
+            {
+                using var export = await client.GetAsync("/scanned-collection/cards.csv" + filter);
+                export.EnsureSuccessStatusCode();
+                var bytes = await export.Content.ReadAsByteArrayAsync();
+                var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+                var path = $"collections/{Tenant}/{caller}/exports/scanned/{(filter.Length == 0 ? "all" : "CMM")}-{hash}.csv";
+                check(images.LastWritePath == path && images.Contents[path].SequenceEqual(bytes),
+                    "all/set-filtered collection exports are durably stored under only the authenticated user's content-addressed prefix");
+                var count = images.Contents.Count;
+                using var repeated = await client.GetAsync("/scanned-collection/cards.csv" + filter);
+                check(repeated.IsSuccessStatusCode && images.Contents.Count == count,
+                    "identical collection exports reuse one archived snapshot rather than accumulating duplicate blobs");
+            }
+        }
+        images.FailWrite = true;
+        using (var failedExport = await client.GetAsync("/scanned-collection/cards.csv"))
+            check(failedExport.StatusCode == HttpStatusCode.InternalServerError,
+                "collection CSV archive failure is a visible server error, not an unarchived success");
+        images.FailWrite = false;
+        client.DefaultRequestHeaders.Remove("X-Test-User");
+        client.DefaultRequestHeaders.Add("X-Test-User", UserA);
         var csv = MobileWebEndpoints.Csv(new ScanResultDocument
         {
             Cards = [new IdentifiedCard { Set = "aaa", Name = "=Formula;\"Title\"", CollectorNumber = "1", Language = "en" }]
@@ -739,17 +805,22 @@ internal static class ApiOwnershipChecks
         public int Reads { get; private set; }
         public string? LastReadPath { get; private set; }
         public string? LastWritePath { get; private set; }
+        public bool FailWrite { get; set; }
+        public Dictionary<string, byte[]> Contents { get; } = new();
         public Task<Stream> OpenReadAsync(string path, CancellationToken ct = default)
         {
             Reads++;
             LastReadPath = path;
             return Task.FromResult<Stream>(new MemoryStream([1, 2, 3]));
         }
-        public Task WriteAsync(string path, Stream content, string contentType, CancellationToken ct = default)
+        public async Task WriteAsync(string path, Stream content, string contentType, CancellationToken ct = default)
         {
+            if (FailWrite) throw new IOException("Archive write failed.");
             Writes++;
             LastWritePath = path;
-            return Task.CompletedTask;
+            using var bytes = new MemoryStream();
+            await content.CopyToAsync(bytes, ct);
+            Contents[path] = bytes.ToArray();
         }
         public Task<bool> ExistsAsync(string path, CancellationToken ct = default) => Task.FromResult(Exists);
     }

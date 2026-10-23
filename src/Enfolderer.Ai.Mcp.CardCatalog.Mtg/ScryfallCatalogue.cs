@@ -463,8 +463,34 @@ public sealed class ScryfallCatalogue
     /// </para>
     /// </summary>
     public async Task<ResolvedPrinting> ResolveAsync(
-        string? name, string setCode, string? collectorNumber, string? language, CancellationToken ct)
+        string? name, string setCode, string? collectorNumber, string? language, CancellationToken ct,
+        string? promoLabel = null)
     {
+        // PRM and a promo's printed fraction are not necessarily catalogue identifiers.
+        // A visible event label constrains the family before any fuzzy/default relocation.
+        if (System.Text.RegularExpressions.Regex.IsMatch(promoLabel ?? "", @"\bGrand\s+Prix\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return new ResolvedPrinting(null, Resolutions.Unresolved, collectorNumber);
+            var family = await SearchOnceAsync(name, "pgpx", language, true, ct);
+            if (family.Count == 0 && !string.IsNullOrWhiteSpace(language)
+                && !string.Equals(language.Trim(), "en", StringComparison.OrdinalIgnoreCase))
+                family = await SearchOnceAsync(name, "pgpx", null, true, ct);
+            var exact = family.Where(p => string.Equals(p.Set, "pgpx", StringComparison.OrdinalIgnoreCase)
+                && Simplify(name).Length > 0
+                && new[] { p.Name, p.PrintedName, p.FlavorName }.Any(title =>
+                    title.Split("//", StringSplitOptions.TrimEntries).Any(face => Simplify(face) == Simplify(name))))
+                .DistinctBy(p => (p.Set.ToLowerInvariant(), p.CollectorNumber)).ToArray();
+            if (exact.Length == 0)
+                return new ResolvedPrinting(null, Resolutions.Unresolved, collectorNumber);
+            if (exact.Length > 1)
+                return new ResolvedPrinting(exact[0], Resolutions.Ambiguous, collectorNumber, exact);
+            // The visible label, not the unrelated printed PRM number, placed this printing.
+            return new ResolvedPrinting(exact[0],
+                string.IsNullOrWhiteSpace(collectorNumber) ? Resolutions.Named : Resolutions.Corrected, collectorNumber);
+        }
+
         var hasName = !string.IsNullOrWhiteSpace(name);
         var hasNumber = !string.IsNullOrWhiteSpace(collectorNumber);
         var hasSet = !string.IsNullOrWhiteSpace(setCode);

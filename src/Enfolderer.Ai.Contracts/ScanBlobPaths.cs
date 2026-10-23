@@ -36,6 +36,13 @@ public static class ScanBlobPaths
     public static string BuildAnnotatedBlobPath(ScanJobDocument job) =>
         BuildAnnotatedBlobPath(job.BlobPrefix ?? job.JobId);
 
+    public static string BuildCsvBlobPath(ScanJobDocument job) =>
+        $"{OutputsContainer}/{SanitizeSegment(job.BlobPrefix ?? job.JobId)}/cards.csv";
+
+    public static string BuildEvidenceBlobPath(ScanJobDocument job, int? cardIndex = null) =>
+        $"{OutputsContainer}/{SanitizeSegment(job.BlobPrefix ?? job.JobId)}/"
+        + (cardIndex is { } index ? $"identification/card-{index:D3}.json" : "identification.json");
+
     private const int MaxStemLength = 64;
 
     /// <summary>Builds the blob name (within <see cref="ScansContainer"/>) for an uploaded image.</summary>

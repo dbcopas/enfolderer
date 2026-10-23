@@ -379,12 +379,12 @@ jobs.MapGet("/{jobId}/annotated-image", async (
     return Results.File(stream, "image/png", $"scan-{job.JobId}-priced.png");
 });
 
-jobs.MapGet("/{jobId}/cards.csv", async (string jobId, IJobStore store, CancellationToken ct) =>
+jobs.MapScanArchives();
+jobs.MapGet("/{jobId}/cards.csv", async (string jobId, IJobStore store, IScanImageStore images, CancellationToken ct) =>
 {
     var job = await store.GetAsync(jobId, ct);
     if (job?.Status != ScanJobStatus.Completed || job.Result is null) return Results.NotFound();
-    return Results.File(System.Text.Encoding.UTF8.GetBytes(MobileWebEndpoints.Csv(job.Result)),
-        "text/csv; charset=utf-8", $"scan-{job.JobId}.csv");
+    return await ScanArchiveEndpoints.CsvAsync(job, images, ct);
 });
 
 app.Run();

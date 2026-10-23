@@ -79,7 +79,8 @@ public sealed class CardArtVerifier
         ICardIdentificationAgent agent, CancellationToken ct)
     {
         var needsReview = false;
-        card = await VerifyAsync(card, artCrop, jobId, ct, () => needsReview = true);
+        card = await VerifyAsync(card, artCrop, jobId, ct, () => needsReview = true, crop.RecordEvidence);
+        crop.RecordEvidence?.Invoke(ScanEvidenceEvent.Create("art_comparison", new { card, needsReview }));
         if (!needsReview || agent is not ICardPrintingReviewAgent reviewer) return card;
 
         _log.LogInformation("Card {Index} of job {JobId}: requesting one footer re-read after inconclusive artwork.",
@@ -87,16 +88,25 @@ public sealed class CardArtVerifier
         try
         {
             var reviewed = await reviewer.ReviewPrintingAsync(crop, card, ct);
+            crop.RecordEvidence?.Invoke(ScanEvidenceEvent.Create("printing_review",
+                new { reviewed, alternates = reviewed.ArtReferences, reviewed.ArtCandidatesComplete }));
             if (reviewed.IsIdentified && reviewed.PrintingWasPlaced
                 && string.Equals(reviewed.Name, card.Name, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(reviewed.Language, card.Language, StringComparison.OrdinalIgnoreCase))
-                return await VerifyAsync(reviewed, artCrop, jobId, ct);
+            {
+                var verified = await VerifyAsync(reviewed, artCrop, jobId, ct, recordEvidence: crop.RecordEvidence);
+                crop.RecordEvidence?.Invoke(ScanEvidenceEvent.Create("review_accepted", new { card = verified }));
+                return verified;
+            }
 
+            crop.RecordEvidence?.Invoke(ScanEvidenceEvent.Create("review_rejected",
+                new { reason = "The re-read did not place the same card in the photographed language; original retained." }));
             _log.LogWarning("Card {Index} of job {JobId}: printing re-read did not establish a printing of the same card in the photographed language; preserving original reading.",
                 card.Index, jobId);
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not FoundryAccessException)
         {
+            crop.RecordEvidence?.Invoke(ScanEvidenceEvent.Create("review_failed", new { error = ex.Message }));
             _log.LogWarning(ex, "Card {Index} of job {JobId}: optional printing re-read failed; preserving original reading.",
                 card.Index, jobId);
         }
@@ -108,7 +118,8 @@ public sealed class CardArtVerifier
     /// the card, possibly moved to the printing the photograph actually shows.
     /// </summary>
     public async Task<IdentifiedCard> VerifyAsync(
-        IdentifiedCard card, byte[] cropBytes, string jobId, CancellationToken ct, Action? requestPrintingReview = null)
+        IdentifiedCard card, byte[] cropBytes, string jobId, CancellationToken ct, Action? requestPrintingReview = null,
+        Action<ScanEvidenceEvent>? recordEvidence = null)
     {
         if (!card.IsIdentified) return card;
         if (card.ArtReferences.Count == 0)
@@ -185,6 +196,12 @@ public sealed class CardArtVerifier
             : measured.Count == 1 && comparison.Verdict == ArtVerdict.Inconclusive ? "insufficient_candidates"
             : measured.Count > 1 && comparison.Separation < ArtAdjudicator.MinSeparation ? "separation_too_small"
             : "match";
+
+        recordEvidence?.Invoke(ScanEvidenceEvent.Create("art_candidates", new
+        {
+            offered = references.Count, measured, reason, comparison.Separation,
+            maximumDistance = ArtAdjudicator.MaxAgreeingDistance, minimumSeparation = ArtAdjudicator.MinSeparation
+        }));
 
         _log.LogInformation(
             "Card {Index} of job {JobId}: art compared {Compared}/{Offered} candidates; "

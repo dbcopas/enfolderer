@@ -46,7 +46,10 @@ public interface ICardPrintingReviewAgent
 }
 
 /// <summary>A crop handed to an identification agent.</summary>
-public sealed record CardCrop(int Index, AgentImage Image, CardQuad Quad, string? GameHint);
+public sealed record CardCrop(int Index, AgentImage Image, CardQuad Quad, string? GameHint)
+{
+    public Action<ScanEvidenceEvent>? RecordEvidence { get; init; }
+}
 
 /// <summary>
 /// Team B's per-game identification agents (Foundry project <c>cardid</c>). Each implementation owns

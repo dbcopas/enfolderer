@@ -348,6 +348,29 @@ download contains only that user's scanned additions (not uploaded snapshots), p
 language-specific quantities, and still works without scan credits. Empty results contain the
 header only. `GET /scanned-collection/cards.csv?set=CMM` must reject anonymous access, invalid
 filters must return 400, and successful exports must be `no-store` attachments.
+The API now archives each export under
+`collections/<tenant-id>/<user-id>/exports/scanned/<all-or-set>-<sha256>.csv` using its existing
+container-scoped Blob Data Contributor role. Repeated identical downloads reuse the same blob.
+Verify the stored bytes match the download and another user's export uses a different prefix.
+An archive storage failure must return an error without altering collection receipts.
+
+The worker also persists each new scan's ranked `cards.csv` and `identification.json` manifest
+under `outputs/<firstName-yyMMdd-HHmm-jobId>/`, plus one
+`identification/card-<zero-based-index>.json` per card. Existing worker Blob Data Contributor
+and API Blob Data Reader grants on `outputs` suffice; do not give the API output-write rights or
+enable anonymous blob access. Required archival failure fails the scan before automatic saving.
+Test a failed card, parallel card isolation, storage refusal, and byte-identical CSV retrieval.
+Verify owner-only `/jobs/<id>/identification.json` and `/jobs/<id>/identification/<index>`,
+operator-only diagnostics equivalents, and `no-store` on all responses.
+
+Evidence retains observable structured replies, catalogue calls/results, validation/correction
+events and artwork measurements, not private chain-of-thought, encrypted reasoning or inline
+images. Classic transport has reply/validation evidence only; production uses Responses.
+Older jobs keep regenerable CSVs but have no retroactively invented traces. Do not mutate their
+results or scanned collection receipts to disguise a historical identification error.
+Archives are retained until explicitly cleaned up; no lifecycle expiry is added in this release.
+Include scan CSVs/evidence and collection exports in private-data retention/cost reviews.
+Cosmos job TTL does not remove these blobs; API access still needs the matching job record.
 
 ```powershell
 .\scripts\test-cost-infrastructure.ps1
@@ -397,7 +420,7 @@ Deployed on 2026-10-19 into tenant `6a32cdb1-b813-4447-96d9-4f42e9cd37e3`,
 subscription `e3e0cdb6-dda9-477e-8d06-656c824ea765`, Sweden Central:
 
 - Subscription deployment: `enfolderer-cost`; current MTG-only image tag:
-  `v20261023-signed-in-access-ui` (all four apps, access request controls hidden after sign-in).
+  `v20261023-scan-evidence` (all four apps, durable CSV/identification evidence and promo-footer resolution).
 - New resource groups: `enf-cost-platform`, `enf-cost-cardgeo`, `enf-cost-cardid`.
 - Shared ACA environment: `enf-cost-platform-env`; Foundry account: `enf-cost-ai`.
 - API/mobile website: <https://enf-cost-api.purplefield-875302b1.swedencentral.azurecontainerapps.io>.

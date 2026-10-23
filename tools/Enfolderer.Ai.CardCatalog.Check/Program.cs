@@ -32,6 +32,11 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--promo-printing")
+        {
+            PromoPrintingChecks.RunAsync(Check).GetAwaiter().GetResult();
+            return _failures == 0 ? 0 : 1;
+        }
         if (args.Length == 2 && args[0] == "--legacy-printing")
             return LegacyPrintingChecks.RunAsync(args[1]).GetAwaiter().GetResult();
         if (args.Length == 3 && args[0] == "--measure-cards")
@@ -62,6 +67,7 @@ internal static class Program
         if (args.Length > 0 && (args[0] is not ("--photo-art" or "--photo-multilingual" or "--photo-boundaries") || args.Length > 2))
         {
             Console.Error.WriteLine("Usage: Enfolderer.Ai.CardCatalog.Check [--photo-art|--photo-multilingual|--photo-boundaries [training-directory]] "
+                + "or --promo-printing "
                 + "or --measure-cards <photo-path> <crop-directory> or --legacy-printing <mana-crypt-crop> "
                 + "or --price-render-check <synthetic-preview.png> "
                 + "or --live-reading <project-endpoint> <agent-id> <page-directory> <comma-separated-indices> "
@@ -74,6 +80,7 @@ internal static class Program
         FoundryResponseChecks.RunAsync(Check).GetAwaiter().GetResult();
         CatalogueHttpChecks.RunAsync(Check).GetAwaiter().GetResult();
         AlternateTitleChecks.RunAsync(Check).GetAwaiter().GetResult();
+        PromoPrintingChecks.RunAsync(Check).GetAwaiter().GetResult();
         ResolutionChecks().GetAwaiter().GetResult();
         PromptChecks();
         ThrottleChecks();

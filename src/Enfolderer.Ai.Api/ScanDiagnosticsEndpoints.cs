@@ -59,9 +59,14 @@ public static class ScanDiagnosticsEndpoints
             index < 0 || index >= Job(http).CardsDetected
                 ? Task.FromResult<IResult>(Results.NotFound())
                 : FileAsync(images, $"{ScanBlobPaths.CropsContainer}/{ScanBlobPaths.BuildCropBlobName(Job(http), index)}", "image/png", ct));
-        routes.MapGet("/{jobId}/cards.csv", (HttpContext http) => Job(http).Result is { } result
-            ? Results.File(System.Text.Encoding.UTF8.GetBytes(MobileWebEndpoints.Csv(result)), "text/csv; charset=utf-8")
-            : Results.NotFound());
+        routes.MapGet("/{jobId}/cards.csv", (HttpContext http, IScanImageStore images, CancellationToken ct) =>
+            ScanArchiveEndpoints.CsvAsync(Job(http), images, ct));
+        routes.MapGet("/{jobId}/identification.json", (HttpContext http, IScanImageStore images,
+            ILoggerFactory logs, CancellationToken ct) =>
+            ScanArchiveEndpoints.EvidenceAsync(Job(http), null, images, logs, ct));
+        routes.MapGet("/{jobId}/identification/{index:int}", (int index, HttpContext http, IScanImageStore images,
+            ILoggerFactory logs, CancellationToken ct) =>
+            ScanArchiveEndpoints.EvidenceAsync(Job(http), index, images, logs, ct));
     }
 
     private static ScanJobDocument Job(HttpContext http) => (ScanJobDocument)http.Items["DiagnosticJob"]!;

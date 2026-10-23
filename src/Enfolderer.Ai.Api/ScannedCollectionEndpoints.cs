@@ -10,9 +10,9 @@ public static class ScannedCollectionEndpoints
         var collection = app.MapGroup("/scanned-collection").RequireAuthorization();
         collection.AddEndpointFilter<JobOwnerFilter>();
         collection.MapGet("/", async (string? set, HttpContext http, IScannedCollectionStore store,
-            ILoggerFactory logs, CancellationToken ct) => await ReadAsync(set, http, store, logs, false, ct));
+            IScanImageStore images, ILoggerFactory logs, CancellationToken ct) => await ReadAsync(set, http, store, images, logs, false, ct));
         collection.MapGet("/cards.csv", async (string? set, HttpContext http, IScannedCollectionStore store,
-            ILoggerFactory logs, CancellationToken ct) => await ReadAsync(set, http, store, logs, true, ct));
+            IScanImageStore images, ILoggerFactory logs, CancellationToken ct) => await ReadAsync(set, http, store, images, logs, true, ct));
 
         jobs.MapGet("/{jobId}/collection", async (string jobId, HttpContext http,
             IScannedCollectionStore collections, CancellationToken ct) =>
@@ -46,7 +46,7 @@ public static class ScannedCollectionEndpoints
     }
 
     private static async Task<IResult> ReadAsync(string? set, HttpContext http, IScannedCollectionStore store,
-        ILoggerFactory logs, bool csv, CancellationToken ct)
+        IScanImageStore images, ILoggerFactory logs, bool csv, CancellationToken ct)
     {
         set = set?.Trim().ToUpperInvariant();
         if (set is { Length: > 0 } && (set.Length > 12 || !set.All(char.IsAsciiLetterOrDigit)))
@@ -59,8 +59,16 @@ public static class ScannedCollectionEndpoints
         var filtered = string.IsNullOrEmpty(set) ? printings
             : printings.Where(p => string.Equals(p.Set, set, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (csv)
-            return Results.File(System.Text.Encoding.UTF8.GetBytes(MobileWebEndpoints.Csv(filtered)),
-                "text/csv; charset=utf-8", $"scanned-collection{(string.IsNullOrEmpty(set) ? "" : "-" + set)}.csv");
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(ScanCsv.Format(filtered));
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+            var path = $"collections/{owner.TenantId}/{owner.ObjectId}/exports/scanned/{(string.IsNullOrEmpty(set) ? "all" : set)}-{hash}.csv";
+            await using var content = new MemoryStream(bytes, writable: false);
+            await images.WriteAsync(path, content, "text/csv; charset=utf-8", ct);
+            logs.CreateLogger("ScannedCollection").LogInformation("Archived collection CSV {Path}.", path);
+            return Results.File(bytes, "text/csv; charset=utf-8",
+                $"scanned-collection{(string.IsNullOrEmpty(set) ? "" : "-" + set)}.csv");
+        }
         return Results.Ok(new
         {
             sets = printings.Select(p => p.Set.ToUpperInvariant()).Distinct().Order().ToArray(),
