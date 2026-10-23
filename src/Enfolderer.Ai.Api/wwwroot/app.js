@@ -51,7 +51,7 @@ async function api(path, options = {}) {
         setBusy(busy);
       }
     } catch (error) { console.warn("The API error response was not JSON.", error); }
-    if (response.status === 403 && !detail.includes("scan allowance")) detail = "This account cannot use this feature yet. Use Request access to contact Douglas, or sign out and use the email address on your invitation.";
+    if (response.status === 403 && !detail.includes("scan allowance")) detail = "This account cannot use this feature yet. Sign out and use the email address on your invitation, or use Request access while signed out to contact Douglas.";
     if (response.status === 413) detail = "This file is too large. Use a smaller photo or export a smaller collection snapshot.";
     throw new Error(detail);
   }
@@ -186,7 +186,7 @@ async function loadAllowance() {
   scansAvailable = allowance.unlimited || allowance.remaining > 0;
   $("allowance").textContent = allowance.unlimited ? "Unlimited scans"
     : `${allowance.remaining} scans remaining. One submitted photo uses one scan, including failed scans.`
-      + (scansAvailable ? "" : " Use Request access to ask Douglas for more scans. Your previous downloads remain available.");
+      + (scansAvailable ? "" : " Ask Douglas for more scans, or sign out to use Request access. Your previous downloads remain available.");
   setBusy(busy);
 }
 
@@ -410,6 +410,8 @@ async function initialize() {
   account = redirected?.account || auth.getActiveAccount() || auth.getAllAccounts()[0];
   $("signIn").disabled = false;
   $("signIn").textContent = "Sign in with your invited account";
+  $("accessRequestActions").hidden = Boolean(account);
+  $("requestAccess").hidden = Boolean(account);
   if (!account) return;
   auth.setActiveAccount(account);
   $("welcome").hidden = true;

@@ -134,10 +134,10 @@ internal static class ApiOwnershipChecks
             && website.Contains("Export Mobile Collection Snapshot") && website.Contains("upload the exported JSON file")
             && website.Contains("No MTG Studio database? You can still save newly scanned cards"),
             "collection guidance explains MTG Studio database export/upload prerequisites without blocking scanned-only saving");
-        using var scriptResponse = await client.GetAsync("/app.js?v=5");
+        using var scriptResponse = await client.GetAsync("/app.js?v=6");
         scriptResponse.EnsureSuccessStatusCode();
         var mobileScript = await scriptResponse.Content.ReadAsStringAsync();
-        check(website.Contains("src=\"/app.js?v=5\"")
+        check(website.Contains("src=\"/app.js?v=6\"")
             && scriptResponse.Headers.CacheControl?.NoCache == true,
             "mobile script bypasses the old cached URL and requires revalidation on subsequent visits");
         check(mobileScript.Contains("gameHint: \"mtg\"") && !mobileScript.Contains("$(\"game\")"),
@@ -145,6 +145,10 @@ internal static class ApiOwnershipChecks
         check(mobileScript.Contains("$(\"signIn\").textContent = \"Sign in with your invited account\"")
             && !mobileScript.Contains("Sign in with Microsoft"),
             "initialized sign-in button uses the same invited-account wording");
+        check(website.Contains("id=\"accessRequestActions\"")
+            && mobileScript.Contains("$(\"accessRequestActions\").hidden = Boolean(account);")
+            && mobileScript.Contains("$(\"requestAccess\").hidden = Boolean(account);"),
+            "resolved sign-in state hides both access request controls for signed-in users and shows them for visitors");
         using var anonymous = await client.PostAsJsonAsync("/jobs/", new CreateJobRequest());
         check(anonymous.StatusCode == HttpStatusCode.Unauthorized, "anonymous callers cannot create jobs");
         client.DefaultRequestHeaders.Add("X-Test-User", UserA);

@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/site.css">
   <script defer src="/lib/msal-browser.min.js"
     integrity="sha384-TlDXht2cVvKBRAwDJrpYYtb+vUcYNxMgTELqFTRcnu0SP//KlFc7eE8so0+lJ03E" crossorigin="anonymous"></script>
-  <script defer src="/app.js?v=5"></script>
+  <script defer src="/app.js?v=6"></script>
 </head>
 <body>
   <header class="topbar">
@@ -29,7 +29,7 @@
       <button id="signIn" class="primary" disabled>Preparing sign-in...</button>
       <p class="small muted">Accept your invitation first, then use the same email address. Sign-in may use your existing account or a code sent to your email. Check your spam folder if the invitation is missing.</p>
     </section>
-    <div class="capture-actions">
+    <div id="accessRequestActions" class="capture-actions">
       <button id="openAccessRequest" class="secondary" aria-controls="requestAccess" aria-expanded="false">Request access</button>
     </div>
     <details id="requestAccess" class="panel collection-panel">
@@ -52,7 +52,7 @@
       <h3>1. Take a clear photo</h3>
       <p>Use even light, avoid glare, and keep every card fully visible. You can photograph a binder page or loose cards. This beta supports Magic: The Gathering only.</p>
       <h3>2. Scan and review</h3>
-      <p>Choose <strong>Identify my cards</strong> and allow a few minutes. One submitted photo uses one scan credit, even if identification fails. Reconnecting to the same scan does not use another credit. If you run out, request more scans from Douglas using the access request form.</p>
+      <p>Choose <strong>Identify my cards</strong> and allow a few minutes. One submitted photo uses one scan credit, even if identification fails. Reconnecting to the same scan does not use another credit. If you run out, ask Douglas for more scans. To use the access request form, sign out first.</p>
       <p>Check the card name, set and collector number before relying on a result. Green circles mean the card was placed; yellow means review it; red means it was not identified reliably.</p>
       <h3>3. Read the photo and prices</h3>
       <p>Prices are shown as nonfoil, then foil. They are daily Cardmarket reference prices via Scryfall, not live offers. The scanner does not determine whether your physical card is foil.</p>

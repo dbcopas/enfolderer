@@ -299,6 +299,10 @@ read/delete it, and ordinary users cannot see the inbox. All request responses m
 `no-store`. The basic rate limit is global per API process; reassess abuse protection before
 scaling or advertising a public beta. Keep the collapse-by-default help and request form
 usable at phone width and without an active sign-in session.
+After sign-in (including a restored browser session), both the request button and form must
+be hidden, even for administrators; the admin inbox remains available to authorized users.
+Signed-out visitors must still be able to submit requests. Credit-exhaustion guidance tells
+signed-in users to contact Douglas or sign out before using the form.
 
 ### Scan storage and collections
 
@@ -393,7 +397,7 @@ Deployed on 2026-10-19 into tenant `6a32cdb1-b813-4447-96d9-4f42e9cd37e3`,
 subscription `e3e0cdb6-dda9-477e-8d06-656c824ea765`, Sweden Central:
 
 - Subscription deployment: `enfolderer-cost`; current MTG-only image tag:
-  `v20261023-beta-access` (all four apps, clearer beta UI and a private access-request inbox).
+  `v20261023-signed-in-access-ui` (all four apps, access request controls hidden after sign-in).
 - New resource groups: `enf-cost-platform`, `enf-cost-cardgeo`, `enf-cost-cardid`.
 - Shared ACA environment: `enf-cost-platform-env`; Foundry account: `enf-cost-ai`.
 - API/mobile website: <https://enf-cost-api.purplefield-875302b1.swedencentral.azurecontainerapps.io>.

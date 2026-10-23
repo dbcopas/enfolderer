@@ -158,7 +158,9 @@ from saving newly scanned cards, which needs no MTG Studio database. The default
 **Automatically save identified cards**; its behaviour is unchanged.
 
 **Request access** opens a public form for a name, invitation email and optional note. It works
-before sign-in, including when sign-in is unavailable, and can also be used to request more scans.
+before sign-in, including when sign-in is unavailable. The request button and form are hidden
+once a signed-in account is detected, including a restored session; sign out to submit a request
+for more scans. The admin inbox remains available to signed-in administrators.
 Submissions are saved privately, not sent by email. Signed-in scan-allowance administrators see
 **Access requests (admin)** in the mobile workspace. Open it (or use **Refresh requests**) to see
 pending requests and remove them after review. Emails are self-reported and unverified; the form
