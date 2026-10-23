@@ -250,8 +250,9 @@ mid-scan, produces explicit unknown ownership, not partial totals or invented ze
 When collection comparison is enabled, missing exact printings get red overlay backgrounds;
 all cards show exact-printing and all-sets quantities, including zero. With comparison disabled,
 neither ownership line is printed and the overlay is shortened to remove that space, with the
-confidence dot moved to its new lower-right corner. English cards also omit the name band;
-panel height follows the displayed price, foreign-name, printing and ownership lines.
+confidence dot moved to its new lower-right corner. Every card includes a name band, regardless
+of language, with `Unidentified` when no name is available; panel height follows the displayed
+price, name, printing and ownership lines.
 Genuine lookup failures show `unavailable`,
 not amber or a question mark.
 For small loose-card photos, recovery checks physical outlines at all four rotations. It can
@@ -369,7 +370,7 @@ The legacy classic client remains available for regression checks, not as an aut
 After final printing/art verification, scans also produce a priced PNG of the original photo.
 Half-card-width artwork overlays show euro-symbol prices side by side, nonfoil on the
 left and foil (marked with a star) on the right. Text is measured and sized to fill the available
-box, with the card name shown only for non-English or unknown-language cards and set code and collector number below.
+box, with the card name always shown, including English cards, and set code and collector number below.
 Name, set/number and price fonts are measured independently, so a long translated name or price
 does not shrink the printing label. These lines do not overlap the confidence circle in the
 lower right: green for placed printings, yellow for printings needing verification, and red for

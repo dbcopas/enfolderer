@@ -136,11 +136,14 @@ internal static class PriceAnnotationChecks
             && PricedScanRenderer.DescribeOverlayPrinting(card with { Set = null, CollectorNumber = null }) == ""
             && PricedScanRenderer.DescribeOverlayPrinting(card with { CollectorNumber = "240a" }) == "CLB 240a",
             "overlay includes uppercase set and exact collector number without inventing missing identifiers");
-        check(PricedScanRenderer.DescribeOverlayName(card with { Language = "en" }) == ""
-            && PricedScanRenderer.DescribeOverlayName(card with { Language = " EN " }) == ""
+        check(PricedScanRenderer.DescribeOverlayName(card with { Language = "en" }) == card.Name
+            && PricedScanRenderer.DescribeOverlayName(card with { Language = " EN " }) == card.Name
             && PricedScanRenderer.DescribeOverlayName(card with { Language = "de" }) == card.Name
             && PricedScanRenderer.DescribeOverlayName(card with { Language = null }) == card.Name,
-            "only confirmed English cards omit the name; foreign and unknown-language cards retain it");
+            "English, foreign and unknown-language overlays always include the card name");
+        foreach (var name in new string?[] { null, "", " \t" })
+            check(PricedScanRenderer.DescribeOverlayName(card with { Language = "en", Name = name }) == "Unidentified",
+                "unreadable names display Unidentified instead of an empty name band");
         var lettering = new List<byte[]>();
         foreach (var sample in new[]
         {
@@ -155,7 +158,7 @@ internal static class PriceAnnotationChecks
             PricedScanRenderer.Render(source, [sample], rendered);
             using var renderedImage = Image.Load<Rgba32>(rendered.ToArray());
             var pixels = new List<byte>();
-            var printingTop = sample.Language == "en" ? 412 : 466;
+            var printingTop = 466;
             for (var y = printingTop; y < printingTop + 39; y++)
                 for (var x = 55; x < 340; x++)
                 {
@@ -163,13 +166,18 @@ internal static class PriceAnnotationChecks
                     pixels.AddRange([pixel.R, pixel.G, pixel.B]);
                 }
             lettering.Add(pixels.ToArray());
-            if (sample.Language == "en")
-                check(renderedImage[60, 510] == image[60, 510],
-                    "English overlays remove the name band and expose the photo below the shorter panel");
+            var titleHasInk = false;
+            for (var y = 412; y < 448; y++)
+                for (var x = 55; x < 340; x++)
+                {
+                    var pixel = renderedImage[x, y];
+                    titleHasInk |= pixel.R > 220 && pixel.G > 220 && pixel.B > 220;
+                }
+            check(titleHasInk, "rendered overlay contains visible name lettering for English and foreign cards, including long names");
         }
         check(lettering.Skip(1).All(p => p.SequenceEqual(lettering[0])),
-            "actual set/number pixels are independent of English name omission, long foreign names and long price text");
-        foreach (var language in new[] { "en", "de" })
+            "actual set/number pixels are independent of language, long card names and long price text");
+        foreach (var language in new string?[] { "en", "de", null })
         foreach (var compare in new[] { false, true })
         {
             source.Position = 0;
@@ -177,7 +185,7 @@ internal static class PriceAnnotationChecks
             PricedScanRenderer.Render(source, [card with { Language = language, Prices = new CardPrices { Nonfoil = 10 },
                 Ownership = compare ? new(1, 4, 1) : null }], output);
             using var rendered = Image.Load<Rgba32>(output.ToArray());
-            var bottom = (int)Math.Ceiling(325.6 + 360 * (0.24 + (language == "en" ? 0 : 0.15)
+            var bottom = (int)Math.Ceiling(325.6 + 360 * (0.24 + 0.15
                 + 0.19 + (compare ? 0.32 : 0)));
             check(rendered[60, bottom - 2] != image[60, bottom - 2]
                 && rendered[60, bottom + 2] == image[60, bottom + 2],

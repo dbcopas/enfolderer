@@ -131,8 +131,7 @@ public static class PricedScanRenderer
             .Where(value => !string.IsNullOrWhiteSpace(value)));
 
     public static string DescribeOverlayName(IdentifiedCard card) =>
-        string.Equals(card.Language?.Trim(), "en", StringComparison.OrdinalIgnoreCase)
-            ? "" : card.Name ?? "Unidentified";
+        string.IsNullOrWhiteSpace(card.Name) ? "Unidentified" : card.Name;
 
     public static Color OverlayBackgroundColor(IdentifiedCard card) =>
         card.Ownership?.IsMissing == true ? Color.FromRgb(160, 25, 25) : Color.Black;

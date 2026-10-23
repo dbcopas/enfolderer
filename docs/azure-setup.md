@@ -420,7 +420,7 @@ Deployed on 2026-10-19 into tenant `6a32cdb1-b813-4447-96d9-4f42e9cd37e3`,
 subscription `e3e0cdb6-dda9-477e-8d06-656c824ea765`, Sweden Central:
 
 - Subscription deployment: `enfolderer-cost`; current MTG-only image tag:
-  `v20261023-scan-evidence` (all four apps, durable CSV/identification evidence and promo-footer resolution).
+  `v20261023-overlay-names` (all four apps, overlays always include card names regardless of language).
 - New resource groups: `enf-cost-platform`, `enf-cost-cardgeo`, `enf-cost-cardid`.
 - Shared ACA environment: `enf-cost-platform-env`; Foundry account: `enf-cost-ai`.
 - API/mobile website: <https://enf-cost-api.purplefield-875302b1.swedencentral.azurecontainerapps.io>.
