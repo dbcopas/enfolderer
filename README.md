@@ -503,6 +503,26 @@ The [security-boundary walkthrough](docs/foundry-demo.md) describes `main`, not 
 Existing client defaults are intentionally unchanged until the new deployment passes real scan
 validation; use a separate config to test it.
 
+### Branches and deployments
+
+Keep two long-lived branches:
+
+- `main` retains the original separate-environment/private-endpoint architecture and its separate
+  Azure deployment.
+- `cost-optimized-azure` is the release line for the shared-environment, authenticated-public-endpoint
+  architecture deployed as `enfolderer-cost` (`enf-cost-*` resources).
+
+The collection, parallel-identification, CSV, evidence and overlay changes are consolidated into
+`cost-optimized-azure`; their former feature branches are not separate deployment targets.
+Short-lived feature branches should target the appropriate architecture branch and be removed
+after integration. Port shared fixes deliberately rather than merging architecture changes
+wholesale between the two release lines. Branch updates alone do not redeploy Azure.
+
+Historical branch tips with unique work were preserved as `archive/2026-10-24/<old-branch-name>`
+tags before their branches were removed. To resume archived work, create a temporary branch from
+the corresponding tag; keep the archive tags intact. Already-integrated branches need no archive
+tag because their commits remain reachable from one of the two release lines.
+
 ### Blob folder ordering
 
 New scan blobs use a shared creator/date-stamped folder in the `scans`, `crops` and `outputs`
