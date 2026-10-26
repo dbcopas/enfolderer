@@ -74,6 +74,13 @@ Already-published database versions and release packages would require their own
 
 ## Deployment follow-up
 
+This section records the original 2026-10-16 identity migration. The current integrated
+dedicated AI Gateway preview uses encrypted gateway-key project connections and a separate
+managed identity per tool backend. Original agent callers remain for controlled compatibility;
+worker/project identities remain excluded. It does not forward the original bearer identity.
+See the [current gateway trust boundaries and lifecycle](../README.md#integrated-dedicated-ai-gateway-preview);
+the dated evidence below is not a claim about the newer gateway hop.
+
 Read-only inspection on 2026-10-16 confirmed public ingress and an empty `McpServer__Audience`
 on all three demo MCP services. That was an active exposure, not just a template default.
 

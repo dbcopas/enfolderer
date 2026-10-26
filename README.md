@@ -105,10 +105,13 @@ was recorded are inaccessible through these routes; create a new scan rather tha
 old job by its ID. The API refuses to start without its tenant/client configuration, and public
 MCP servers refuse missing tenant/audience or caller allow-lists, including local runs.
 The worker uses named Foundry agent Responses endpoints. Each agent has its own Entra Agent ID;
-Foundry obtains short-lived MCP tokens through `AgenticIdentityToken` project connections.
-Geometry, Magic and Pokemon servers accept only their corresponding agent principal, not worker
-or project managed identities. Run `.\scripts\update-demo.ps1` for the first migration; it provisions
-identities/connections before deploying images and persists the audience and caller IDs.
+The integrated demo routes MCP through isolated dedicated AI Gateway preview resources, using
+encrypted project-connection keys and a separate gateway managed identity at each backend.
+Servers also retain their corresponding original agent principal for controlled compatibility,
+never worker/project managed identities. Run `.\scripts\update-demo.ps1` for the first migration;
+it bootstraps distinct agent identities before real images, persists their audience/caller IDs,
+then installs the mandatory native gateway connections. Subsequent updates do not temporarily
+republish direct tool connections.
 See [setup and migration](docs/azure-setup.md#4-create-the-agents).
 
 **Scan Single Image...** turns a photograph into binder entries: the app uploads a single image to a
@@ -170,11 +173,110 @@ Open [the browser checks](tools/Enfolderer.Ai.CardCatalog.Check/scan-evidence-ch
 browser for dependency-free UI regressions using synthetic results and image bytes; no sign-in
 or live scans are needed.
 
+#### Integrated dedicated AI Gateway preview
+
+The real scan pipeline uses the **dedicated Azure AI Gateway preview**
+(`Microsoft.ApiManagement/aigateways`), not a set of ordinary APIM proxy APIs or an isolated
+playground. [infra/ai-gateway-preview.bicep](infra/ai-gateway-preview.bicep) provisions four
+gateways in Sweden Central or East US 2:
+
+```text
+Worker -> Foundry named agent -> dedicated tool gateway -> team's MCP server
+Scan question -> Foundry IQ extractive retrieval -> dedicated model gateway -> gpt-4o
+```
+
+`<prefix>-aigw` hosts model synthesis; `-aigw-geo`, `-aigw-mtg` and `-aigw-pkm` isolate
+the three MCP trust domains. Preview runtime keys are gateway-wide, so separate keys on one
+gateway would NOT isolate those domains. Keys stay server-side in Container Apps secrets and
+encrypted Foundry project connections, never in browser configuration or agent definitions.
+Each tool gateway authenticates to its backend with its **own managed identity**. This replaces,
+rather than forwards, the original agent's bearer identity. Backend JWT tenant/audience/lifetime
+and exact-caller checks remain enabled; the original agent caller is retained for controlled
+compatibility. The worker's approval checks and agents' `allowed_tools` are unchanged.
+Direct backend URLs remain identity-protected but publicly reachable: this is not network-level
+bypass prevention.
+
+Native governance configured by [scripts/configure-ai-gateway-preview.ps1](scripts/configure-ai-gateway-preview.ps1):
+
+- Model token limit: 30,000 tokens/minute per identity and resource. Accounting can allow the
+  first response to overshoot; this is not a precise spending cap.
+- Model content safety: Medium hate/sexual/self-harm and High violence thresholds.
+- MCP request limit: 120 requests/60 seconds per identity and resource.
+- Model backend access through managed identity, not a Foundry account key.
+- Native Application Insights exporters on all four gateways, with **payload capture disabled**.
+  Do not enable raw payload/header capture: tool arguments can contain private scan blob paths.
+
+Here, gateway identity is the server-side application/agent key, not the signed-in website user.
+The limits are application/agent buckets, not per-human quotas or cost attribution.
+
+For CX walkthroughs, open the dedicated gateway resource's models/aliases, tool servers and
+policies, then `<prefix>-gateway-insights` for request/dependency counts, latency and result codes.
+All four domains share that monitoring resource and can be split by `AppRoleName`. Log ingestion
+can lag. The live probes exercise successful model/tool requests, invalid credentials and native
+token rejection; request/error/latency telemetry is verified without reading payloads. A minimal
+workspace Logs query is:
+
+```kusto
+AppRequests
+| where TimeGenerated > ago(1h)
+| where _ResourceId endswith "/<prefix>-gateway-insights"
+| summarize Calls=count(), AverageMs=avg(DurationMs) by AppRoleName, ResultCode
+```
+
+Gateway automation targets the default single shared Foundry account in the platform group;
+the alternative two-account infrastructure topology is not a supported gateway-automation path.
+The existing deployment and agent identity bootstrap must exist first. `deploy-images.ps1`
+and `update-demo.ps1` reapply the gateway configuration and publish the native tool URLs.
+Reconfiguration is source-controlled and replaces portal policy experiments with these settings.
+Image deployments also refresh agent connections/prompts even when the separate
+`update-demo.ps1 -SkipAgents` stage is skipped. Knowledge requests fail closed during a gateway
+setup gap; neither model nor tool traffic silently falls back to a direct endpoint.
+
+```powershell
+# Read-only plan, or configure the real pipeline:
+.\scripts\configure-ai-gateway-preview.ps1 -NamePrefix <prefix> -SubscriptionId <subscription> -WhatIf
+.\scripts\configure-ai-gateway-preview.ps1 -NamePrefix <prefix> -SubscriptionId <subscription>
+
+# Live named-agent tool discovery/authentication checks and an actual catalogue call:
+.\scripts\test-ai-gateway.ps1 -NamePrefix <prefix> -SubscriptionId <subscription>
+
+# Model completion, invalid/cross-domain key denial, and a temporary token policy returning 429:
+.\scripts\test-ai-gateway-model.ps1 -NamePrefix <prefix> -SubscriptionId <subscription>
+
+# Offline owner-scope, credential handling and deletion/readiness regressions:
+.\scripts\test-ai-gateway-lifecycle.ps1
+.\scripts\test-ai-gateway-update.ps1
+
+# Owner-scoped hibernation/restore; stop also IRREVERSIBLY deletes scan photos and queued work:
+.\scripts\stop-demo.ps1 -SubscriptionId <subscription> -DeploymentName enfolderer-scan -WhatIf
+.\scripts\stop-demo.ps1 -SubscriptionId <subscription> -DeploymentName enfolderer-scan
+.\scripts\restore-demo.ps1 -ManifestPath <saved-manifest>
+```
+
+**Lifecycle and cost:** stop validates exact resource IDs, ownership tags and model grants,
+saves a secret-free recovery manifest, deletes all four dedicated gateways, and polls for
+confirmed removal. Restore creates fresh gateway identities/keys, rewires backend allowlists,
+API secrets and encrypted project connections, and verifies real model/tool calls before reporting
+infrastructure restored. A measured four-gateway deletion/rebuild with live checks took about
+17 minutes (including about 5 minutes to confirm deletion); timings vary, and this is not an
+instant resume. Deleted scans
+are not restored. Monitoring/log retention, Foundry, storage, registry, Cosmos and the separate
+Consumption Scan API remain and can incur costs. Do not assume preview is free or that deleting
+the gateways makes the whole subscription cost-free. Custom-domain certificate/DNS follow-up
+and a signed-in sample scan are still required after a full restore.
+
+**Coverage:** final question synthesis and all three agents' MCP traffic traverse the dedicated
+preview. Search's internal query-planning model calls and the named agents' Foundry-managed
+internal inference remain outside it; this integration does not claim otherwise. Private
+ownership/pricing/evidence answers remain deterministic and bypass both model and Search.
+The separate Consumption `scan` API route and custom domains are unchanged.
+
 #### Ask about this scan (opt-in Foundry IQ)
 
 The completed-results page can answer independent natural-language questions about the scanned
 Magic cards through a real Azure AI Search knowledge base (the retrieval engine behind Foundry IQ),
-using `2026-08-01-preview` answer synthesis. Inline citations and a source list link to public
+using `2026-08-01-preview` retrieval. In the integrated demo, IQ returns extractive evidence and
+the dedicated AI Gateway handles final model synthesis. Inline citations and a source list link to public
 Scryfall pages. This is separate from **Explain this scan**, which only displays recorded evidence.
 It is disabled by default and makes no model calls until a user submits a knowledge question.
 Older completed scans use the same endpoint; no rescan is required.

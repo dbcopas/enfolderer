@@ -4,8 +4,8 @@
 .DESCRIPTION
     Deletes ALL active scans, crops and generated outputs, cancels work, removes the job queue,
     container apps, their exclusive environments, data private endpoints and validated
-    dedicated Search when configured. Preserves
-    collections, Cosmos (including credit balances), images, identities, Foundry and security.
+    dedicated Search when configured, and owner-tagged dedicated AI Gateway preview resources. Preserves
+    collections, Cosmos (including credit balances), registry images, identities, Foundry and security.
     Storage soft-delete/version retention can delay physical reclamation and billing savings.
     Does not open private storage to the internet or use account keys.
     Requires effective Owner on all three deployment groups, Azure CLI and PowerShell 7.
@@ -30,6 +30,7 @@ param(
 )
 #Requires -Version 7.0
 . (Join-Path $PSScriptRoot 'demo-lifecycle.ps1')
+. (Join-Path $PSScriptRoot 'ai-gateway-preview.ps1')
 $identity = Get-DemoIdentity -SubscriptionId $SubscriptionId
 $target = Find-DemoDeployment $identity $SubscriptionId $DeploymentName
 $subscription = $target.Subscription
@@ -78,6 +79,7 @@ $parameters['apiCustomDomains'] = @{ value = @() }
 $knowledgeConfig = $null
 if ($KnowledgeConfigPath) { $knowledgeConfig = Get-Content -LiteralPath $KnowledgeConfigPath -Raw | ConvertFrom-Json -Depth 100 }
 $search = Get-DemoSearchRecovery $identity $subscription $prefix $parameters $apps $knowledgeConfig
+$previewGateway = Get-DemoPreviewRecovery $identity $subscription $prefix
 $environments = @($apps | ForEach-Object { $_.properties.environmentId } | Select-Object -Unique)
 if ($environments.Count -ne 3) { throw 'Expected three dedicated environments. Shared/consolidated layouts need a dedicated plan.' }
 foreach ($environment in $environments) {
@@ -124,6 +126,7 @@ $manifest = [ordered]@{
     template = $template; parameters = $parameters; apps = $apps; environments = $environments
     privateEndpoints = $endpoints; storageId = $storage[0].id; customDomains = $domains
     search = $search
+    previewGateway = $previewGateway
 }
 Write-Host "Selected owned deployment: $subscription / $($target.Deployment.name) / $prefix"
 Write-Host 'Deletion plan:'
@@ -133,8 +136,11 @@ if ($search) {
     foreach ($grant in $search.modelRoles) { Write-Host "  Exact old Search-to-model role: $($grant.id)" }
 }
 Write-Host "  $($storage[0].id): ALL scans, crops, outputs and queued work"
-Write-Host 'Preserved/billable: collection snapshots, Cosmos/credits, registry, Foundry, logs, DNS and security settings.'
-$action = 'IRREVERSIBLY delete all scans/crops/outputs and queued work; delete apps, exclusive environments, private endpoints and validated dedicated Search (if configured)'
+if ($previewGateway) {
+    foreach ($gateway in $previewGateway.gateways) { Write-Host "  $($gateway.id): dedicated preview gateway (rebuild with fresh runtime credentials)" }
+}
+Write-Host 'Preserved/billable: collection snapshots, Cosmos/credits, registry, Foundry, logs, DNS, Consumption APIM (no fixed capacity fee) and security settings.'
+$action = 'IRREVERSIBLY delete all scans/crops/outputs and queued work; delete apps, exclusive environments, private endpoints, dedicated preview gateways and validated dedicated Search (if configured)'
 if (-not $PSCmdlet.ShouldProcess("$subscription / $prefix; recovery manifest $ManifestPath", $action)) { return }
 New-Item -ItemType Directory -Path (Split-Path -Parent $ManifestPath) -Force | Out-Null
 Save-DemoManifest $manifest $ManifestPath
@@ -144,6 +150,7 @@ try {
         $null = Invoke-DemoAz @('containerapp', 'delete', '--subscription', $subscription,
             '--ids', $app.id, '--yes')
     }
+    if ($previewGateway) { Remove-DemoPreviewGateways $previewGateway $identity $subscription $prefix }
     foreach ($container in 'scans', 'crops', 'outputs') {
         $null = Invoke-DemoAz @('resource', 'delete', '--subscription', $subscription, '--ids',
             "$($storage[0].id)/blobServices/default/containers/$container", '--api-version', '2023-05-01')

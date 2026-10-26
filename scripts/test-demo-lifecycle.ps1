@@ -415,7 +415,7 @@ try {
     $s.FailPurge = $false
     Remove-Item -LiteralPath $receipt
     # Run the real recovery code with only the public corpus importer substituted.
-    foreach ($file in 'demo-lifecycle.ps1', 'stop-demo.ps1', 'restore-demo.ps1') {
+    foreach ($file in 'demo-lifecycle.ps1', 'ai-gateway-preview.ps1', 'stop-demo.ps1', 'restore-demo.ps1') {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination (Join-Path $root $file)
     }
     @'

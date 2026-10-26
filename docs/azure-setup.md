@@ -1057,16 +1057,25 @@ tool tokens. After the placeholder infrastructure exists, run:
 ```
 
 This discovers both projects and MCP URLs, verifies/creates the credential-free MCP resource
-registration, provisions `CardBoundaryAgent`, `MtgCardIdAgent` and `PokemonCardIdAgent`, and creates
-`AgenticIdentityToken` connections in each owning project. Each tool requires approval, and each
-agent keeps its YAML `allowed_tools`. Missing URLs or a missing distinct identity stop deployment.
+registration, and bootstraps `CardBoundaryAgent`, `MtgCardIdAgent` and `PokemonCardIdAgent` with
+distinct identities before their first real service images. Initial bootstrap uses
+`AgenticIdentityToken` connections; the completed deployment replaces them with mandatory
+dedicated AI Gateway preview routes and encrypted `CustomKeys` project connections. Subsequent
+updates publish native routes only, without a temporary direct-tool connection. Each tool
+requires approval, and each agent keeps its YAML `allowed_tools`. Missing URLs or a missing
+distinct identity stop deployment.
 Only these three live agents are provisioned; classic orchestrator/growth-slot YAML remains
 historical material, not an extra deployed service.
 
 It then builds all five images and deploys the audience, named agent references and **individual
-agent principal IDs** together. The MCP allow-lists exclude worker/project managed identities.
-MCP hosts validate the v2 JWT `aud` against the resource app's client ID; connections request
-`api://<client-id>`. No secret or bearer token is persisted by these scripts.
+agent principal IDs** together, then configures the real model/tool gateways. The MCP allow-lists
+exclude worker/project managed identities; each adds only its own gateway managed identity.
+MCP hosts validate v2 JWT `aud` against the resource app's client ID; the gateway requests
+`api://<client-id>`. Original agent callers remain for controlled compatibility. Gateway runtime
+keys are stored only in Container Apps secrets and encrypted Foundry connections, not client
+configuration or agent definitions. Gateway keys are gateway-wide, so four separate resources
+isolate model, geometry, Magic and Pokemon domains. This requires Sweden Central or East US 2
+and additional resources/costs. See [dedicated gateway setup and lifecycle](../README.md#integrated-dedicated-ai-gateway-preview).
 
 The worker receives `Foundry Agent Consumer`, not `Foundry User`: the latter allows authoring
 and is not invoke-only. On an existing classic deployment, remove the worker's old project-scoped
@@ -1077,7 +1086,9 @@ never team authoring roles or unrelated grants. It also explicitly removes the g
 grant when the demo access switch is false.
 
 Do not use `-SkipImages` for the initial migration. Once migrated, `-SkipImages` updates prompts
-and connections, while `-SkipAgents` deploys only code using the recorded identity parameters.
+and connections, while `-SkipAgents` skips the separate agent stage using recorded identity
+parameters. Image deployment still refreshes mandatory gateway connections/prompts; it cannot
+leave stale gateway keys. Neither skip option is accepted for an incomplete first bootstrap.
 Reboots require no saved shell variables; Azure CLI sign-in and the correct subscription are
 still required. Keep the ignored `.deploy-images` recovery cache.
 
@@ -1855,9 +1866,11 @@ $response = Invoke-WebRequest -SkipHttpErrorCheck -Method Post `
 $response.StatusCode
 ```
 
-The named agent Responses path uses Foundry-managed token acquisition through an
-`AgenticIdentityToken` connection. This was verified against a restricted staging MCP endpoint;
-setting an audience on the old classic client would not provide the same identity flow.
+The original direct named-agent bootstrap uses Foundry-managed token acquisition through an
+`AgenticIdentityToken` connection, verified against a restricted staging MCP endpoint.
+The integrated demo instead uses a protected gateway-key connection and a separate gateway
+managed identity at each MCP backend. Setting an audience on an old classic client would not
+provide either of these identity flows. Backend tenant/audience/caller checks remain enabled.
 
 The Pokémon catalogue works anonymously but is rate-limited; if you have a pokemontcg.io key, set
 it on that site. Scryfall needs no key.
@@ -2921,9 +2934,11 @@ itself:
 ./scripts/update-demo.ps1
 ```
 
-It finds your deployment, projects and MCP URLs; provisions named agents, their distinct
-identities and secretless tool connections; then builds and deploys images with the exact
-audience/caller IDs. The worker invokes the geometry and identification agent endpoints separately.
+It finds your deployment, projects and MCP URLs; bootstraps distinct agent identities if needed;
+then builds and deploys images with the exact audience/caller IDs and configures the dedicated
+AI Gateway preview. Model synthesis uses the model gateway; named agents use encrypted native
+tool connections backed by separate gateway managed identities. The worker invokes the geometry
+and identification agent endpoints separately.
 Re-running it is safe and is the normal way to use it.
 
 If the change was only to a prompt — which is most of them — skip the slow part:
@@ -2932,7 +2947,7 @@ If the change was only to a prompt — which is most of them — skip the slow p
 ./scripts/update-demo.ps1 -SkipImages
 ```
 
-and if it was only to C#:
+and if it was only to C# (gateway connection/prompt refresh still runs after image deployment):
 
 ```powershell
 ./scripts/update-demo.ps1 -SkipAgents

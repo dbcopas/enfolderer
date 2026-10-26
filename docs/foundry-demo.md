@@ -43,8 +43,15 @@ Foundry *project* boundary rather than the plain Azure RBAC boundary you get bet
 resources. Each team's identity and MCP servers stay in its own resource group. Deploy with
 `singleAccount=false` to give each team its own account instead; see
 [Two tiers of isolation](azure-setup.md#two-tiers-of-isolation) for which tier to pick.
+The integrated dedicated gateway automation currently targets the default shared account;
+the alternative two-account infrastructure topology is not a supported gateway deployment path.
 
 ## End-to-end flow
+
+The MCP legs below traverse the dedicated preview's isolated geometry, Magic and Pokemon
+tool gateways. Completed web scans also support IQ extractive retrieval followed by synthesis
+through a separate model gateway. Search planning and the named agents' internal model calls
+remain Foundry-managed rather than being intercepted by these gateways.
 
 1. Desktop app (`Scan Card Image…`) signs the user in with Entra ID and calls `POST /jobs`.
 2. The API creates the job document in Cosmos and returns the relative URL
@@ -96,7 +103,7 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
   grant would hand Team B access to every project in the account, which is the opposite of the
   claim. The same module grants the orchestrator the same role on `cardid`, so the two halves of
   the pipeline are two separate, separately revocable assignments.
-* **Entra-only data plane.** The storage account has `allowSharedKeyAccess: false` and Cosmos has
+* **Entra-only storage/Cosmos data plane.** The storage account has `allowSharedKeyAccess: false` and Cosmos has
   `disableLocalAuth: true`. There are no keys or connection strings to copy into a config file.
 * **No secrets in the desktop app.** `aiconfig.txt` carries only an API URL, tenant id, public
   client id and scope. Sign-in is interactive (`InteractiveBrowserCredential`) or device code.
@@ -107,10 +114,14 @@ resources. Each team's identity and MCP servers stay in its own resource group. 
   Only the worker can write `crops` and `outputs`; Team A can read
   `scans` and nothing else.
   Neither project has any Cosmos role assignment, so neither can read job state.
-* **Distinct agent identities.** Each named agent has its own Entra Agent ID and blueprint.
-  Foundry acquires MCP tokens using `AgenticIdentityToken` connections. Each server accepts only
-  its matching agent principal, not the worker, project managed identity, or sibling game's agent.
-  Agent IDs establish the identity foundation for Agent 365; onboarding/telemetry is separate.
+* **Distinct agent identities and isolated tool gateways.** Each named agent has its own Entra
+  Agent ID and blueprint. In the integrated preview demo, encrypted project connections supply
+  server-side gateway keys, and each dedicated tool gateway acquires backend tokens using its
+  own managed identity. Backend allowlists contain that identity plus the corresponding original
+  agent for controlled compatibility, never a worker/project or sibling caller. This is not
+  end-to-end forwarding of the original agent token. Agent IDs remain the identity foundation
+  for Agent 365; onboarding is separate. See the [dedicated gateway walkthrough](../README.md#integrated-dedicated-ai-gateway-preview)
+  for model/tool coverage, policies, monitoring and delete/recreate lifecycle.
 * **Team B holds no storage role at all.** Its agents receive each card as inline image content, so
   there is nothing to grant. This is stronger than the container-scoped read it used to have:
   read on `crops` would have let Team B enumerate *every* card of *every* job, where now it sees

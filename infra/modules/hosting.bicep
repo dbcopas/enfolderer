@@ -43,6 +43,7 @@ param scanKnowledgeEndpoint string = ''
 param scanKnowledgeBase string = 'scan-cards'
 param scanKnowledgeSource string = 'scryfall'
 param scanKnowledgeIndex string = 'scryfall'
+param dedicatedAiGateway bool = true
 
 @description('Endpoint of Team A\'s geometry project.')
 param geometryProjectEndpoint string
@@ -181,6 +182,10 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'ScanKnowledge__Index'
               value: scanKnowledgeIndex
+            }
+            {
+              name: 'ScanKnowledge__GatewayRequired'
+              value: dedicatedAiGateway ? 'true' : 'false'
             }
             // An app can hold several user-assigned identities, so the credential must be told
             // which one to present. Without this, token acquisition is ambiguous and fails at

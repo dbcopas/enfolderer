@@ -13,12 +13,18 @@ internal static class ScanQuestionChecks
 {
     public static async Task RunLiveAsync(string endpoint, string tenantId, Action<bool, string> check)
     {
-        var options = new ScanKnowledgeOptions { Enabled = true, Endpoint = endpoint };
+        var gatewayEndpoint = Environment.GetEnvironmentVariable("ENFOLDERER_TEST_GATEWAY_ENDPOINT");
+        var options = new ScanKnowledgeOptions
+        {
+            Enabled = true, Endpoint = endpoint, GatewayEnabled = !string.IsNullOrEmpty(gatewayEndpoint),
+            GatewayEndpoint = gatewayEndpoint ?? "",
+            GatewayApiKey = Environment.GetEnvironmentVariable("ENFOLDERER_TEST_GATEWAY_KEY") ?? ""
+        };
         if (!options.IsValid || !Guid.TryParse(tenantId, out _))
             throw new ArgumentException("Supply a trusted Search HTTPS origin and tenant GUID.");
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(80), MaxResponseContentBufferSize = 1024 * 1024 };
         var client = new FoundryIqScanQuestions(http,
-            new AzureCliCredential(new AzureCliCredentialOptions { TenantId = tenantId }),
+            new AzureCliCredential(new AzureCliCredentialOptions { TenantId = tenantId, ProcessTimeout = TimeSpan.FromSeconds(60) }),
             options, NullLogger<FoundryIqScanQuestions>.Instance);
         var scan = new ScanResultDocument
         {
@@ -68,10 +74,14 @@ internal static class ScanQuestionChecks
         Console.WriteLine(comparison.Answer);
         check(comparison.Grounded && comparison.Sources.Any(s => s.Title == "Food Chain")
             && comparison.Sources.Any(s => s.Title == "Mystic Remora"), "live comparison cites both compared cards");
-        var interaction = await client.AskAsync(scan, "How do Solemnity and Naked Singularity interact? Explain only what their text supports, not an official ruling.", default);
-        Console.WriteLine(interaction.Answer);
-        check(interaction.Grounded && interaction.Sources.Any(s => s.Title == "Solemnity")
-            && interaction.Sources.Any(s => s.Title == "Naked Singularity"), "live interaction explanation cites both card texts");
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var interaction = await client.AskAsync(scan, "How do Solemnity and Naked Singularity interact? Explain only what their text supports, not an official ruling.", default);
+            Console.WriteLine(interaction.Answer);
+            check(interaction.Grounded && interaction.Sources.Any(s => s.Title == "Solemnity")
+                && interaction.Sources.Any(s => s.Title == "Naked Singularity"),
+                $"live interaction explanation cites both card texts (independent attempt {attempt}/3)");
+        }
     }
 
     public static async Task RunAsync(Action<bool, string> check)
@@ -154,6 +164,48 @@ internal static class ScanQuestionChecks
         handler.Url = "https://scryfall.com.evil.example/card";
         await Reject("lookalike source hostname is rejected", check, () => client.AskAsync(scan, "Question", default));
         handler.Url = "https://scryfall.com/card/hou/22/solemnity";
+        options.GatewayEnabled = true;
+        options.GatewayEndpoint = "https://cards.swedencentral-01.ai.gateway.azure.com";
+        options.GatewayApiKey = "fixture-gateway-key";
+        handler.Text = "[{\"ref_id\":0,\"content\":\"Solemnity prevents counters.\"}]";
+        handler.Paths.Clear();
+        answer = await client.AskAsync(scan, "What does this card do?", default);
+        check(answer.Grounded && handler.Paths.Any(p => p.EndsWith("/chat/completions"))
+            && handler.GatewayAuthorized && handler.Payload!.Contains("extractiveData"),
+            "dedicated preview synthesizes IQ extractive evidence with its own key and verified citations");
+        check(handler.GatewayPayload is not null && !handler.GatewayPayload.Contains("private-job")
+            && !handler.GatewayPayload.Contains("private-blob") && !handler.GatewayPayload.Contains("requiredQuantity"),
+            "gateway model receives public facts and evidence, never scan storage/ownership data");
+        check(handler.GatewayPayload!.Contains("plain text") && handler.GatewayPayload.Contains("conditional card-text deductions")
+            && handler.GatewayPayload.Contains("printingPlaced=false"),
+            "gateway synthesis preserves answer formatting, printing uncertainty and supported interaction explanations");
+        var localCalls = handler.Paths.Count;
+        await client.AskAsync(scan, "How many copies do I own?", default);
+        check(handler.Paths.Count == localCalls, "private recorded facts bypass both Search and gateway models");
+        handler.GatewayText = "Unsupported [ref_id:99]";
+        await Reject("gateway invented citation is rejected", check, () => client.AskAsync(scan, "Question", default));
+        handler.GatewayText = "Solemnity prevents counters [ref_id:0].";
+        handler.GatewayFinishReason = "length";
+        await Reject("gateway truncated answer is rejected", check, () => client.AskAsync(scan, "Question", default));
+        handler.GatewayFinishReason = "stop";
+        handler.GatewayMalformed = true;
+        await Reject("gateway malformed response is surfaced as invalid evidence", check, () => client.AskAsync(scan, "Question", default));
+        handler.GatewayMalformed = false;
+        handler.GatewayStatus = HttpStatusCode.TooManyRequests;
+        try { await client.AskAsync(scan, "Question", default); check(false, "gateway quota rejection propagates without direct fallback"); }
+        catch (HttpRequestException ex) { check(ex.StatusCode == HttpStatusCode.TooManyRequests, "gateway quota rejection propagates without direct fallback"); }
+        check(!new ScanKnowledgeOptions { Endpoint = options.Endpoint, GatewayEnabled = true }.IsValid
+            && !new ScanKnowledgeOptions { Endpoint = options.Endpoint, GatewayEnabled = true,
+                GatewayEndpoint = "https://evil.example", GatewayApiKey = "key" }.IsValid,
+            "enabled gateway requires trusted HTTPS origin and nonempty key");
+        options.GatewayEnabled = false;
+        options.GatewayRequired = true;
+        var beforeRequired = handler.Paths.Count;
+        await Reject("required gateway cannot silently revert to direct synthesis", check,
+            () => client.AskAsync(scan, "Question", default));
+        await client.AskAsync(scan, "How many copies do I own?", default);
+        check(handler.Paths.Count == beforeRequired, "gateway setup gap makes no external calls and preserves private local answers");
+        options.GatewayRequired = false;
         handler.Status = HttpStatusCode.Forbidden;
         try { await client.AskAsync(scan, "Question", default); check(false, "retrieval access failure propagates"); }
         catch (HttpRequestException ex) { check(ex.StatusCode == HttpStatusCode.Forbidden, "retrieval access failure propagates"); }
@@ -181,9 +233,26 @@ internal static class ScanQuestionChecks
         public List<string> Paths { get; } = [];
         public bool Authorized { get; private set; } = true;
         public HttpStatusCode Status { get; set; } = HttpStatusCode.OK;
+        public HttpStatusCode GatewayStatus { get; set; } = HttpStatusCode.OK;
+        public string GatewayText { get; set; } = "Solemnity prevents counters [ref_id:0].";
+        public string GatewayFinishReason { get; set; } = "stop";
+        public bool GatewayMalformed { get; set; }
+        public bool GatewayAuthorized { get; private set; }
+        public string? GatewayPayload { get; private set; }
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Paths.Add(request.RequestUri!.AbsoluteUri);
+            if (request.RequestUri.AbsolutePath.EndsWith("/chat/completions"))
+            {
+                GatewayAuthorized = request.Headers.Authorization is null
+                    && request.Headers.GetValues("api-key").Single() == "fixture-gateway-key";
+                GatewayPayload = await request.Content!.ReadAsStringAsync(ct);
+                return new(GatewayStatus) { Content = new StringContent(GatewayMalformed ? "{}" : JsonSerializer.Serialize(new
+                {
+                    choices = new[] { new { finish_reason = GatewayFinishReason,
+                        message = new { role = "assistant", content = GatewayText } } }
+                }), Encoding.UTF8, "application/json") };
+            }
             Authorized &= request.Headers.Authorization?.ToString() == "Bearer test-token";
             object response;
             if (request.RequestUri.AbsolutePath.EndsWith("/docs/search"))

@@ -53,6 +53,8 @@ param scanKnowledgeEndpoint string = ''
 param scanKnowledgeBase string = 'scan-cards'
 param scanKnowledgeSource string = 'scryfall'
 param scanKnowledgeIndex string = 'scryfall'
+@description('Dedicated AI Gateway preview is recreated/configured by deployment and lifecycle scripts. Not a standard APIM proxy.')
+param dedicatedAiGateway bool = true
 
 @description('Set to false to run the "revoke Team B\'s access to Team A\'s agent" demo scenario.')
 param grantIdentificationAccessToGeometry bool = true
@@ -318,6 +320,7 @@ module hosting 'modules/hosting.bicep' = {
     scanKnowledgeBase: scanKnowledgeBase
     scanKnowledgeSource: scanKnowledgeSource
     scanKnowledgeIndex: scanKnowledgeIndex
+    dedicatedAiGateway: dedicatedAiGateway
     apiIdentityId: apiIdentity.outputs.id
     apiIdentityClientId: apiIdentity.outputs.clientId
     workerIdentityId: workerIdentity.outputs.id
@@ -446,3 +449,4 @@ output geometryAccountName string = geometryAccountName
 output identificationAccountName string = identificationAccountName
 output geometryMcpServerUrls array = geometryMcp.outputs.serverUrls
 output identificationMcpServerUrls array = identificationMcp.outputs.serverUrls
+output dedicatedAiGatewayEnabled bool = dedicatedAiGateway

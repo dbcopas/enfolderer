@@ -1,9 +1,10 @@
 <#
 .SYNOPSIS
-    Provisions named Foundry agents and secretless agent-identity MCP connections.
+    Provisions named Foundry agents and protected MCP project connections.
 .DESCRIPTION
     Uses the existing prompt YAML as the source of record. Missing tool URLs, audience or agent
     identities are errors, never a reason to publish an agent with reduced functionality.
+    Supports agent-identity backend connections or encrypted dedicated gateway keys.
     Does not change container apps or delete classic assistants.
 #>
 [CmdletBinding()]
@@ -13,6 +14,7 @@ param(
     [Parameter(Mandatory)] [string[]] $Only,
     [Parameter(Mandatory)] [hashtable] $McpServerUrl,
     [Parameter(Mandatory)] [guid] $McpAudience,
+    [hashtable] $McpGatewayApiKeys = @{},
     [string] $ApiVersion = '2025-11-15-preview'
 )
 
@@ -75,6 +77,11 @@ foreach ($entry in $definitions) {
                 target = $url.AbsoluteUri
                 audience = "api://$McpAudience"
             }
+        }
+        if ($McpGatewayApiKeys.ContainsKey($tool.server)) {
+            $connection.properties.authType = 'CustomKeys'
+            $connection.properties.Remove('audience')
+            $connection.properties.credentials = @{ keys = @{ 'api-key' = $McpGatewayApiKeys[$tool.server] } }
         }
         $null = Invoke-AuthenticatedJson -Uri "https://management.azure.com$projectId/connections/${connectionName}?api-version=2025-04-01-preview" `
             -Resource 'https://management.azure.com' -Method Put -Body $connection

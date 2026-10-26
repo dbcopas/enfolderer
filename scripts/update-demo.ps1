@@ -22,9 +22,10 @@
       3. Each team's MCP server URLs, read from the container apps themselves. These cannot be
          composed by hand: every team has its own Container Apps environment and so its own random
          default domain, and a URL built from the wrong one fails at agent run time with a 424.
-      4. Verifies the credential-free MCP resource registration and its v2 token audience.
-      5. Provisions the three live named agents with distinct agent identities and secretless
-         AgenticIdentityToken MCP connections, each restricted to its owning team's tools.
+      4. Verifies the MCP resource registration and its v2 token audience.
+         Configures the dedicated AI Gateway preview: model synthesis and three isolated tool gateways.
+      5. Provisions the three live named agents with distinct agent identities and encrypted
+         gateway-key connections. Each tool gateway uses its own backend managed identity.
       6. Builds and deploys images with named agent references and exact per-agent caller IDs.
          SkipImages is allowed only after the first Responses migration.
 
@@ -50,10 +51,11 @@
 
 .PARAMETER SkipImages
     Only re-provision the agents. Use this when the change was to a YAML prompt alone, which is by
-    far the most common case: it turns a twenty-minute run into a one-minute one.
+    far the most common case. Gateway/connection refresh still takes several minutes.
 
 .PARAMETER SkipAgents
-    Only build and deploy the images. Use when the change was C# alone.
+    Skip the separate agent stage. Image deployment still refreshes the mandatory gateway
+    configuration and agent connections/prompts; it cannot leave stale gateway credentials.
 
 .EXAMPLE
     ./scripts/update-demo.ps1
@@ -284,6 +286,8 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
 
     $geoMcp = @{}
     $idMcp  = @{}
+    $bootstrapCallers = @()
+    $currentAudiences = @()
     foreach ($s in @(
         @{ Name = 'mcp-imaging';            Rg = $geoRg; Map = $geoMcp },
         @{ Name = 'mcp-cardcatalog-mtg';     Rg = $idRg;  Map = $idMcp },
@@ -293,6 +297,13 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
         if ($url) {
             $s.Map[$s.Name] = $url
             Write-Note "$($s.Name) -> $url"
+            $settings = Invoke-Az @('containerapp', 'show', '-g', $s.Rg, '-n', "$NamePrefix-$($s.Name)",
+                '--query', 'properties.template.containers[0].env', '-o', 'json')
+            if (-not $settings) { throw "Cannot read MCP bootstrap configuration for $($s.Name)." }
+            $settings = @($settings | ConvertFrom-Json)
+            $caller = @($settings | Where-Object name -eq 'McpServer__AllowedCallerObjectIds')
+            $bootstrapCallers += $(if ($caller.Count -eq 1) { ($caller[0].value -split ',')[0] } else { '' })
+            $currentAudiences += @($settings | Where-Object name -eq 'McpServer__Audience' | ForEach-Object value)
         }
         else {
             throw "$($s.Name) not found in $($s.Rg). Refusing to provision an agent without its required tools."
@@ -302,18 +313,18 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
     # ---------------------------------------------------------------- 5. images
     $tag = "v$((Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmm'))"
 
-    if ($SkipImages) {
-        $responses = Invoke-Az @('containerapp', 'show', '-g', $platformRg, '-n', "$NamePrefix-worker",
-            '--query', "properties.template.containers[0].env[?name=='ScanPipeline__UseResponses'].value | [0]", '-o', 'tsv')
-        if ($responses -ne 'true') {
-            throw 'The first agent-identity migration must deploy the Responses-capable worker. Do not use -SkipImages for that migration.'
-        }
+    $responses = Invoke-Az @('containerapp', 'show', '-g', $platformRg, '-n', "$NamePrefix-worker",
+        '--query', "properties.template.containers[0].env[?name=='ScanPipeline__UseResponses'].value | [0]", '-o', 'tsv')
+    $bootstrap = $responses -ne 'true' -or @($bootstrapCallers | Where-Object {
+        -not [guid]::TryParse($_, [ref]([guid]::Empty)) -or $_ -eq [guid]::Empty.ToString()
+    }).Count -gt 0
+    if ($bootstrap -and ($SkipImages -or $SkipAgents)) {
+        throw 'The first agent/gateway migration must provision identities and deploy images together. Omit -SkipImages and -SkipAgents.'
     }
-
     # ---------------------------------------------------------------- 6. agents
     if ($SkipAgents) {
         Write-Step '6. Agents (skipped)'
-        Write-Note '-SkipAgents was passed, so the agents keep the prompts they already have'
+        Write-Note '-SkipAgents skips this stage; image deployment still refreshes mandatory gateway configuration and agent connections/prompts'
         if (-not $SkipImages) {
             $webPass = @{}
             if ($MobileWebClientId) { $webPass.MobileWebClientId = $MobileWebClientId }
@@ -325,50 +336,40 @@ The projects are created by the deployment in step 3 of docs/azure-setup.md. See
         return
     }
 
-    Write-Step '6. Provision Team A (cardgeo)'
+    Write-Step '6. Configure dedicated AI Gateway preview and named agents'
     $audience = & (Join-Path $PSScriptRoot 'configure-mcp-audience.ps1') -NamePrefix $NamePrefix
-    $provision = Join-Path $repoRoot 'agents/provision-foundry.ps1'
-    $teamA = @(& $provision -ProjectEndpoint $geo.Endpoint -Path (Join-Path $repoRoot 'agents/cardgeo') `
-        -Only CardBoundaryAgent -McpServerUrl $geoMcp -McpAudience $audience)
-    $teamA | Format-Table Name, Id, File -AutoSize
-
-    Write-Step '7. Provision Team B (cardid)'
-    $teamB = @(& $provision -ProjectEndpoint $idn.Endpoint -Path (Join-Path $repoRoot 'agents/cardid') `
-        -Only MtgCardIdAgent, PokemonCardIdAgent -McpServerUrl $idMcp -McpAudience $audience)
-    $teamB | Format-Table Name, Id, File -AutoSize
-
-    function Get-AgentId { param([string] $Name)
-        $hit = @($teamA + $teamB) | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
-        if ($hit) { return $hit.Id }
-        return $null
+    $pass = @{ McpAudience = $audience }
+    if ($bootstrap) {
+        Write-Note 'Bootstrapping distinct agent identities before the first real service images; deployment then replaces these connections with native gateway routes.'
+        $provision = Join-Path $repoRoot 'agents\provision-foundry.ps1'
+        $agents = @(& $provision -ProjectEndpoint $geo.Endpoint -Path (Join-Path $repoRoot 'agents\cardgeo') `
+            -Only CardBoundaryAgent -McpServerUrl $geoMcp -McpAudience $audience)
+        $agents += @(& $provision -ProjectEndpoint $idn.Endpoint -Path (Join-Path $repoRoot 'agents\cardid') `
+            -Only MtgCardIdAgent,PokemonCardIdAgent -McpServerUrl $idMcp -McpAudience $audience)
+        foreach ($entry in @(
+            @{ Name = 'CardBoundaryAgent'; Parameter = 'Boundary' },
+            @{ Name = 'MtgCardIdAgent'; Parameter = 'Mtg' },
+            @{ Name = 'PokemonCardIdAgent'; Parameter = 'Pokemon' }
+        )) {
+            $agent = @($agents | Where-Object Name -eq $entry.Name)
+            if ($agent.Count -ne 1) { throw "Missing bootstrap identity for $($entry.Name)." }
+            if (-not [guid]::TryParse($agent[0].PrincipalId, [ref]([guid]::Empty)) -or
+                $agent[0].PrincipalId -eq [guid]::Empty.ToString()) { throw "Invalid bootstrap identity for $($entry.Name)." }
+            $pass["$($entry.Parameter)AgentId"] = $agent[0].Id
+            $pass["$($entry.Parameter)AgentPrincipalId"] = $agent[0].PrincipalId
+        }
+        if (@($agents.PrincipalId | Select-Object -Unique).Count -ne 3) { throw 'Bootstrap requires three distinct agent identities.' }
     }
-
-    # ---------------------------------------------------------------- 8. point the apps at them
-    Write-Step '8. Point the apps at the agents just provisioned'
-
-    $ids = @{
-        BoundaryAgentId = Get-AgentId 'CardBoundaryAgent'
-        MtgAgentId      = Get-AgentId 'MtgCardIdAgent'
-        PokemonAgentId  = Get-AgentId 'PokemonCardIdAgent'
-    }
-    $pass = @{
-        DeploymentName = $DeploymentName
-        SkipBuild = $SkipImages.IsPresent
-        McpAudience = $audience
-        BoundaryAgentPrincipalId = ($teamA | Where-Object Name -eq CardBoundaryAgent).PrincipalId
-        MtgAgentPrincipalId = ($teamB | Where-Object Name -eq MtgCardIdAgent).PrincipalId
-        PokemonAgentPrincipalId = ($teamB | Where-Object Name -eq PokemonCardIdAgent).PrincipalId
-    }
-    if (-not $SkipImages) { $pass['Tag'] = $tag }
-    foreach ($k in $ids.Keys) { if ($ids[$k]) { $pass[$k] = $ids[$k] } }
-    if ($MobileWebClientId) { $pass.MobileWebClientId = $MobileWebClientId }
-    if ($ScanAllowedUserObjectIds) { $pass.ScanAllowedUserObjectIds = $ScanAllowedUserObjectIds }
-
-    if ($ids.Values | Where-Object { $_ }) {
-        & (Join-Path $PSScriptRoot 'deploy-images.ps1') @pass
+    if ($SkipImages) {
+        if ($currentAudiences.Count -ne 3 -or @($currentAudiences | Where-Object { $_ -ne $audience }).Count) {
+            throw 'MCP audience changed; redeploy images without -SkipImages to update all backend token validators together.'
+        }
+        & (Join-Path $PSScriptRoot 'configure-ai-gateway-preview.ps1') -NamePrefix $NamePrefix -SubscriptionId $account.id
     }
     else {
-        Write-Bad 'no agent ids came back, so the apps were left pointing where they were'
+        if ($MobileWebClientId) { $pass.MobileWebClientId = $MobileWebClientId }
+        if ($ScanAllowedUserObjectIds) { $pass.ScanAllowedUserObjectIds = $ScanAllowedUserObjectIds }
+        & (Join-Path $PSScriptRoot 'deploy-images.ps1') -DeploymentName $DeploymentName -Tag $tag @pass
     }
 
     Write-Host ''

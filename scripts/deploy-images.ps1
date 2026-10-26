@@ -586,6 +586,12 @@ List what the registry holds with:
         }
     }
     Write-Good "deployment succeeded"
+    $gatewayEnabled = if ($effective.PSObject.Properties['dedicatedAiGateway']) { $effective.dedicatedAiGateway.value } else { $true }
+    if ($gatewayEnabled) {
+        $subscriptionId = az account show --query id -o tsv
+        if ($LASTEXITCODE) { throw 'Could not resolve the deployment subscription.' }
+        & (Join-Path $PSScriptRoot 'configure-ai-gateway-preview.ps1') -NamePrefix $prefix -SubscriptionId $subscriptionId
+    }
 
     $savedParameters = [ordered]@{}
     foreach ($parameter in $effective.PSObject.Properties) {
